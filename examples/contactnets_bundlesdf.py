@@ -34,7 +34,7 @@ DYNAMIC_SOURCE = 'dynamic'
 DATA_SOURCES = [SIM_SOURCE, REAL_SOURCE, DYNAMIC_SOURCE]
 
 # File management.
-CUBE_DATA_ASSET = 'contactnets_cube'
+CUBE_DATA_ASSET = 'bundlesdf'
 ELBOW_DATA_ASSET = 'contactnets_elbow'
 CUBE_BOX_URDF_ASSET = 'contactnets_cube.urdf'
 CUBE_MESH_URDF_ASSET = 'contactnets_cube_mesh.urdf'
@@ -238,7 +238,7 @@ def main(run_name: str = "",
 
 
 @click.command()
-@click.option('--run-name', default="")
+@click.option('--run-name', default="bundlesdf")
 @click.option('--system',
               type=click.Choice(SYSTEMS, case_sensitive=True),
               default=CUBE_SYSTEM)

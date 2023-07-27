@@ -26,7 +26,7 @@
                 <box size="0.1048 0.1048 0.1048"/>
             </geometry>
             <origin xyz="0 0 0" rpy="0 0 0" />
-            <drake:proximity_properties>
+            <drake:proximity_properties xmlns:drake="https://drake.mit.edu/">
                 <drake:mu_static value="0.15" />
             </drake:proximity_properties>
         </collision>

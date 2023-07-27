@@ -21,7 +21,6 @@ from dair_pll.geometry import CollisionGeometry, Box, Sphere, Polygon, \
     DeepSupportConvex
 from dair_pll.inertia import InertialParameterConverter
 from dair_pll.multibody_terms import MultibodyTerms
-
 # tags
 _ORIGIN = "origin"
 _MASS = "mass"
@@ -339,14 +338,15 @@ def represent_multibody_terms_as_urdfs(multibody_terms: MultibodyTerms,
             multibody_terms.plant_diagram.model_ids)
     pi_cm = multibody_terms.lagrangian_terms.pi_cm()
     friction_coeffs = multibody_terms.contact_terms.get_friction_coefficients()
-
+    print(f'friction_coeffs: {friction_coeffs}')
+    print(f'J: {multibody_terms.contact_terms.geometry_spatial_jacobians}')
+    
     for urdf_name, urdf in multibody_terms.urdfs.items():
 
         # assumes urdf name mirrors model name
         model_instance_index = \
             multibody_terms.plant_diagram.plant.GetModelInstanceByName(
                 urdf_name)
-
         urdf_tree = ElementTree.parse(urdf)
 
         for element in urdf_tree.iter():

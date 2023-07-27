@@ -271,7 +271,7 @@ class MultibodyLearnableSystem(System):
         reorder_mat = tensor_utils.sappy_reorder_mat(n_contacts)
         reorder_mat = reorder_mat.reshape((1,) * (delassus.dim() - 2) +
                                           reorder_mat.shape).expand(
-                                              delassus.shape)
+                                              delassus.shape)                          
         J_M = pbmm(reorder_mat.transpose(-1, -2),
                    pbmm(J, torch.linalg.cholesky(torch.inverse((M)))))
 

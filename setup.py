@@ -42,10 +42,10 @@ dependency_links = [
     'git+https://github.com/mshalm/sappy.git'
 ]
 
-setup(
-    name='dair_pll',
-    version='0.0.1',
-    packages=['dair_pll'],
-    install_requires=install_reqs,
-    dependency_links=dependency_links
-)
+# setup(
+#     name='dair_pll',
+#     version='0.0.1',
+#     packages=['dair_pll'],
+#     install_requires=install_reqs,
+#     dependency_links=dependency_links
+# )

@@ -53,7 +53,7 @@ class SupervisedLearningExperimentConfig:
     """Folder for results/data storage. Defaults to working directory."""
     run_name: str = 'experiment_run'
     """Unique identifier for experiment run."""
-    run_wandb: bool = True
+    run_wandb: bool = False
     """Whether to run Weights and Biases logging."""
     wandb_project: Optional[str] = None
     r"""If :py:attr:`run_wandb`\ , a project to store results under on W&B."""

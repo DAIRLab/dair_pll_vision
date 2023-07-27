@@ -476,8 +476,8 @@ class SupervisedLearningExperiment(ABC):
         statistics[TRAINING_DURATION] = training_duration
         statistics[EVALUATION_DURATION] = time.time() - start_eval_time
 
-        if self.wandb_manager is not None:
-            self.write_to_wandb(epoch, learned_system, statistics)
+        # if self.wandb_manager is not None:
+        #     self.write_to_wandb(epoch, learned_system, statistics)
 
         # pylint: disable=E1103
         valid_loss_key = f'{VALID_SET}_{LEARNED_SYSTEM_NAME}_{LOSS_NAME}' \
@@ -521,6 +521,7 @@ class SupervisedLearningExperiment(ABC):
 
         # Setup optimization.
         # pylint: disable=E1103
+        print(train_set.trajectories[0])
         learned_system = self.get_learned_system(
             torch.cat(train_set.trajectories))
         optimizer = self.get_optimizer(learned_system)
