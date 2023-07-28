@@ -90,7 +90,6 @@ class TrajectorySliceDataset(Dataset):
             trajectory: ``(T, *)`` state trajectory.
         """
         trajectory_length = trajectory.shape[0]
-        print(f'traj length: {trajectory_length}')
         first_time_index = self.config.t_skip
         last_time_index = trajectory_length - self.config.t_prediction
         previous_states_length = self.config.t_history

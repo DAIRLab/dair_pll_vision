@@ -24,6 +24,7 @@ from dair_pll.hyperparameter import Float, Int
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 from dair_pll.state_space import UniformSampler, GaussianWhiteNoiser
 from dair_pll.system import System
+from simulator import simulate_cube_toss
 
 CUBE_SYSTEM = 'cube'
 ELBOW_SYSTEM = 'elbow'
@@ -229,7 +230,12 @@ def main(run_name: str = "",
     print(f'>>>>> Epoch is {EPOCHS}')
     learned_system, stats = experiment.generate_results(
         regenerate_callback if regenerate else default_epoch_callback)
-
+    # print(learned_system.multibody_terms)
+    # print(type(learned_system.multibody_terms))
+    # print('summary:', learned_system.summary(stats).scalars.keys())
+    # print('stats:', stats.keys())
+    traj_dir = './assets/bundlesdf/0.pt'
+    simulate_cube_toss(learned_system.summary(stats).scalars, traj_dir)
     # Save the final urdf.
     print(f'\nSaving the final learned URDF.')
     learned_system = cast(MultibodyLearnableSystem, learned_system)
