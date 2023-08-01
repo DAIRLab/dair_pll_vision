@@ -105,3 +105,29 @@ class ZeroModel(DeepLearnableModel):
         # x is B x L x N
         return self.dummy_param * torch.zeros(
             (x.shape[0], 1, self.out_size)), carry
+
+class LSTMModel(DeepLearnableModel):
+    def __init__(self, in_size: int, hidden_size: int, out_size: int, num_layers: int, nonlinearity: Module, dropout_keep_prob: float, cell_type: str) -> None:
+        super().__init__(in_size)
+        self.out_size = out_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.nonlinearity = nonlinearity
+        self.dropout_keep_prob = dropout_keep_prob
+        self.cell_type = cell_type
+        # self.fc_layers = nn.ModuleList([nn.Linear(12, hidden_size) for _ in range(num_layers)])
+        self.fc = nn.Linear(hidden_size, out_size)
+        self.dropout = nn.Dropout(p=1 - dropout_keep_prob)
+        if self.cell_type == 'rnn':
+            self.rnn = nn.RNN(input_size=12, hidden_size=hidden_size, num_layers=num_layers, dropout=1-dropout_keep_prob)
+        elif self.cell_type == 'gru':
+            self.rnn = nn.GRU(input_size=12, hidden_size=hidden_size, num_layers=num_layers, dropout=1-dropout_keep_prob)
+        elif self.cell_type == 'lstm':
+            self.rnn = nn.LSTM(input_size=12, hidden_size=hidden_size, num_layers=num_layers, dropout=1-dropout_keep_prob)
+            
+    def forward(self, x: Tensor) -> Tensor:
+        x, _ = self.rnn(x)
+        x = self.dropout(x)
+        x = self.nonlinearity(x)
+        x = self.fc(x)
+        return x

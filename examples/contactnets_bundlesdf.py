@@ -9,16 +9,16 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from dair_pll import file_utils
+from dair_pll import file_utils, vis_utils
 from dair_pll.dataset_generation import DataGenerationConfig, \
     ExperimentDatasetGenerator
-from dair_pll.dataset_management import DataConfig, \
+from dair_pll.dataset_management import DataConfig, TrajectorySet, \
     TrajectorySliceConfig
 from dair_pll.drake_experiment import \
     DrakeMultibodyLearnableExperiment, DrakeSystemConfig, \
     MultibodyLearnableSystemConfig, MultibodyLosses, \
     DrakeMultibodyLearnableExperimentConfig
-from dair_pll.experiment import default_epoch_callback
+from dair_pll.experiment import LEARNED_SYSTEM_NAME, default_epoch_callback
 from dair_pll.experiment_config import OptimizerConfig
 from dair_pll.hyperparameter import Float, Int
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
@@ -83,7 +83,7 @@ LRS = {CUBE_SYSTEM: CUBE_LR, ELBOW_SYSTEM: ELBOW_LR}
 CUBE_WD = 0.0
 ELBOW_WD = 1e-4
 WDS = {CUBE_SYSTEM: CUBE_WD, ELBOW_SYSTEM: ELBOW_WD}
-EPOCHS = 1 #500
+EPOCHS = 100 #500
 PATIENCE = EPOCHS
 BATCH_SIZE = 256
 
@@ -234,8 +234,26 @@ def main(run_name: str = "",
     # print(type(learned_system.multibody_terms))
     # print('summary:', learned_system.summary(stats).scalars.keys())
     # print('stats:', stats.keys())
+    ############ Simulate estimated trajectory ############ 
     traj_dir = './assets/bundlesdf/0.pt'
-    simulate_cube_toss(learned_system.summary(stats).scalars, traj_dir)
+    gt_traj = torch.load(traj_dir)
+    # simulate_cube_toss(learned_system.summary(stats).scalars, traj_dir)
+    ####################################################### 
+    # Evaluation
+    directory_path = './assets/bundlesdf'
+    file_names = [f for f in os.listdir(directory_path) if os.path.isfile(os.path.join(directory_path, f))]
+    full_paths = [os.path.join(directory_path, file_name) for file_name in file_names]
+    trajectories = [torch.load(input_path) for input_path in full_paths]
+    traj_preds, traj_targets = experiment.trajectory_predict(trajectories, learned_system, True)
+    print(traj_preds[0], traj_targets[0])
+    trajectory_mse = torch.stack([
+        learned_system.space.state_square_error(tp, tt)
+        for tp, tt in zip(traj_preds, traj_targets)
+    ])
+    print(trajectory_mse)
+    # stats_ = experiment.evaluate_systems_on_sets(systems, sets)
+    # print(stats_)
+
     # Save the final urdf.
     print(f'\nSaving the final learned URDF.')
     learned_system = cast(MultibodyLearnableSystem, learned_system)

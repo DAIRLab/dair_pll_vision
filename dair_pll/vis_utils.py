@@ -18,6 +18,7 @@ import numpy as np
 from PIL import Image
 # pylint: disable-next=import-error
 from pydrake.geometry import Role, RoleAssign, Rgba  # type: ignore
+import torch
 from torch import Tensor
 
 from dair_pll.drake_system import DrakeSystem

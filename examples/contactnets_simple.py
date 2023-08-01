@@ -82,7 +82,7 @@ LRS = {CUBE_SYSTEM: CUBE_LR, ELBOW_SYSTEM: ELBOW_LR}
 CUBE_WD = 0.0
 ELBOW_WD = 1e-4
 WDS = {CUBE_SYSTEM: CUBE_WD, ELBOW_SYSTEM: ELBOW_WD}
-EPOCHS = 1 #500
+EPOCHS = 200 #500
 PATIENCE = EPOCHS
 BATCH_SIZE = 256
 
@@ -229,6 +229,20 @@ def main(run_name: str = "",
     print(f'>>>>> Epoch is {EPOCHS}')
     learned_system, stats = experiment.generate_results(
         regenerate_callback if regenerate else default_epoch_callback)
+    
+
+    # Evaluation
+    directory_path = './assets/contactnets_cube'
+    file_names = [f for f in os.listdir(directory_path) if os.path.isfile(os.path.join(directory_path, f))]
+    full_paths = [os.path.join(directory_path, file_name) for file_name in file_names]
+    trajectories = [torch.load(input_path) for input_path in full_paths]
+    traj_preds, traj_targets = experiment.trajectory_predict(trajectories, learned_system, True)
+    print(traj_preds[0], traj_targets[0])
+    trajectory_mse = torch.stack([
+        learned_system.space.state_square_error(tp, tt)
+        for tp, tt in zip(traj_preds, traj_targets)
+    ])
+    print(trajectory_mse)
 
     # Save the final urdf.
     print(f'\nSaving the final learned URDF.')
