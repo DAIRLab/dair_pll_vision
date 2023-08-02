@@ -4,6 +4,7 @@ from typing import Type, Optional
 
 import torch
 from torch.optim import Optimizer
+from dair_pll.dair_pll.deep_learnable_system import DeepLearnableSystemConfig
 
 from dair_pll.dataset_management import DataConfig
 from dair_pll.hyperparameter import Float, Int
@@ -49,6 +50,8 @@ class SupervisedLearningExperimentConfig:
     """Configuration for system to be learned."""
     optimizer_config: OptimizerConfig = field(default_factory=OptimizerConfig)
     """Configuration for experiment's optimization process."""
+    deep_learning_config: DeepLearnableSystemConfig = field(default_factory=DeepLearnableSystemConfig)
+    """Configuration for deep learning."""
     storage: str = './'
     """Folder for results/data storage. Defaults to working directory."""
     run_name: str = 'experiment_run'

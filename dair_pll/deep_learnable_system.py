@@ -20,7 +20,10 @@ class DeepLearnableSystemConfig(SystemConfig):
     nonlinearity: Module = torch.nn.ReLU
     hidden_size: int = 128
     model_constructor: Type[DeepLearnableModel] = DeepRecurrentModel
-
+    input_size: int = 128
+    output_size: int = 128
+    dropout_keep_prob: int = 0.25
+    cell_type: str = 'rnn'
 
 class DeepLearnableSystem(System):
     model: Module

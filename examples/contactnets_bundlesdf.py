@@ -10,6 +10,9 @@ import torch
 from torch import Tensor
 
 from dair_pll import file_utils, vis_utils
+from dair_pll.dair_pll.deep_learnable_model import LSTMModel
+from dair_pll.dair_pll.deep_learnable_system import DeepLearnableSystemConfig
+from dair_pll.dair_pll.integrator import VelocityIntegrator
 from dair_pll.dataset_generation import DataGenerationConfig, \
     ExperimentDatasetGenerator
 from dair_pll.dataset_management import DataConfig, TrajectorySet, \
@@ -161,6 +164,14 @@ def main(run_name: str = "",
                              slice_config=slice_config,
                              update_dynamically=dynamic)
 
+    # Deep learning system config 
+    deep_learning_config = DeepLearnableSystemConfig(
+                            integrator_type=VelocityIntegrator,
+                            layers=1,
+                            nonlinearity=torch.nn.ReLU,
+                            hidden_size=128,
+                            model_constructor=LSTMModel)
+
     # Combines everything into config for entire experiment.
     experiment_config = DrakeMultibodyLearnableExperimentConfig(
         storage=storage_name,
@@ -169,6 +180,7 @@ def main(run_name: str = "",
         learnable_config=learnable_config,
         optimizer_config=optimizer_config,
         data_config=data_config,
+        deep_learning_config=deep_learning_config,
         full_evaluation_period=EPOCHS if dynamic else 1,
         visualize_learned_geometry=True,
         run_wandb=False,

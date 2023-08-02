@@ -166,7 +166,6 @@ class SupervisedLearningExperiment(ABC):
         self.space = base_system.space
         self.loss_callback = cast(LossCallbackCallable, self.prediction_loss)
         self.learning_data_manager = None
-        self.model = LSTMModel()
 
         file_utils.save_configuration(config.storage, config.run_name, config)
 
@@ -363,17 +362,18 @@ class SupervisedLearningExperiment(ABC):
         avg_loss = cast(Tensor, sum(losses) / len(losses))
         return avg_loss
 
-    def train_epoch_e2e(self,
+    def train_epoch_nn(self,
                     data: DataLoader,
                     system: System,
                     optimizer: Optional[Optimizer] = None):
         losses = []
+        model = self.config.deep_learning_config.model_constructor
         for xy_i in data:
             x_i: Tensor = xy_i[0]
             y_i: Tensor = xy_i[1]
             if optimizer is not None:
                 optimizer.zero_grad()
-            output = self.model(xy_i)
+            output = model(xy_i)
             loss = self.prediction_loss() #TODO
             if optimizer is not None:
                 loss.backward()
@@ -703,7 +703,7 @@ class SupervisedLearningExperiment(ABC):
         learned_system.load_state_dict(training_state.best_learned_system_state)
         return training_loss, training_state.best_valid_loss, learned_system
 
-    def train_e2e(self, epoch_callback: EpochCallbackCallable = default_epoch_callback,):
+    def train_nn(self, epoch_callback: EpochCallbackCallable = default_epoch_callback,):
         checkpoint_filename = file_utils.get_model_filename(
             self.config.storage, self.config.run_name)
         learned_system, optimizer, training_state = self.setup_training()
@@ -716,7 +716,7 @@ class SupervisedLearningExperiment(ABC):
             batch_size=self.config.optimizer_config.batch_size.value,
             shuffle=True)
         learned_system.eval()
-        training_loss = self.train_epoch_e2e(train_dataloader, learned_system)
+        training_loss = self.train_epoch_nn(train_dataloader, learned_system)
         if training_state.finished_training:
             learned_system.load_state_dict(
                 training_state.best_learned_system_state)
@@ -875,7 +875,7 @@ class SupervisedLearningExperiment(ABC):
     def generate_results(
         self,
         epoch_callback: EpochCallbackCallable = default_epoch_callback,
-        e2e: bool = False,
+        nn: bool = False,
     ) -> Tuple[System, StatisticsDict]:
         r"""Get the final learned model and results/statistics of experiment.
         Along with the model corresponding to best validation loss, this will
@@ -890,8 +890,8 @@ class SupervisedLearningExperiment(ABC):
               validation loss.
             Statistics dictionary.
         """
-        if e2e:
-            _, _, learned_system = self.train_e2e(epoch_callback)
+        if nn:
+            _, _, learned_system = self.train_nn(epoch_callback)
         else:
             _, _, learned_system = self.train(epoch_callback)
 
