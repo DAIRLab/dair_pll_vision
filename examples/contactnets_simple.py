@@ -405,7 +405,7 @@ def main(storage_folder_name: str = "",
               default=CUBE_SYSTEM)
 @click.option('--source',
               type=click.Choice(DATA_SOURCES, case_sensitive=True),
-              default=SIM_SOURCE)
+              default=REAL_SOURCE)
 @click.option('--structured/--end-to-end',
               default=True,
               help="whether to train structured parameters or deep network.")

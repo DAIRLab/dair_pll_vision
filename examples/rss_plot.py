@@ -18,7 +18,7 @@ from dair_pll import file_utils
 
 
 
-RESULTS_DIR = os.path.join(os.path.dirname(__file__), 'storage')
+RESULTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'results', 'storage')
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'plots')
 
 
