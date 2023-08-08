@@ -6,6 +6,8 @@
 #SBATCH --time=12:00:00
 #SBATCH --job-name='pll'
 
+export PYTHONPATH=${PWD}:${PYTHONPATH}
+
 dataset_sizes=(4 8 16 32 64 128 256 512)
 
 for size in "${dataset_sizes[@]}"; do
