@@ -6,6 +6,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --job-name='pll'
 
+source /home/mengti/workspace/dair_pll/pll_env/bin/activate;
 export PYTHONPATH=${PWD}:${PYTHONPATH}
 
 dataset_sizes=(4 8 16 32 64 128 256 512)
