@@ -1,3 +1,0 @@
-status: 2
-ref_frame_id: 89
-ref_frame_id_str: 0090
