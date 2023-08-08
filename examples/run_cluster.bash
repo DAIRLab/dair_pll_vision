@@ -10,8 +10,8 @@ dataset_sizes=(4 8 16 32 64 128 256 512)
 
 for size in "${dataset_sizes[@]}"; do
     for run_idx in {1..9}; do
-        cmd="WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-args="-screen 0 800x600x24" python examples/contactnets_simple.py --structured --system=cube --geometry=polygon --source=real --contactnets --regenerate --no-residual --dataset-size $size 'cube_$size' 'cube_${size}-${run_idx}'"
+        cmd="WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-args=\"-screen 0 800x600x24\" python examples/contactnets_simple.py --structured --system=cube --geometry=polygon --source=real --contactnets --regenerate --no-residual --dataset-size $size 'cube_$size' 'cube_${size}-${run_idx}'"
         echo "Running: $cmd"
-        WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-args="-screen 0 800x600x24" python examples/contactnets_simple.py --structured --system=cube --geometry=polygon --source=real --contactnets --regenerate --no-residual --dataset-size $size 'gt_cube_$size' 'gt_cube_${size}-${run_idx}'
+        eval $cmd
     done
 done
