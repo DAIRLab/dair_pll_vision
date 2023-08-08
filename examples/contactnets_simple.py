@@ -429,7 +429,7 @@ def main(storage_folder_name: str = "",
               help="what inertia parameters to learn.")
 @click.option('--loss-variation',
               type=click.Choice(LOSS_VARIATION_NUMBERS),
-              default='1',
+              default='0',
               help="ContactNets loss variation")
 @click.option('--true-sys/--wrong-sys',
               default=False,
