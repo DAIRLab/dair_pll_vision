@@ -3,7 +3,6 @@
 #SBATCH --mem-per-cpu=10G
 #SBATCH --cpus-per-gpu=4
 #SBATCH --qos=mp-med
-#SBATCH --partition=compute
 #SBATCH --time=12:00:00
 #SBATCH --job-name='pll'
 
