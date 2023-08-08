@@ -14,7 +14,7 @@ for size in "${dataset_sizes[@]}"; do
     # Loop for the run index
     for run_idx in {1..9}; do
         # Construct the command with the current dataset size and name
-        cmd="WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-num="$SLURM_JOBID" --server-args="-screen 0 800x600x24" python examples/contactnets_simple.py --structured --system=cube --geometry=polygon --source=real --contactnets --regenerate --no-residual --dataset-size $size 'polygon_$size' 'polygon_${size}-${run_idx}'"
+        cmd="WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-args="-screen 0 800x600x24" python examples/contactnets_simple.py --structured --system=cube --geometry=polygon --source=real --contactnets --regenerate --no-residual --dataset-size $size 'polygon_$size' 'polygon_${size}-${run_idx}'"
         echo "Running: $cmd"
         # Execute the command
         eval "$cmd"
