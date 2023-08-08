@@ -40,7 +40,8 @@ from dair_pll.system import System
 CUBE_SYSTEM = 'cube'
 ELBOW_SYSTEM = 'elbow'
 ASYMMETRIC_SYSTEM = 'asymmetric'
-SYSTEMS = [CUBE_SYSTEM, ELBOW_SYSTEM, ASYMMETRIC_SYSTEM]
+BOTTLE_SYSTEM = 'bottle'
+SYSTEMS = [CUBE_SYSTEM, ELBOW_SYSTEM, ASYMMETRIC_SYSTEM, BOTTLE_SYSTEM]
 
 # Possible dataset types
 SIM_SOURCE = 'simulation'
@@ -176,10 +177,10 @@ WANDB_DEFAULT_PROJECT = 'dair_pll-examples'
 def main(storage_folder_name: str = "",
          run_name: str = "",
          system: str = CUBE_SYSTEM,
-         source: str = SIM_SOURCE,
+         source: str = REAL_SOURCE,
          structured: bool = True,
          contactnets: bool = True,
-         geometry: str = BOX_TYPE,
+         geometry: str = MESH_TYPE,
          regenerate: bool = False,
          dataset_size: int = 512,
          inertia_params: str = '4',
@@ -414,7 +415,7 @@ def main(storage_folder_name: str = "",
               help="whether to train on ContactNets or prediction loss.")
 @click.option('--geometry',
               type=click.Choice(GEOMETRY_TYPES, case_sensitive=True),
-              default=BOX_TYPE,
+              default=MESH_TYPE,
               help="how to represent geometry.")
 @click.option('--regenerate/--no-regenerate',
               default=False,
@@ -428,7 +429,7 @@ def main(storage_folder_name: str = "",
               help="what inertia parameters to learn.")
 @click.option('--loss-variation',
               type=click.Choice(LOSS_VARIATION_NUMBERS),
-              default='0',
+              default='1',
               help="ContactNets loss variation")
 @click.option('--true-sys/--wrong-sys',
               default=False,
