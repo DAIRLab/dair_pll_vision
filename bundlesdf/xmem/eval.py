@@ -15,6 +15,7 @@ from model.network import XMem
 from inference.inference_core import InferenceCore
 
 from progressbar import progressbar
+from tqdm import tqdm
 
 try:
     import hickle as hkl
@@ -163,7 +164,7 @@ for vid_reader in progressbar(meta_loader, max_value=len(meta_dataset), redirect
     processor = InferenceCore(network, config=config)
     first_mask_loaded = False
 
-    for ti, data in enumerate(loader):
+    for ti, data in tqdm(enumerate(loader)):
         with torch.cuda.amp.autocast(enabled=not args.benchmark):
             rgb = data['rgb'].cuda()[0]
             msk = data.get('mask')
@@ -194,7 +195,7 @@ for vid_reader in progressbar(meta_loader, max_value=len(meta_dataset), redirect
 
             # Map possibly non-continuous labels to continuous ones
             if msk is not None:
-                msk, labels = mapper.convert_mask(msk[0].numpy())
+                msk, labels = mapper.convert_mask(msk[0].numpy(), exhaustive=True)
                 msk = torch.Tensor(msk).cuda()
                 if need_resize:
                     msk = vid_reader.resize_mask(msk.unsqueeze(0))[0]
