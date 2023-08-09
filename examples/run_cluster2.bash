@@ -4,12 +4,12 @@
 #SBATCH --cpus-per-gpu=4
 #SBATCH --qos=mp-med
 #SBATCH --time=12:00:00
-#SBATCH --job-name='pll'
+#SBATCH --job-name='pll_2'
 
 source /home/mengti/workspace/dair_pll/pll_env/bin/activate;
 export PYTHONPATH=${PWD}:${PYTHONPATH}
 
-dataset_sizes=(64 128)
+dataset_sizes=(256 512)
 
 for size in "${dataset_sizes[@]}"; do
     for run_idx in {1..9}; do
