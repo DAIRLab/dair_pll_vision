@@ -2,8 +2,9 @@
 #SBATCH --gpus=0
 #SBATCH --mem-per-cpu=10G
 #SBATCH --cpus-per-gpu=4
-#SBATCH --qos=posa-high
-#SBATCH --partition=posa-compute
+#SBATCH --qos=mp-med
+##SBATCH --partition=posa-compute
+##SBATCH --account mp-account
 #SBATCH --time=12:00:00
 #SBATCH --job-name='pll_2'
 
