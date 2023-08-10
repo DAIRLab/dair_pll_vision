@@ -10,7 +10,7 @@
 source /home/mengti/workspace/dair_pll/pll_env/bin/activate;
 export PYTHONPATH=${PWD}:${PYTHONPATH}
 
-dataset_sizes=(256 512)
+dataset_sizes=(512)
 
 for size in "${dataset_sizes[@]}"; do
     for run_idx in {1..9}; do
