@@ -55,4 +55,4 @@ def create_convex_hull(input_obj_file, output_obj_file):
     stl_to_obj('temp_hull.stl', output_obj_file)
 
 if __name__ == "__main__":
-    create_convex_hull('results/cube_hand_toss/mesh_cleaned.obj', 'results/cube_hand_toss/mesh_convex_hull.obj')
+    create_convex_hull('results/old_toss_3/mesh_cleaned.obj', 'results/old_toss_3/mesh_convex_hull.obj')
