@@ -804,23 +804,6 @@ def get_plottable_values_no_conf(exp_dict, metric, method, metric_lookup, gravit
         ys = [y*scaling for y in ys]
     return xs, ys
 
-# keys_to_plot = {
-#     'train_model_loss_mean': '',
-#     'train_model_trajectory_mse_mean': '',
-#     'train_model_pos_int_traj_mean': '',
-#     'train_model_angle_int_traj_mean': '',
-#     'test_model_trajectory_mse_mean': '',
-#     'test_model_pos_int_traj_mean': '',
-#     'test_model_angle_int_traj_mean': '',
-#     'test_model_loss_mean': '',
-# }
-# with open(STATS_FILE, 'rb') as f:
-#     data = pickle.load(f)
-#     keys = []
-#     for key in data.keys():
-#         if key in keys_to_plot.keys():
-#             print(data[key])
-
 if __name__ == '__main__':
     with open(JSON_OUTPUT_FILE) as file:
         results = json.load(file)
