@@ -56,6 +56,11 @@ CUBE_VERTICES = Tensor([
     [ -0.052400, -0.052400, -0.052400],
     [ 0.052400, -0.052400, -0.052400]])
 
+## TODO
+BOTTLE_VERTICES = Tensor([
+
+])
+
 CORRECT_PARAMETERS_BY_SYSTEM_AND_BODY = {
     'cube': {
         'body': {
@@ -204,16 +209,6 @@ XS = [2**(key-1) for key in DATASET_SIZE_DICT.keys()]
 rc('legend', fontsize=30)
 plt.rc('axes', titlesize=40)    # fontsize of the axes title
 plt.rc('axes', labelsize=40)    # fontsize of the x and y labels
-
-# def concat_results():
-#     result_json = {}
-#     for size in DATASET_SIZES:
-#         summary_file = RESULTS_DIR + f'/bundlesdf_{size}/wandb/wandb/latest-run/files/wandb-summary.json'
-#         with open(summary_file) as file:
-#             results = json.load(file)
-#             result_json[size] = results
-#     with open(JSON_OUTPUT_FILE, 'w') as file:
-#         json.dump(result_json, file)
 
 def _get_mesh_interior_point(halfspaces: np.ndarray) -> Tuple[np.ndarray, float]:
     norm_vector = np.reshape(np.linalg.norm(halfspaces[:, :-1], axis=1),
@@ -702,7 +697,6 @@ def format_plot_(ax, fig, metric, metric_lookup, experiment, gravity=False):
         ax.set_xscale('log')
         ax.set_xlim(min(XS), max(XS))
         x_markers = [round(x, 1) for x in XS]
-        print('>>>>>>>>>>>>>>', x_markers)
     if metric_lookup[metric]['log']:
         ax.set_yscale('log')
 
@@ -740,7 +734,6 @@ def get_method_name_by_run_dict(run_dict):
 
 def fill_exp_dict_with_single_run_data(run_dict, sweep_instance, exp_dict, gravity=False):
     method = get_method_name_by_run_dict(run_dict)
-    # print(f"=========================={sweep_instance}==========================")
     exp_key = f'{experiment}_gravity' if gravity else experiment
 
     for result_metric in run_dict['results'].keys():

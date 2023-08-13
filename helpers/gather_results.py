@@ -16,7 +16,7 @@ from dair_pll.inertia import InertialParameterConverter
 # Directory management.
 RESULTS_DIR = op.join(op.dirname(__file__), '..', 'results')
 OUTPUT_DIR = op.join(op.dirname(__file__), '..', 'plots')
-JSON_OUTPUT_FILE = op.join(op.dirname(__file__), 'results.json')
+JSON_OUTPUT_FILE = op.join(op.dirname(__file__), 'results_gt.json')
 
 ROLLOUT_LENGTHS = [4, 8, 16, 32, 64, 128, 256, 512]
 
@@ -277,7 +277,7 @@ for experiment in EXPERIMENTS.keys():
 
     for exponent in DATASET_EXPONENTS:
         data_size = 2 ** exponent
-        results_folder_name = f'polygon-{data_size}'
+        results_folder_name = f'gt_cube_{data_size}'
         runs_path = op.join(RESULTS_DIR, results_folder_name, 'runs')
         if not op.isdir(runs_path):
             print(f'Could not find {runs_path}; skipping.')
