@@ -148,7 +148,7 @@ total_frames = 0
 # Start eval
 for vid_reader in progressbar(meta_loader, max_value=len(meta_dataset), redirect_stdout=True):
 
-    loader = DataLoader(vid_reader, batch_size=1, shuffle=False, num_workers=2)
+    loader = DataLoader(vid_reader, batch_size=1, shuffle=False, num_workers=1)
     vid_name = vid_reader.vid_name
     vid_length = len(loader)
     # no need to count usage for LT if the video is not that long anyway
