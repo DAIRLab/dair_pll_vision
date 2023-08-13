@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --gpus=0
 #SBATCH --mem-per-cpu=10G
-#SBATCH --cpus-per-gpu=4
+#SBATCH --cpus-per-task=8
 #SBATCH --qos=mp-med
 #SBATCH --time=12:00:00
 #SBATCH --job-name='pll'
