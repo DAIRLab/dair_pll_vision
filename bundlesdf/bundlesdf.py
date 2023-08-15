@@ -228,11 +228,16 @@ def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, st
     nerf.train()
     logging.info(f"Training done, latest nerf frame {frame_id}")
 
-    optimized_cvcam_in_obs,offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],cfg_nerf['sc_factor'],cfg_nerf['translation'])
+    optimized_cvcam_in_obs, offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],cfg_nerf['sc_factor'],cfg_nerf['translation'])
 
     logging.info("Getting mesh")
     mesh = nerf.extract_mesh(isolevel=0,voxel_size=cfg_nerf['mesh_resolution'])
     mesh = mesh_to_real_world(mesh, pose_offset=offset, translation=nerf.cfg['translation'], sc_factor=nerf.cfg['sc_factor'])
+
+    ####################################################################
+    # overwrite the mesh from contactnet output
+    # mesh = trimesh.load('data/cube_contactnet_example.obj')
+    ####################################################################
 
     with lock:
       p_dict['optimized_cvcam_in_obs'] = optimized_cvcam_in_obs
@@ -535,6 +540,9 @@ class BundleSdf:
       depth[depth>=thres] = 0
       logging.info("percentile denoise done")
 
+    # solve possible bugs related to depth image scale
+    depth = depth * 0.6
+
     frame = self.make_frame(color, depth, K, id_str, mask, occ_mask, pose_in_model)
     os.makedirs(f"{self.debug_dir}/{frame._id_str}", exist_ok=True)
 
@@ -581,6 +589,7 @@ class BundleSdf:
           continue
         break
 
+    ####################################################################
     rematch_after_nerf = self.cfg_track["feature_corres"]["rematch_after_nerf"]
     logging.info(f"rematch_after_nerf: {rematch_after_nerf}")
     frames_large_update = []
@@ -597,6 +606,7 @@ class BundleSdf:
           self.bundler._keyframes[i_f]._nerfed = True
         logging.info(f"synced pose from nerf, latest nerf frame {self.bundler._keyframes[len(self.p_dict['optimized_cvcam_in_obs'])-1]._id_str}")
         del self.p_dict['optimized_cvcam_in_obs']
+    ####################################################################
 
       if self.use_gui:
         with self.gui_lock:
@@ -724,7 +734,7 @@ class BundleSdf:
     nerf = NerfRunner(self.cfg_nerf,rgbs,depths=depths,masks=masks,normal_maps=normal_maps,occ_masks=occ_masks,poses=poses,K=self.K,build_octree_pcd=pcd_normalized)
     print("Start training")
     nerf.train()
-    optimized_cvcam_in_obs,offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],self.cfg_nerf['sc_factor'],self.cfg_nerf['translation'])
+    optimized_cvcam_in_obs, offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],self.cfg_nerf['sc_factor'],self.cfg_nerf['translation'])
 
     ####### Log
     os.system(f"cp -r {self.cfg_nerf['save_dir']}/image_step_*.png  {out_dir}/")

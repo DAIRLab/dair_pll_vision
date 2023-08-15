@@ -502,7 +502,7 @@ def get_optimized_poses_in_real_world(poses_normalized, pose_array, sc_factor, t
       optimized_poses[i] = new_ob_in_cam
       optimized_poses[i] = optimized_poses[i]@glcam_in_cvcam
 
-    return optimized_poses,offset
+    return optimized_poses, offset
 
 
 def mesh_to_real_world(mesh,pose_offset,translation,sc_factor):
