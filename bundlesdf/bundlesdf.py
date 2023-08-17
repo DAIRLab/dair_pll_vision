@@ -541,7 +541,7 @@ class BundleSdf:
       logging.info("percentile denoise done")
 
     # solve possible bugs related to depth image scale
-    depth = depth * 0.6
+    # depth = depth * 0.6
 
     frame = self.make_frame(color, depth, K, id_str, mask, occ_mask, pose_in_model)
     os.makedirs(f"{self.debug_dir}/{frame._id_str}", exist_ok=True)

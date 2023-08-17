@@ -475,7 +475,6 @@ class OctreeManager:
         return rays_near, rays_far, rays_pid, ray_depths_in_out
 
 
-
 def get_optimized_poses_in_real_world(poses_normalized, pose_array, sc_factor, translation):
     '''
     @poses_normalized: np array, cam_in_ob (opengl convention), normalized to [-1,1] and centered

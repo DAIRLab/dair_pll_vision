@@ -721,7 +721,7 @@ class NerfRunner:
 
     truncation = self.get_truncation()
     sample_weights[ray_type==1] = 0
-    fs_loss, sdf_loss,front_mask,sdf_mask = get_sdf_loss(z_vals, target_d.reshape(-1,1).expand(-1,N_samples), sdf, truncation, self.cfg,return_mask=True, sample_weights=sample_weights, rays_d=batch[:,self.ray_dir_slice])
+    fs_loss, sdf_loss, front_mask, sdf_mask = get_sdf_loss(z_vals, target_d.reshape(-1,1).expand(-1,N_samples), sdf, truncation, self.cfg, return_mask=True, sample_weights=sample_weights, rays_d=batch[:,self.ray_dir_slice])
     fs_loss = fs_loss*self.cfg['fs_weight']
     sdf_loss = sdf_loss*self.cfg['trunc_weight']
     loss = loss + fs_loss + sdf_loss
