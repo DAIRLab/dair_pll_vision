@@ -641,8 +641,7 @@ class MultibodyLearnableSystem(System):
 
         impulse = torch.zeros_like(impulse_full)
         impulse[contact_filter] += impulse_full[contact_filter]
-
-        return v_minus + torch.linalg.solve(M, pbmm(J.transpose(-1, -2),
+        return v_minus + torch.linalg.solve(M.float(), pbmm(J.transpose(-1, -2),
                                                     impulse)).squeeze(-1)
 
     def sim_step(self, x: Tensor, carry: Tensor) -> Tuple[Tensor, Tensor]:

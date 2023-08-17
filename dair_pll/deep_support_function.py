@@ -269,14 +269,16 @@ class HomogeneousICNN(Module):
         hidden_wts, output_wt = self.abs_weights()
         input_wts = self.input_weights
         # (*, 3) x (*, 3, W)
+        directions = directions.float()
+        input_wts = input_wts.float()
         hiddens.append(self.activation(pbmm(directions, input_wts[0])))
         # print(hiddens[-1].norm(dim=-1).mean(dim=0))
         for hidden_wt, input_wt in zip(hidden_wts, input_wts[1:]):
-            linear_hidden = pbmm(hiddens[-1], hidden_wt)
+            linear_hidden = pbmm(hiddens[-1].float(), hidden_wt.float())
             linear_input = pbmm(directions, input_wt)
             linear_output = linear_hidden + linear_input
             hiddens.append(self.activation(linear_output))
-        output = pbmm(hiddens[-1], output_wt)
+        output = pbmm(hiddens[-1].float(), output_wt.float())
         return hiddens, output.squeeze(-1)
 
     def forward(self, directions: Tensor) -> Tensor:
@@ -300,11 +302,10 @@ class HomogeneousICNN(Module):
                            reversed(list(input_wts[1:])))
 
         for hidden, hidden_wt, input_wt in layer_bundle:
-            jacobian += pbmm(input_wt, hidden_jacobian).squeeze(-1)
+            jacobian += pbmm(input_wt.float(), hidden_jacobian.float()).squeeze(-1)
 
             hidden_jacobian = pbmm(hidden_wt, hidden_jacobian) * \
                 self.activation_jacobian(hidden).unsqueeze(-1)
-
         jacobian += pbmm(input_wts[0], hidden_jacobian).squeeze(-1)
 
         return jacobian

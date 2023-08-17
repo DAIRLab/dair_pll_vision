@@ -96,7 +96,7 @@ def pbmm(t_1: Tensor, t_2: Tensor) -> Tensor:
             t_2 = t_2.expand(t_1.shape[:-t_2_dim] + t_2.shape)
 
         # pylint: disable=E1103
-        product = torch.matmul(t_1, t_2)
+        product = torch.matmul(t_1.float(), t_2.float())
     else:
         product = t_1.mm(t_2)
 

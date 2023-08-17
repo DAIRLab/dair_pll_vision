@@ -650,10 +650,12 @@ class MultibodyTerms(Module):
 
                 geometry_mesh = None
                 if isinstance(geometry, DeepSupportConvex):
+                    print(">>>>>>>>>> deep support")
                     geometry_mesh = extract_mesh_from_support_function(
                         geometry.network)
 
                 elif isinstance(geometry, Polygon):
+                    print(">>>>>>>>>>> polygon")
                     geometry_mesh = get_mesh_summary_from_polygon(geometry)
 
                 if geometry_mesh != None:

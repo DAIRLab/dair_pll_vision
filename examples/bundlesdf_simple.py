@@ -75,7 +75,7 @@ INERTIA_PARAM_OPTIONS = ['none', 'masses', 'CoMs', 'CoMs and masses', 'all']
 
 
 # File management.
-BUNDLESDF_CUBE_DATA_ASSET = 'bundlesdf'
+BUNDLESDF_CUBE_DATA_ASSET = 'bundlesdf_cube'
 BUNDLESDF_BOTTLE_DATA_ASSET = 'bundlesdf_bottle'
 CUBE_DATA_ASSET = 'contactnets_cube'
 ELBOW_DATA_ASSET = 'contactnets_elbow'
@@ -92,7 +92,8 @@ MESH_TYPE = 'mesh'
 BOX_TYPE = 'box'
 POLYGON_TYPE = 'polygon'
 GEOMETRY_TYPES = [BOX_TYPE, MESH_TYPE, POLYGON_TYPE]
-BUNDLESDF_CUBE_URDFS = {POLYGON_TYPE: BUNDLESDF_CUBE_MESH_ASSET}
+# BUNDLESDF_CUBE_URDFS = {POLYGON_TYPE: CUBE_MESH_URDF_ASSET}
+BUNDLESDF_CUBE_URDFS = {MESH_TYPE: BUNDLESDF_CUBE_MESH_ASSET, POLYGON_TYPE: BUNDLESDF_CUBE_MESH_ASSET}
 BUNDLESDF_BOTTLE_URDFS = {POLYGON_TYPE: BUNDLESDF_BOTTLE_MESH_ASSET}
 CUBE_URDFS = {MESH_TYPE: CUBE_MESH_URDF_ASSET,
               BOX_TYPE: CUBE_BOX_URDF_ASSET,
@@ -138,8 +139,11 @@ ELBOW_X_0 = torch.tensor(
     [1., 0., 0., 0., 0., 0., 0.21 + .015, np.pi, 0., 0., 0., 0., 0., -.075, 0.])
 ASYMMETRIC_X_0 = torch.tensor(
     [1., 0., 0., 0., 0., 0., 0.21 + .015, 0., 0., 0., 0., 0., -.075])
+# TODO: seems not using this for real experiments
+BOTTLE_X_0 = torch.tensor(
+    [1., 0., 0., 0., 0., 0., 0.21 + .015, 0., 0., 0., 0., 0., -.075])
 X_0S = {CUBE_SYSTEM: CUBE_X_0, ELBOW_SYSTEM: ELBOW_X_0,
-        ASYMMETRIC_SYSTEM: ASYMMETRIC_X_0, BUNDLESDF_CUBE_SYSTEM: CUBE_X_0}
+        ASYMMETRIC_SYSTEM: ASYMMETRIC_X_0, BUNDLESDF_CUBE_SYSTEM: CUBE_X_0, BUNDLESDF_BOTTLE_SYSTEM: BOTTLE_X_0}
 CUBE_SAMPLER_RANGE = torch.tensor([
     2 * np.pi, 2 * np.pi, 2 * np.pi, .03, .03, .015, 6., 6., 6., 1.5, 1.5, .075
 ])
@@ -166,8 +170,9 @@ CUBE_LR = 1e-3
 ELBOW_LR = 1e-3
 ASYMMETRIC_LR = 1e-3
 BUNDLESDF_CUBE_LR = 1e-3
+BUNDLESDF_BOTTLE_LR = 1e-3
 LRS = {CUBE_SYSTEM: CUBE_LR, ELBOW_SYSTEM: ELBOW_LR,
-       ASYMMETRIC_SYSTEM: ASYMMETRIC_LR, BUNDLESDF_CUBE_SYSTEM: BUNDLESDF_CUBE_LR}
+       ASYMMETRIC_SYSTEM: ASYMMETRIC_LR, BUNDLESDF_CUBE_SYSTEM: BUNDLESDF_CUBE_LR, BUNDLESDF_BOTTLE_SYSTEM: BUNDLESDF_BOTTLE_LR}
 CUBE_WD = 0.0
 ELBOW_WD = 0.0  #1e-4
 ASYMMETRIC_WD = 0.0
@@ -278,6 +283,7 @@ def main(storage_folder_name: str = "",
     # simulation for the described URDFs.
     # first, select urdfs
     urdf_asset = TRUE_URDFS[system][geometry]
+    print(f'>>>>>>>>>> Using gt-urdf: {urdf_asset}')
     urdf = file_utils.get_asset(urdf_asset)
     urdfs = {system: urdf}
     base_config = DrakeSystemConfig(urdfs=urdfs)
@@ -433,7 +439,7 @@ def main(storage_folder_name: str = "",
               help="dataset size")
 @click.option('--inertia-params',
               type=click.Choice(INERTIA_PARAM_CHOICES),
-              default='4',
+              default='0',
               help="what inertia parameters to learn.")
 @click.option('--loss-variation',
               type=click.Choice(LOSS_VARIATION_NUMBERS),

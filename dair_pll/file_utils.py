@@ -270,7 +270,9 @@ def get_geometrically_accurate_urdf(urdf_name: str) -> str:
                 'contactnets_elbow_small_init.urdf': 'contactnets_elbow.urdf',
                 'contactnets_elbow.urdf': 'contactnets_elbow.urdf',
                 'contactnets_elbow_mesh.urdf': 'contactnets_elbow_mesh.urdf',
-                'contactnets_asymmetric.urdf': 'contactnets_asymmetric.urdf'}
+                'contactnets_asymmetric.urdf': 'contactnets_asymmetric.urdf',
+                'bundlesdf_cube_mesh.urdf': 'bundlesdf_cube_mesh.urdf',
+                'bundlesdf_bottle_mesh.urdf': 'bundlesdf_bottle_mesh.urdf'}
     base_name = urdf_name.split('/')[-1]
 
     if base_name in URDF_MAP.keys():
