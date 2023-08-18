@@ -207,6 +207,42 @@ def point_cloud_to_depth_image(point_cloud, intrinsic_matrix, depth_shape):
     return depth_image
 
 
+def transform_poses():
+    pose_folder = "results/old_toss_1_contactnet/ob_in_cam"
+    transform_folder = "results/old_toss_1_icp/transforms"
+    transformed_pose_folder = "results/old_toss_1_icp/ob_in_cam_projected_icp_transformed"
+
+    # Get a list of all .txt files in the folder
+    all_poses = [f for f in os.listdir(pose_folder) if f.endswith('.txt')]
+    print('all_poses', len(all_poses))
+
+    # Loop through each .txt file and read its contents
+    for pose_file in all_poses:
+        pose_filename = os.path.join(pose_folder, pose_file)
+
+        # Load the text file
+        pose_mat = []
+        with open(pose_filename, 'r') as file:
+            for line in file:
+                row_values = [float(value) for value in line.split()]
+                pose_mat.append(row_values)
+
+        # Convert the list of lists to a NumPy array
+        pose_mat = np.array(pose_mat, dtype=np.float64)
+        print('file', pose_filename, 'pose_mat', pose_mat)
+
+        trans_filename = os.path.splitext(pose_file)[0]
+        trans_filename = os.path.join(transform_folder, f"{trans_filename}.npy")
+
+        transform = np.load(trans_filename)
+        transformed_pose = np.dot(transform, pose_mat)
+        print('transformed_pose', transformed_pose)
+
+        new_pose_filename = os.path.join(transformed_pose_folder, pose_file)
+        print('saved', pose_filename, '->', new_pose_filename)
+        np.savetxt(new_pose_filename, transformed_pose, delimiter=',', fmt='%.10f')
+
+
 def main():
     old_depth_folder = "data/old_toss_1/depth"
     proj_depth_folder = "data/old_toss_1_contactnet/depth"
@@ -215,6 +251,7 @@ def main():
     cam_K_file = "results/old_toss_1/cam_K.txt"
     output_depth_folder = "data/old_toss_1_icp/depth"
     output_mask_folder = "data/old_toss_1_icp/masks"
+    output_transform_folder = "results/old_toss_1_icp/transforms"
 
     # sc_factor = 8.697657471427803
 
@@ -267,12 +304,15 @@ def main():
         new_depth_image = o3d.geometry.Image(new_depth_image_data)
         new_mask_image = o3d.geometry.Image(new_mask_image_data)
 
-        basename = os.path.basename(old_depth_file)
-        o3d.io.write_image(os.path.join(output_depth_folder, basename), new_depth_image)
-        o3d.io.write_image(os.path.join(output_mask_folder, basename), new_mask_image)
+        png_basename = os.path.basename(old_depth_file)
+        txt_basename = os.path.splitext(png_basename)[0]
+        np.save(os.path.join(output_transform_folder, f"{txt_basename}.npy"), result.transformation)
+        o3d.io.write_image(os.path.join(output_depth_folder, png_basename), new_depth_image)
+        o3d.io.write_image(os.path.join(output_mask_folder, png_basename), new_mask_image)
 
         # break
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    transform_poses()
