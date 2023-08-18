@@ -38,6 +38,17 @@ def load_depth_and_mask_from_paths(old_depth_path, proj_depth_path, old_mask_pat
     return old_depth_image, proj_depth_image, old_mask_image, proj_mask_image
 
 
+def save_point_cloud_as_mesh(point_cloud):
+    # Compute normals for the point cloud (required for surface reconstruction)
+    point_cloud.estimate_normals()
+
+    # Use Poisson surface reconstruction to convert point cloud to mesh
+    mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(point_cloud, depth=8)
+
+    # Save the resulting mesh as an .obj file
+    o3d.io.write_triangle_mesh("point_cloud.obj", mesh)
+
+
 def depth_to_point_cloud(depth_values, intrinsic_matrix, mask_values):
     depth_values = np.array(depth_values)#.astype(float)
     mask_values = np.array(mask_values).flatten()
@@ -52,20 +63,11 @@ def depth_to_point_cloud(depth_values, intrinsic_matrix, mask_values):
     depth_values = depth_values.flatten()
     depth_background, mask_background = depth_values[0], mask_values[0]
 
-    print('depth_values before', len(depth_values))
+    # print('depth_values before', len(depth_values))
     u_coords = u_coords[np.logical_and(mask_values != mask_background, depth_values != depth_background)]
     v_coords = v_coords[np.logical_and(mask_values != mask_background, depth_values != depth_background)]
     depth_values = depth_values[np.logical_and(mask_values != mask_background, depth_values != depth_background)]
-    print('depth_values after', len(depth_values))
-
-    # u_coords = u_coords[depth_values > 0]
-    # v_coords = v_coords[depth_values > 0]
-    # depth_values = depth_values[depth_values > 0]
-    # if target:
-    #     np.savetxt('old_depth.txt', depth_values, fmt='%d', delimiter=', ')
-    # else:
-    #     np.savetxt('proj_depth.txt', depth_values, fmt='%d', delimiter=', ')
-    # print('depth_values at depth_to_point_cloud', np.min(depth_values), depth_values)
+    # print('depth_values after', len(depth_values))
 
     # Apply the inverse intrinsic matrix to get 3D coordinates
     fx, fy = intrinsic_matrix[0, 0], intrinsic_matrix[1, 1]
@@ -137,8 +139,8 @@ def normalize_point_cloud(pc: o3d.geometry.PointCloud) -> o3d.geometry.PointClou
 
 def register_with_icp(source, target):
     # Clone the original_pointcloud using the copy constructor
-    source = normalize_point_cloud(source)
-    target = normalize_point_cloud(target)
+    # source = normalize_point_cloud(source)
+    # target = normalize_point_cloud(target)
 
     # Convert to CUDA PointClouds
     source_cuda = o3d.cuda.pybind.geometry.PointCloud()
@@ -149,11 +151,11 @@ def register_with_icp(source, target):
     # To save the point clouds
     source_out = o3d.geometry.PointCloud()
     source_out.points = source.points
-    print('source_out.points', np.asarray(source_out.points), np.min(np.asarray(source_out.points)), np.mean(np.asarray(source_out.points)), np.max(np.asarray(source_out.points)))
+    # print('source_out.points', np.asarray(source_out.points), np.min(np.asarray(source_out.points)), np.mean(np.asarray(source_out.points)), np.max(np.asarray(source_out.points)))
 
     target_out = o3d.geometry.PointCloud()
     target_out.points = target.points
-    print('target_out.points', np.asarray(target_out.points), np.min(np.asarray(target_out.points)), np.mean(np.asarray(target_out.points)), np.max(np.asarray(target_out.points)))
+    # print('target_out.points', np.asarray(target_out.points), np.min(np.asarray(target_out.points)), np.mean(np.asarray(target_out.points)), np.max(np.asarray(target_out.points)))
 
     # ICP Registration
     reg_p2p = o3d.cuda.pybind.pipelines.registration.TransformationEstimationPointToPoint()
@@ -243,9 +245,9 @@ def main():
 
         # Convert depth image to point cloud
         old_depth_point_cloud, old_depth_values = depth_to_point_cloud(old_depth_image, intrinsic_matrix, old_mask_image)
-        print('old_depth_point_cloud', np.asarray(old_depth_point_cloud.points))
+        # print('old_depth_point_cloud', np.asarray(old_depth_point_cloud.points))
         proj_depth_point_cloud, proj_depth_values = depth_to_point_cloud(proj_depth_image, intrinsic_matrix, proj_mask_image)
-        print('proj_depth_point_cloud', np.asarray(proj_depth_point_cloud.points))
+        # print('proj_depth_point_cloud', np.asarray(proj_depth_point_cloud.points))
 
         # Register with ICP
         result = register_with_icp(proj_depth_point_cloud, old_depth_point_cloud)   # source, target
@@ -254,13 +256,6 @@ def main():
 
         # Apply transformations from ICP to refine depth
         transformed_point_cloud = proj_depth_point_cloud.transform(result.transformation)
-
-        # # Compute normals for the point cloud (required for surface reconstruction)
-        # transformed_point_cloud.estimate_normals()
-        # # Use Poisson surface reconstruction to convert point cloud to mesh
-        # transformed_mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(transformed_point_cloud, depth=8)
-        # # Save the resulting mesh as an .obj file
-        # o3d.io.write_triangle_mesh("transformed_point_cloud.obj", transformed_mesh)
 
         # Convert transformed point cloud back to depth image
         new_depth_image_data = point_cloud_to_depth_image(transformed_point_cloud, intrinsic_matrix, np.asarray(proj_depth_image).shape)
@@ -276,7 +271,7 @@ def main():
         o3d.io.write_image(os.path.join(output_depth_folder, basename), new_depth_image)
         o3d.io.write_image(os.path.join(output_mask_folder, basename), new_mask_image)
 
-        break
+        # break
 
 
 if __name__ == "__main__":
