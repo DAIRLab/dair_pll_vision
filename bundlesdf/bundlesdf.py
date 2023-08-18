@@ -708,11 +708,16 @@ class BundleSdf:
       tmp = yaml.load(open(files[-1],'r'))
       self.cfg_nerf['sc_factor'] = float(tmp['sc_factor'])
       self.cfg_nerf['translation'] = np.array(tmp['translation'])
+      print("1!!!!!!!!!!!!!!!!self.cfg_nerf['sc_factor']", self.cfg_nerf['sc_factor'])
+      print("1!!!!!!!!!!!!!!!!self.cfg_nerf['translation']", self.cfg_nerf['translation'])
 
     sc_factor,translation,pcd_real_scale, pcd_normalized = compute_scene_bounds(None,glcam_in_obs,self.K,use_mask=True,base_dir=self.cfg_nerf['save_dir'],rgbs=np.array(rgbs),depths=np.array(depths),masks=np.array(masks), cluster=True, eps=0.01, min_samples=5, sc_factor=self.cfg_nerf['sc_factor'], translation_cvcam=self.cfg_nerf['translation'])
 
     self.cfg_nerf['sc_factor'] = float(sc_factor)
     self.cfg_nerf['translation'] = translation
+
+    print("2!!!!!!!!!!!!!!!!self.cfg_nerf['sc_factor']", self.cfg_nerf['sc_factor'])
+    print("2!!!!!!!!!!!!!!!!self.cfg_nerf['translation']", self.cfg_nerf['translation'])
 
     if normal_maps is not None and len(normal_maps)>0:
       normal_maps = np.array(normal_maps)
@@ -720,7 +725,9 @@ class BundleSdf:
       normal_maps = None
 
     rgbs_raw = np.array(rgbs).copy()
+    print("!!!!!!!!!!depth before", np.min(depths), np.mean(depths), np.max(depths))
     rgbs,depths,masks,normal_maps,poses = preprocess_data(np.array(rgbs),depths=np.array(depths),masks=np.array(masks),normal_maps=normal_maps,poses=glcam_in_obs,sc_factor=self.cfg_nerf['sc_factor'],translation=self.cfg_nerf['translation'])
+    print("!!!!!!!!!!depth after", np.min(depths), np.mean(depths), np.max(depths))
 
     self.cfg_nerf['sampled_frame_ids'] = np.arange(len(rgbs))
 

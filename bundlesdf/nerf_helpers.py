@@ -240,6 +240,7 @@ def preprocess_data(rgbs,depths,masks,normal_maps,poses,sc_factor,translation):
     return rgbs,depths,masks,normal_maps,poses
 
 
+
 class NeRFSmall(nn.Module):
     def __init__(self,num_layers=3,hidden_dim=64,geo_feat_dim=15,num_layers_color=4,hidden_dim_color=64,input_ch=3, input_ch_views=3):
         super(NeRFSmall, self).__init__()
