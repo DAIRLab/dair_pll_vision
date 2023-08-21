@@ -4,9 +4,8 @@ import pywavefront  # type: ignore
 import torch
 from torch import Tensor
 torch.set_printoptions(threshold=10_000)
-filename = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/cube_convex_hull_simplified.obj'
-# filename = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/cube_hand_toss_optimized.obj'
-
+filename = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/cube_convex_hull_rescale_simplified_alt.obj'
+output_file = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/cube_convex_hull_rescale_simplified_with_normals.obj'
 mesh = pywavefront.Wavefront(filename)
 vertices = Tensor(mesh.vertices)
 polygon = Polygon(vertices)
@@ -15,7 +14,7 @@ normals = extract_outward_normal_hyperplanes(
         mesh_summary.vertices.unsqueeze(0),
         mesh_summary.faces.unsqueeze(0)
     )[0].squeeze(0)
-with open('cube_convex_hull_with_normals.obj', 'w') as file:
+with open(output_file, 'w') as file:
     # Write vertices to the file
     for vertex in vertices.numpy():
         file.write(f"v {vertex[0]} {vertex[1]} {vertex[2]}\n")

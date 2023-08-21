@@ -780,7 +780,9 @@ class MultibodyTerms(Module):
             """Return a scaled version of the input such that each element in
             the input individually is randomly scaled between 50% and 150% of
             its original value."""
-            return torch.mul(x, torch.rand_like(x) + 0.5)
+            # return torch.mul(x, torch.rand_like(x) + 0.5)
+            scaling_factor = 0.02 * torch.rand_like(x) + 0.9
+            return torch.mul(x, scaling_factor)
 
         # First do friction all at once.  Note that 
         # self.contact_terms.get_friction_coefficients will ensure the ground's

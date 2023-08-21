@@ -294,7 +294,6 @@ class SupervisedLearningExperiment(ABC):
         predictions = []
         for x_0_i, horizon_i, target_i in zip(x_0, prediction_horizon, targets):
             target_shape = target_i.shape
-
             x_prediction_i, carry_i = system.simulate(x_0_i, carry_0, horizon_i)
             del carry_i
             to_append = x_prediction_i[..., 1:, :].reshape(target_shape)
@@ -364,7 +363,6 @@ class SupervisedLearningExperiment(ABC):
         for xy_i in data:
             x_i: Tensor = xy_i[0]
             y_i: Tensor = xy_i[1]
-
             if optimizer is not None:
                 optimizer.zero_grad()
 
