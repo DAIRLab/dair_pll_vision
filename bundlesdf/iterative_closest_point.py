@@ -4,6 +4,7 @@ import os
 import glob
 import cv2
 from copy import deepcopy
+from PIL import Image
 
 
 def extract_floats_from_camk(lines):
@@ -33,8 +34,10 @@ def get_image_files_from_folder(folder_path):
 def load_depth_and_mask_from_paths(old_depth_path, proj_depth_path, old_mask_path, proj_mask_path):
     old_depth_image = o3d.io.read_image(old_depth_path)
     old_mask_image = o3d.io.read_image(old_mask_path)
+    np.savetxt('old_depth_image_data.txt', old_depth_image, delimiter=',', fmt='%d')
     proj_depth_image = o3d.io.read_image(proj_depth_path)
     proj_mask_image = o3d.io.read_image(proj_mask_path)
+    # np.savetxt('proj_depth_image.txt', proj_depth_image, delimiter=',', fmt='%d')
     return old_depth_image, proj_depth_image, old_mask_image, proj_mask_image
 
 
@@ -159,7 +162,7 @@ def register_with_icp(source, target):
 
     # ICP Registration
     reg_p2p = o3d.cuda.pybind.pipelines.registration.TransformationEstimationPointToPoint()
-    criteria = o3d.cuda.pybind.pipelines.registration.ICPConvergenceCriteria(relative_fitness=1.000000e-06, relative_rmse=1.000000e-06, max_iteration=1000)
+    criteria = o3d.cuda.pybind.pipelines.registration.ICPConvergenceCriteria(relative_fitness=1.0e-6, relative_rmse=1.0e-6, max_iteration=1000)
     result = o3d.cuda.pybind.pipelines.registration.registration_icp(source_cuda, target_cuda, 0.02, np.eye(4), reg_p2p, criteria)
 
     return result
@@ -183,7 +186,7 @@ def fill_depth_holes(depth_image, max_hole_size=5):
     return filled_depth
 
 
-def point_cloud_to_depth_image(point_cloud, intrinsic_matrix, depth_shape):
+def point_cloud_to_depth_image(point_cloud, intrinsic_matrix, depth_shape, background_depth):
     depth_image = np.zeros(depth_shape, dtype=np.float32)
 
     # transform the depth map to the range of original depth map, not the proj ones
@@ -202,15 +205,16 @@ def point_cloud_to_depth_image(point_cloud, intrinsic_matrix, depth_shape):
                 depth_image[v, u] = depth_value
 
     # Interpolate the depth image to fill zero-valued pixels
-    depth_image = fill_depth_holes(depth_image)
+    depth_image = fill_depth_holes(depth_image, 0)
+    depth_image[depth_image == 0] = background_depth
 
     return depth_image
 
 
 def transform_poses():
-    pose_folder = "results/old_toss_1_contactnet/ob_in_cam"
-    transform_folder = "results/old_toss_1_icp/transforms"
-    transformed_pose_folder = "results/old_toss_1_icp/ob_in_cam_projected_icp_transformed"
+    pose_folder = "results/old_toss_2_contactnet/ob_in_cam"
+    transform_folder = "results/old_toss_2_icp/transforms"
+    transformed_pose_folder = "results/old_toss_2_icp/ob_in_cam_projected_icp_transformed"
 
     # Get a list of all .txt files in the folder
     all_poses = [f for f in os.listdir(pose_folder) if f.endswith('.txt')]
@@ -244,16 +248,23 @@ def transform_poses():
 
 
 def main():
-    old_depth_folder = "data/old_toss_1/depth"
-    proj_depth_folder = "data/old_toss_1_contactnet/depth"
-    old_mask_folder = "data/old_toss_1/masks"
-    proj_mask_folder = "data/old_toss_1_contactnet/masks"
-    cam_K_file = "results/old_toss_1/cam_K.txt"
-    output_depth_folder = "data/old_toss_1_icp/depth"
-    output_mask_folder = "data/old_toss_1_icp/masks"
-    output_transform_folder = "results/old_toss_1_icp/transforms"
+    # old_depth_folder = "data/old_toss_2/depth"
+    # proj_depth_folder = "data/old_toss_2_contactnet/depth"
+    # old_mask_folder = "data/old_toss_2/masks"
+    # proj_mask_folder = "data/old_toss_2_contactnet/masks"
+    # cam_K_file = "results/old_toss_2/cam_K.txt"
+    # output_depth_folder = "data/old_toss_2_icp/depth"
+    # output_mask_folder = "data/old_toss_2_icp/masks"
+    # output_transform_folder = "results/old_toss_2_icp/transforms"
 
-    # sc_factor = 8.697657471427803
+    old_depth_folder = "data/old_toss_2/depth"
+    proj_depth_folder = "data/old_toss_2_contactnet/depth"
+    old_mask_folder = "data/old_toss_2/masks"
+    proj_mask_folder = "data/old_toss_2_contactnet/masks"
+    cam_K_file = "results/old_toss_2/cam_K.txt"
+    output_depth_folder = "data/old_toss_2_icp/depth"
+    output_mask_folder = "data/old_toss_2_icp/masks"
+    # output_transform_folder = "results/old_toss_2_icp/transforms"
 
     # Read the file and extract intrinsic matrix values
     with open(cam_K_file, 'r') as f:
@@ -279,40 +290,50 @@ def main():
     # Assuming the same number of depth and mask images
     for old_depth_file, old_mask_file, proj_depth_file, proj_mask_file in zip(old_depth_files, old_mask_files, proj_depth_files, proj_mask_files):
         old_depth_image, proj_depth_image, old_mask_image, proj_mask_image = load_depth_and_mask_from_paths(old_depth_file, proj_depth_file, old_mask_file, proj_mask_file)
+        # print('old_depth_image_data', np.asarray(old_depth_image), np.min(np.asarray(old_depth_image)), np.max(np.asarray(old_depth_image)))
+        print('proj_depth_image_data', np.min(np.asarray(proj_depth_image)), np.mean(np.asarray(proj_depth_image)), np.max(np.asarray(proj_depth_image)))
+        background = np.max(np.asarray(proj_depth_image))
 
         # Convert depth image to point cloud
         old_depth_point_cloud, old_depth_values = depth_to_point_cloud(old_depth_image, intrinsic_matrix, old_mask_image)
-        # print('old_depth_point_cloud', np.asarray(old_depth_point_cloud.points))
+        # print('old_depth_point_cloud', np.asarray(old_depth_point_cloud.points), np.min(np.asarray(old_depth_point_cloud.points)), np.max(np.asarray(old_depth_point_cloud.points)))
         proj_depth_point_cloud, proj_depth_values = depth_to_point_cloud(proj_depth_image, intrinsic_matrix, proj_mask_image)
-        # print('proj_depth_point_cloud', np.asarray(proj_depth_point_cloud.points))
+        # print('proj_depth_point_cloud', np.asarray(proj_depth_point_cloud.points), np.min(np.asarray(proj_depth_point_cloud.points)), np.max(np.asarray(proj_depth_point_cloud.points)))
 
         # Register with ICP
-        result = register_with_icp(proj_depth_point_cloud, old_depth_point_cloud)   # source, target
-        print('file', old_depth_file, 'result', result)
-        print('result.transformation', result.transformation)
+        # result = register_with_icp(proj_depth_point_cloud, old_depth_point_cloud)   # source, target
+        # print('file', old_depth_file, 'result', result)
+        # print('result.transformation', result.transformation)
 
         # Apply transformations from ICP to refine depth
-        transformed_point_cloud = proj_depth_point_cloud.transform(result.transformation)
+        # transformed_point_cloud = proj_depth_point_cloud.transform(result.transformation)
+        # print('transformed_point_cloud', np.asarray(transformed_point_cloud.points), np.min(np.asarray(transformed_point_cloud.points)), np.max(np.asarray(transformed_point_cloud.points)))
 
         # Convert transformed point cloud back to depth image
-        new_depth_image_data = point_cloud_to_depth_image(transformed_point_cloud, intrinsic_matrix, np.asarray(proj_depth_image).shape)
+        new_depth_image_data = point_cloud_to_depth_image(proj_depth_point_cloud, intrinsic_matrix, np.asarray(proj_depth_image).shape, background)
+        print('new_depth_image_data', np.min(new_depth_image_data), np.mean(new_depth_image_data), np.max(new_depth_image_data))
+        # np.savetxt('new_depth_image_data.txt', new_depth_image_data, delimiter=',', fmt='%d')
 
         # Update mask based on transformed depth
-        new_mask_image_data = (new_depth_image_data > 0).astype(np.uint8) * 255
+        new_mask_image_data = (new_depth_image_data != background).astype(np.uint8) * 255
 
-        # Convert numpy arrays to Open3D images and save
-        new_depth_image = o3d.geometry.Image(new_depth_image_data)
-        new_mask_image = o3d.geometry.Image(new_mask_image_data)
+        # # Convert numpy arrays to Open3D images and save
+        # new_depth_image = o3d.geometry.Image(new_depth_image_data)
+        # new_mask_image = o3d.geometry.Image(new_mask_image_data)
 
         png_basename = os.path.basename(old_depth_file)
         txt_basename = os.path.splitext(png_basename)[0]
-        np.save(os.path.join(output_transform_folder, f"{txt_basename}.npy"), result.transformation)
-        o3d.io.write_image(os.path.join(output_depth_folder, png_basename), new_depth_image)
-        o3d.io.write_image(os.path.join(output_mask_folder, png_basename), new_mask_image)
+        # np.save(os.path.join(output_transform_folder, f"{txt_basename}.npy"), result.transformation)
+
+        new_depth_image = new_depth_image_data.astype(np.uint16)
+        new_depth_image = Image.fromarray(new_depth_image)
+        new_mask_image = Image.fromarray(new_mask_image_data)
+        new_depth_image.save(os.path.join(output_depth_folder, png_basename))
+        new_mask_image.save(os.path.join(output_mask_folder, png_basename))
 
         # break
 
 
 if __name__ == "__main__":
-    # main()
-    transform_poses()
+    main()
+    # transform_poses()
