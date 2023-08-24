@@ -9,11 +9,11 @@
 source /home/mengti/workspace/dair_pll/pll_env/bin/activate;
 export PYTHONPATH=${PWD}:${PYTHONPATH}
 
-dataset_sizes=(10)
+dataset_sizes=(9)
 
 for size in "${dataset_sizes[@]}"; do
     for run_idx in {1..9}; do
-        cmd="WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-args=\"-screen 0 800x600x24\" python3 examples/bundlesdf_simple.py --structured --system=cube --geometry=polygon --source=real --contactnets --regenerate --no-residual --loss-variation=1 --dataset-size $size 'cube_$size' 'cube_${size}-${run_idx}'"
+        cmd="WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-args=\"-screen 0 800x600x24\" python3 examples/bundlesdf_simple.py --structured --system=bundlesdf_cube --geometry=polygon --source=real --contactnets --regenerate --no-residual --loss-variation=1 --inertia-params=0 --dataset-size $size 'final_$size' 'final_${size}-${run_idx}'"
         echo "Running: $cmd"
         eval $cmd
     done
