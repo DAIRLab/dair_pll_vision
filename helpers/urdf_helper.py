@@ -4,6 +4,7 @@ import trimesh
 from scipy.spatial import ConvexHull
 from itertools import combinations
 import open3d as o3d
+import argparse
 
 def get_inertia(obj_file):
     coords = np.loadtxt(obj_file, unpack=True, delimiter=',', dtype=int)
@@ -46,6 +47,7 @@ def simplify_mesh(input_path, output_path, fraction):
     # mesh_simplified = mesh.simplify_quadratic_decimation(10)
     # Export the simplified mesh to an .obj file
     mesh_simplified.export(output_path)
+    print(f'Similified to {len(mesh_simplified.faces)} faces')
 
 def simplify_to_cube(input_path, output_path):
     # 1. Load the dense mesh
@@ -193,26 +195,35 @@ def shrink_mesh_file(mesh_file_path, divisor, output_file_path=None):
     print(f"Shrunken mesh saved to {output_file_path}")
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--filename",
+        type=str,
+        required=True,
+    )
+    args = parser.parse_args()
+    filename = args.filename
+    
     # get inertia 
     # mesh_file = './mesh_convex_hull.txt'
     # print(get_inertia(mesh_file))
-   
-    original_mesh = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/cube_convex_hull.obj'
-    simplified_mesh = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/cube_convex_hull_rescale_simplified.obj'
-    output_path = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/cube_convex_hull_optimized.obj'
-    normal_mesh = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/cube_convex_hull_with_normals.obj'
-    rescale_mesh = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/cube_convex_hull_rescale.obj'
-    alt_simplified_mesh = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/cube_convex_hull_rescale_simplified_alt.obj'
+    
+    original_mesh = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/{filename}.obj'
+    simplified_mesh = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/{filename}_rescale_simplified.obj'
+    output_path = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/{filename}_optimized.obj'
+    normal_mesh = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/{filename}_with_normals.obj'
+    rescale_mesh = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/{filename}_rescale.obj'
+    alt_simplified_mesh = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/{filename}_rescale_simplified_alt.obj'
     # simplify_mesh(original_mesh, simplified_mesh, 0.01)
     # create_max_volume_obj(simplified_mesh, output_path, vertex_count=10, target_vertex_count=8, target_face_count=6)
     # add_normals_to_obj(output_path, normal_mesh)
     # mesh_to_cube(original_mesh, output_path)
-    # add_normals_to_obj(simplified_mesh, normal_mesh)
     
+    shrink_mesh_file(original_mesh, 8.7, rescale_mesh)
+    simplify_mesh(rescale_mesh, simplified_mesh, 0.5)
+    add_normals_to_obj(simplified_mesh, normal_mesh)
     
-    # shrink_mesh_file(original_mesh, 8.7, rescale_mesh)
-    # simplify_mesh(rescale_mesh, simplified_mesh, 0.01)
-    
-    simplify_to_cube(rescale_mesh, alt_simplified_mesh)
+    # Directly extract the bounding box of a mesh
+    # simplify_to_cube(rescale_mesh, alt_simplified_mesh)
 
 

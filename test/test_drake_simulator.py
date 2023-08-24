@@ -24,7 +24,8 @@ from pydrake.multibody.tree import (
     PrismaticJoint,
     SpatialInertia,
     UniformGravityFieldElement,
-    UnitInertia
+    UnitInertia, 
+    world_model_instance
 )
 from pydrake.multibody.math import SpatialVelocity
 from pydrake.multibody.plant import (
@@ -171,7 +172,7 @@ def simulate_cube_toss(params, trajectory_dir):
     v0 = plant.GetVelocities(plant_context).copy()
     plant.SetPositions(plant_context, q0)
     plant.SetVelocities(plant_context, v0)
-    traj = torch.load(trajectory_dir)[0, :] #p_t, quat_shuffle, dp_t, w_t
+    traj = torch.load(trajectory_dir)[0, :] #q_t(wxyz), p_t, w_t, dp_t
     print(f'traj: {traj.size()}')
     # print(type(traj[4:7]))
     # print(traj[4:7].shape)
@@ -212,6 +213,7 @@ def simulate_cube_toss_with_traj(params, trajectory_dir):
         params (Dict): _description_
         trajectory_dir (str): _description_
     """
+    print(f'Reading traj from {trajectory_dir}')
     if params == None:
         cube_body_m = 0.37
         cube_body_com_x = 0
@@ -242,13 +244,8 @@ def simulate_cube_toss_with_traj(params, trajectory_dir):
         cube_body_len_x = params['cube_body_len_x']
         cube_body_len_y = params['cube_body_len_y']
         cube_body_len_z = params['cube_body_len_z']
-    traj = torch.load(trajectory_dir) #p_t, quat_shuffle, dp_t, w_t
+    traj = torch.load(trajectory_dir) #q_t(wxyz), p_t, w_t, dp_t
     print(f'traj loaded: {traj.size()}') #N,13
-    # p_t = traj[:,:3].numpy() #N,3
-    # q_t = traj[:,3:7].numpy() #N,4, w,x,y,z
-    # # q_t_shuffled = np.concatenate((q_t[:, 1:], q_t[:, 0].reshape(-1,1)), axis=1) ##N,4, x,y,z,w
-    # dp_t = traj[:,7:10].numpy() #N,3
-    # w_t = traj[:,10:].numpy() #N,3, in body frame
     p_t = traj[:,4:7].numpy() #N,3
     q_t = traj[:,:4].numpy() #N,4, w,x,y,z
     q_t_shuffled = np.concatenate((q_t[:, 1:], q_t[:, 0].reshape(-1,1)), axis=1) ##N,4, x,y,z,w
@@ -270,7 +267,12 @@ def simulate_cube_toss_with_traj(params, trajectory_dir):
     com = np.array([cube_body_com_x, cube_body_com_y, cube_body_com_z])
     inertia = UnitInertia(cube_body_Ixx, cube_body_Iyy, cube_body_Izz, cube_body_Ixy, cube_body_Ixz, cube_body_Iyz)
     AddShape(plant, shape, name, mass=cube_body_m, mu=cube_body_mu, com=com, inertia=inertia, color=[0.5, 0.5, 0.9, 1.0])
-    AddGround(plant)
+    # AddGround(plant)
+    # add ground at z=0
+    halfspace_transform = RigidTransform()
+    friction = CoulombFriction(1.0, 1.0)
+    plant.RegisterCollisionGeometry(plant.world_body(), halfspace_transform,
+                                    HalfSpace(), "ground", friction)
     plant.Finalize()
     
     meshcat = StartMeshcat()
@@ -305,6 +307,7 @@ def simulate_cube_toss_with_traj(params, trajectory_dir):
     playback_speed = 1.0
     while True:
         for i in range(1, trajectory_length):
+            print(f'z position: {p_t[-1]}')
             target_time = i * time_step
             if simulator_time < target_time:
                 simulator.AdvanceTo(target_time)
@@ -337,9 +340,101 @@ def simulate_cube_toss_with_traj(params, trajectory_dir):
             plant.SetFreeBodySpatialVelocity(plant.get_body(body_index), vel_0, plant_context)
         simulator.Initialize()
             
+def simulate_cube_and_franka(trajectory_dir):
+    
+    traj = torch.load(trajectory_dir) #q_t(wxyz), p_t, w_t, dp_t
+    print(f'traj loaded: {traj.size()}') #N,13
+    p_t = traj[:,4:7].numpy() #N,3
+    q_t = traj[:,:4].numpy() #N,4, w,x,y,z
+    # q_t_shuffled = np.concatenate((q_t[:, 1:], q_t[:, 0].reshape(-1,1)), axis=1) ##N,4, x,y,z,w
+    dp_t = traj[:,10:].numpy() #N,3
+    w_t = traj[:,7:10].numpy() #N,3, in body frame
+    w_t_world = np.zeros_like(w_t)
+    for i in range(traj.shape[0]):
+        rot = R.from_quat(q_t[i]).as_matrix()
+        w_t_i = w_t[i]
+        w_t_world[i] = rot @ w_t_i.T
+    # w_t_world = R.from_quat(q_t_shuffled).as_matrix() @ w_t.T
+    print(p_t.shape, q_t.shape, dp_t.shape, w_t_world.shape)
+    traj = np.concatenate((q_t, p_t, w_t, dp_t), axis=1) #N,13
+    meshcat = StartMeshcat()
+    builder = DiagramBuilder()
+    plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.0)
+    X_model = RigidTransform.Identity()
+    parser = Parser(plant)
+    model_file = FindResourceOrThrow(
+        "drake/manipulation/models/franka_description/urdf/panda_arm_hand_wide_finger.urdf"
+    )
+    cube_model_file = FindResourceOrThrow("drake/../../../../../dair_pll_latest/assets/contactnets_cube_sim.urdf")
+    model = parser.AddModelFromFile(model_file)
+    cube_model = parser.AddModelFromFile(cube_model_file)
+    
+    # plant.WeldFrames(
+    #     plant.world_frame(),
+    #     plant.GetFrameByName("body", cube_model),
+    #     X_model,
+    # )
+
+    plant.WeldFrames(
+        plant.world_frame(),
+        plant.GetFrameByName("panda_link0", model),
+        X_model,
+    )
+    plant.Finalize()
+    params = MeshcatVisualizerParams()
+    visualizer = MeshcatVisualizer.AddToBuilder(
+        builder, scene_graph, meshcat, params
+    )
+    diagram = builder.Build()
+    context = diagram.CreateDefaultContext()
+    plant_context = plant.GetMyMutableContextFromRoot(context)
+    q0 = plant.GetPositions(plant_context).copy()
+    v0 = plant.GetVelocities(plant_context).copy()
+    plant.get_actuation_input_port().FixValue(plant_context, np.zeros(9))
+    simulator = Simulator(diagram, context)
+    simulator.set_target_realtime_rate(1.0)
+    simulator.set_publish_every_time_step(False)
+    simulator_time = 0.0
+    time_step = 0.01
+    trajectory_length = len(q_t)
+    playback_speed = 1.0
+    while True:
+        for i in range(1, trajectory_length):
+            target_time = i * time_step
+            if simulator_time < target_time:
+                simulator.AdvanceTo(target_time)
+                simulator_time = simulator.get_context().get_time()
+            
+            q_drake = traj[i, :7]
+            v_drake = traj[i, 7:]
+            print(plant.num_positions(cube_model))
+            print(plant.num_velocities(cube_model))
+            print(q_drake.shape, v_drake.shape)
+            plant.SetPositions(plant_context, cube_model, q_drake)
+            plant.SetVelocities(plant_context, cube_model, v_drake)
+            time.sleep(time_step / playback_speed)
+        print("Reinitializing...")
+        simulator_time = 0.0
+        simulator.get_mutable_context().SetTime(0.)
+        plant.SetPositions(plant_context, q0)
+        plant.SetVelocities(plant_context, v0)
+        q_drake = traj[0, :7]
+        v_drake = traj[0, 7:]
+        plant.SetPositions(plant_context, cube_model, q_drake)
+        plant.SetVelocities(plant_context, cube_model, v_drake)
+        simulator.Initialize()
+    
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--filename",
+        type=int,
+        required=True,
+    )
+    args = parser.parse_args()
+    filename = args.filename
+    
     # traj_dir = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/contactnets_cube/9.pt'
-    # traj_dir = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_no_upsample/0.pt'
-    traj_dir = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_upsample/0.pt'
-    # traj_dir = '/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_cube_tagslam/0.pt'
+    traj_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_cube/{filename}.pt'
+    # simulate_cube_and_franka(traj_dir)
     simulate_cube_toss_with_traj(None, traj_dir)

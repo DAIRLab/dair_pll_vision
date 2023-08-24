@@ -115,12 +115,10 @@ def set_plant_state(traj_idx):
     for model_id, obj_key in zip(model_ids, STATE_TRAJS.keys()):
         q_drake = STATE_TRAJS[obj_key][traj_idx, :7]
         v_drake = STATE_TRAJS[obj_key][traj_idx, 7:]
-
         plant.SetPositions(plant_context, model_id, q_drake)
         plant.SetVelocities(plant_context, model_id, v_drake)
 
     sim.Initialize()
-
 
 
 for i in range(STATE_TRAJS["ground"].shape[0]):
