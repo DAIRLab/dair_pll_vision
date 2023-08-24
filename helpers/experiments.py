@@ -136,7 +136,7 @@ def eval(storage):
     rot_errs = []
     trans_errs = []
     for run_name in os.listdir(os.path.join('results', storage, 'runs')):
-        if run_name.split('-')[-1] in BAD_RUNS:
+        if int(run_name.split('-')[-1]) in BAD_RUNS:
             continue
         print(f'Processing {run_name}')
         experiment, run_dir, learned_system = \
@@ -156,8 +156,8 @@ def eval(storage):
     rot_errs = np.array(rot_errs)
     trans_errs = np.array(trans_errs)
     print(rot_errs.shape, trans_errs.shape)
-    # np.savetxt('rot_errs.txt', rot_errs)
-    # np.savetxt('trans_errs.txt', trans_errs)
+    np.savetxt('rot_errs_cluster.txt', rot_errs)
+    np.savetxt('trans_errs_cluster.txt', trans_errs)
 
 def set_of_vals_to_t_confidence_interval(ys):
     if len(ys) <= 1:
@@ -176,7 +176,7 @@ def set_of_vals_to_t_confidence_interval(ys):
 def plot():
     rot_means, rot_lowers, rot_uppers = [], [], []
     trans_means, trans_lowers, trans_uppers = [], [], []
-    rot_errors = np.loadtxt('rot_errs.txt') #9,99
+    rot_errors = np.loadtxt('rot_errs.txt') #N,99
     trans_errors = np.loadtxt('trans_errs.txt')
     for i in range(rot_errors.shape[1]):
         mean, lower, upper = set_of_vals_to_t_confidence_interval(rot_errors[:,i])
@@ -235,7 +235,7 @@ if __name__ == '__main__':
     run = args.run
     toss_id = args.toss_id
     
-    BAD_RUNS = [6,8,10,11]
+    BAD_RUNS = set((6,8,10,11))
     
     # gt_traj = f'./results/{storage}/data/ground_truth/{toss_id}.pt'
     # est_traj = f'./results/{storage}/data/learning/{toss_id}.pt'
