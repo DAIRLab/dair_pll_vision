@@ -12,8 +12,8 @@ export PYTHONPATH=${PWD}:${PYTHONPATH}
 dataset_sizes=(9)
 
 for size in "${dataset_sizes[@]}"; do
-    for run_idx in {1..9}; do
-        cmd="WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-args=\"-screen 0 800x600x24\" python3 examples/bundlesdf_simple.py --structured --system=bundlesdf_cube --geometry=polygon --source=real --contactnets --regenerate --no-residual --loss-variation=1 --inertia-params=0 --dataset-size $size 'final_$size' 'final_${size}-${run_idx}'"
+    for run_idx in {10..15}; do
+        cmd="WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-args=\"-screen 0 800x600x24\" python3 examples/bundlesdf_simple.py --structured --system=bundlesdf_cube --geometry=polygon --source=real --contactnets --regenerate --no-residual --loss-variation=1 --inertia-params=0 --dataset-size $size 'final_gt_mesh' 'final_gt_mesh-${run_idx}'"
         echo "Running: $cmd"
         eval $cmd
     done
