@@ -12,6 +12,16 @@ import pickle
 import os
 from scipy.spatial.transform import Rotation as R
 
+# The following are t values for 95% confidence interval.
+T_SCORE_PER_DOF = {1: 12.71, 2: 4.303, 3: 3.182, 4: 2.776,
+                   5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306,
+                   9: 2.262, 10: 2.228, 11: 2.201, 12: 2.179,
+                   13: 2.160, 14: 2.145, 15: 2.131, 16: 2.120,
+                   17: 2.110, 18: 2.101, 19: 2.093, 20: 2.086,
+                   21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064,
+                   25: 2.060, 26: 2.056, 27: 2.052, 28: 2.048,
+                   29: 2.045, 30: 2.042}
+
 def load_pkl(filename):
     with open(filename, 'rb') as file:
         data = pickle.load(file)
@@ -71,7 +81,6 @@ def load_experiment(run_name):
     storage_name = os.path.abspath(os.path.join(run_path, '..', '..'))
     print(storage_name)
     experiment_config = file_utils.load_configuration(storage_name, run_name)
-
     if isinstance(experiment_config.learnable_config,
                   MultibodyLearnableSystemConfig):
         experiment_config.learnable_config.randomize_initialization = False
@@ -123,42 +132,85 @@ def split_traj(traj):
     w_t_body = traj[:,7:10].numpy() #N,3, in body frame
     return p_t, q_t_shuffled, dp_t, w_t_body
 
-def eval(storage, run_name):
-    experiment, run_dir, learned_system = \
-                load_experiment_run_dir_sys(storage, run_name)
-    gt_traj, pred_traj = get_test_set_traj_target_and_prediction(
-                experiment)
-    print(gt_traj.size(), pred_traj.size())
-    p_t_gt, q_t_gt, dp_t_gt, w_t_gt = split_traj(gt_traj)
-    p_t_est, q_t_est, dp_t_est, w_t_est = split_traj(pred_traj)
-    rot_gt = R.from_quat(q_t_gt).as_matrix()
-    rot_est = R.from_quat(q_t_est).as_matrix()
-    print(f'rot: {rot_gt.shape}, p_t: {p_t_gt.shape}')
-    rot_err = np.linalg.norm(rot_gt - rot_est, 'fro', axis=(1,2))
-    trans_err = np.linalg.norm(p_t_gt - p_t_est,axis=1)
-    print(f'rot: {rot_err.shape}, trans: {trans_err.shape}')
+def eval(storage):
+    rot_errs = []
+    trans_errs = []
+    for run_name in os.listdir(os.path.join('results', storage, 'runs')):
+        if run_name.split('-')[-1] in BAD_RUNS:
+            continue
+        print(f'Processing {run_name}')
+        experiment, run_dir, learned_system = \
+                    load_experiment_run_dir_sys(storage, run_name)
+        gt_traj, pred_traj = get_test_set_traj_target_and_prediction(
+                    experiment)
+        print(gt_traj.size(), pred_traj.size())
+        p_t_gt, q_t_gt, dp_t_gt, w_t_gt = split_traj(gt_traj)
+        p_t_est, q_t_est, dp_t_est, w_t_est = split_traj(pred_traj)
+        rot_gt = R.from_quat(q_t_gt).as_matrix()
+        rot_est = R.from_quat(q_t_est).as_matrix()
+        rot_err = np.linalg.norm(rot_gt - rot_est, 'fro', axis=(1,2))
+        trans_err = np.linalg.norm(p_t_gt - p_t_est,axis=1)
+        print(f'rot: {rot_err.shape}, trans: {trans_err.shape}')
+        rot_errs.append(rot_err)
+        trans_errs.append(trans_err)
+    rot_errs = np.array(rot_errs)
+    trans_errs = np.array(trans_errs)
+    print(rot_errs.shape, trans_errs.shape)
+    # np.savetxt('rot_errs.txt', rot_errs)
+    # np.savetxt('trans_errs.txt', trans_errs)
+
+def set_of_vals_to_t_confidence_interval(ys):
+    if len(ys) <= 1:
+        return None, None, None
+
+    dof = len(ys) - 1
+
+    ys_np = np.array(ys)
+
+    mean = np.mean(ys)
+    lower = mean - T_SCORE_PER_DOF[dof]*np.std(ys)/np.sqrt(dof+1)
+    upper = mean + T_SCORE_PER_DOF[dof]*np.std(ys)/np.sqrt(dof+1)
+
+    return mean, lower, upper
+
+def plot():
+    rot_means, rot_lowers, rot_uppers = [], [], []
+    trans_means, trans_lowers, trans_uppers = [], [], []
+    rot_errors = np.loadtxt('rot_errs.txt') #9,99
+    trans_errors = np.loadtxt('trans_errs.txt')
+    for i in range(rot_errors.shape[1]):
+        mean, lower, upper = set_of_vals_to_t_confidence_interval(rot_errors[:,i])
+        mean_trans, lower_trans, upper_trans = set_of_vals_to_t_confidence_interval(trans_errors[:,i])
+        rot_means.append(mean)
+        rot_lowers.append(lower)
+        rot_uppers.append(upper)
+        trans_means.append(mean_trans)
+        trans_lowers.append(lower_trans)
+        trans_uppers.append(upper_trans)
     
-    # max_len = max(len(traj) for traj in gt_trajs)
-    timestamps = np.arange(rot_err.shape[0])
-    # rot error
-    plt.figure(figsize=(10, 6))
-    plt.plot(timestamps, rot_err, '-o', markersize=4, lw=2)
-    plt.title('Rotation Error (deg)')
-    plt.xlabel('step')
-    plt.ylabel('Rotation Error (deg)')
-    plt.grid(True)
+    timestamps = np.arange(rot_errors.shape[1])
+    # rot error 
+    fig, ax = plt.subplots(figsize=(10,6))
+    ax.plot(timestamps, rot_means, color='blue', label='Mean Error')
+    ax.fill_between(timestamps, rot_lowers, rot_uppers, color='lightblue', alpha=0.6)
+    ax.set_xlabel('Step')
+    ax.set_ylabel('Rotational Error (rad)')
+    ax.set_title('Mean Rotaional Error with 95% Confidence Interval')
+    ax.legend()
     plt.tight_layout()
-    plt.savefig(f'./results/{storage}/runs/{run}/{storage}_{run}_{toss_id}_rot.png')
-    # trans error
-    plt.figure(figsize=(10, 6))
-    plt.plot(timestamps, trans_err, '-o', markersize=4, lw=2)
-    plt.title('Translation Error (m)')
-    plt.xlabel('step')
-    plt.ylabel('Translation Error (m)')
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(f'./results/{storage}/runs/{run}/{storage}_{run}_{toss_id}_trans.png')
     plt.show()
+    plt.savefig(f'./results/{storage}/{storage}_rot.png')
+    # trans error 
+    fig, ax = plt.subplots(figsize=(10,6))
+    ax.plot(timestamps, trans_means, color='blue', label='Mean Error')
+    ax.fill_between(timestamps, trans_lowers, trans_uppers, color='lightblue', alpha=0.6)
+    ax.set_xlabel('Step')
+    ax.set_ylabel('Translational Error (m)')
+    ax.set_title('Mean Translational Error with 95% Confidence Interval')
+    ax.legend()
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(f'./results/{storage}/{storage}_trans.png')
     
 
 if __name__ == '__main__':
@@ -171,24 +223,33 @@ if __name__ == '__main__':
     parser.add_argument(
         "--run",
         type=str,
-        required=True,
+        required=False,
     )
     parser.add_argument(
         "--toss_id",
         type=int,
-        required=True,
+        required=False,
     )
     args = parser.parse_args()
     storage = args.storage
     run = args.run
     toss_id = args.toss_id
     
-    gt_traj = f'./results/{storage}/data/ground_truth/{toss_id}.pt'
-    est_traj = f'./results/{storage}/data/learning/{toss_id}.pt'
+    BAD_RUNS = [6,8,10,11]
+    
+    # gt_traj = f'./results/{storage}/data/ground_truth/{toss_id}.pt'
+    # est_traj = f'./results/{storage}/data/learning/{toss_id}.pt'
     # visualize_trajectory(gt_traj, f'./results/{run}/gt_{run}_{toss_id}.png')
     # visualize_trajectory(est_traj, f'./results/{run}/est_{run}_{toss_id}.png')
     
     # stats = f'./results/{storage}/runs/{run}/statistics.pkl'
     # load_pkl(stats)
     
-    eval(storage, run)
+    eval(storage)
+    # plot()
+    
+    # import pickle
+    # config_dir = "/home/cnets-vision/mengti_ws/dair_pll_latest/results/final_gt_mesh/runs/final_gt_mesh-10/config.pkl"
+    # with open(config_dir, 'rb') as file:
+    #     data = pickle.load(file)
+    #     print(data)
