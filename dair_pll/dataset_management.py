@@ -40,7 +40,7 @@ class DataConfig:
     r"""Fraction of training trajectories to select, ``<= 1, >= 0``\ ."""
     valid_fraction: float = 0.25
     r"""Fraction of validation trajectories to select, ``<= 1, >= 0``\ ."""
-    test_fraction: float = 0.25
+    test_fraction: float = 0.0
     r"""Fraction of testing trajectories to select, ``<= 1, >= 0``\ ."""
     slice_config: TrajectorySliceConfig = field(
         default_factory=TrajectorySliceConfig)

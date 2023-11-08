@@ -760,9 +760,10 @@ class MultibodyTerms(Module):
 
     def randomize_multibody_terms(self, inertia_int) -> None:
         r"""Adds random noise to multibody terms in the following ways:
-            - Geometry lengths can be between 0.5 and 1.5 times their original
-              length.
-            - Friction can be between 0.1 and 1.9 times their original size.
+            - Geometry lengths can be between 0.95 and 1.05 times their original
+              length (except DeepSupportConvex types, which always start as a 
+              small sphere).
+            - Friction can be between 0.5 and 1.5 times their original size.
             - Total mass does not change.
             - Inertia is determined via:
                 - Choose a random set of three length scales between 0.5 and 1.5
@@ -781,7 +782,7 @@ class MultibodyTerms(Module):
             the input individually is randomly scaled between 50% and 150% of
             its original value."""
             # return torch.mul(x, torch.rand_like(x) + 0.5)
-            scaling_factor = 0.02 * torch.rand_like(x) + 0.9
+            scaling_factor = 0.1 * torch.rand_like(x) + 0.95
             return torch.mul(x, scaling_factor)
 
         # First do friction all at once.  Note that 
@@ -805,9 +806,15 @@ class MultibodyTerms(Module):
                 geometry.vertices_parameter = \
                     Parameter(scale_factory(geometry.vertices_parameter),
                               requires_grad=True)
+            elif isinstance(geometry, DeepSupportConvex):
+                # Deep support convex cannot be randomized.  However, it always
+                # starts as a small ball and thus never matches the true geometry
+                # anyway, so it's fine to skip random initialization for this type.
+                pass
             else:
                 raise NotImplementedError("Can only randomize Box and Polygon "
-                                          "geometries.")
+                                          "geometries; intentionally does nothing for "
+                                          "DeepSupportConvex; can't handle other geometry types.")
 
         # Third, randomize the inertia.  Only randomize the learnable params.
         if INERTIA_PARAM_OPTIONS[inertia_int] != 'none' and \

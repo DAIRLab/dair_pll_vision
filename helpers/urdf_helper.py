@@ -5,6 +5,11 @@ from scipy.spatial import ConvexHull
 from itertools import combinations
 import open3d as o3d
 import argparse
+from dair_pll.deep_support_function import extract_outward_normal_hyperplanes, get_mesh_summary_from_polygon
+from dair_pll.geometry import Polygon
+import pywavefront  # type: ignore
+import torch
+from torch import Tensor
 
 def get_inertia(obj_file):
     coords = np.loadtxt(obj_file, unpack=True, delimiter=',', dtype=int)
@@ -50,19 +55,12 @@ def simplify_mesh(input_path, output_path, fraction):
     print(f'Similified to {len(mesh_simplified.faces)} faces')
 
 def simplify_to_cube(input_path, output_path):
-    # 1. Load the dense mesh
     mesh = trimesh.load_mesh(input_path)
-    
-    # 2. Compute the axis-aligned bounding box of the mesh
     min_bound = np.min(mesh.vertices, axis=0)
     max_bound = np.max(mesh.vertices, axis=0)
-    
-    # 3. Determine the side length of the cube using the average dimension of the AABB
     dimensions = max_bound - min_bound
     side_length = np.mean(dimensions)
     half_length = side_length / 2
-    
-    # 4. Create cube vertices with equal side lengths centered around the mesh's centroid
     centroid = mesh.centroid
     cube_vertices = [
         [centroid[0] - half_length, centroid[1] - half_length, centroid[2] - half_length],
@@ -75,7 +73,6 @@ def simplify_to_cube(input_path, output_path):
         [centroid[0] + half_length, centroid[1] - half_length, centroid[2] + half_length]
     ]
 
-    # Construct faces for a cube
     cube_faces = [
         [0, 1, 2], [2, 1, 3],
         [4, 5, 6], [6, 5, 7],
@@ -84,22 +81,34 @@ def simplify_to_cube(input_path, output_path):
         [1, 3, 5], [1, 5, 7],
         [0, 2, 4], [0, 4, 6]
     ]
-
-    # 5. Create a mesh with the cube vertices and faces
     cube = trimesh.Trimesh(vertices=cube_vertices, faces=cube_faces)
-
-    # 6. Save the cube mesh
     cube.export(output_path)
 
-def add_normals_to_obj(input_path, output_path):
-    # Load the mesh from the given file
-    mesh = trimesh.load(input_path)
-    # Compute the vertex normals
-    mesh_with_normals = ensure_vertex_normals(mesh)
-    # Save the mesh with normals back to .obj format
-    print(mesh_with_normals.vertices.dtype)
-    mesh_with_normals.export(output_path, file_type="obj")
-    print(f'mesh exported to {output_path}')
+
+def get_outward_surface_normals(input_path, output_path):
+    mesh = pywavefront.Wavefront(input_path)
+    vertices = Tensor(mesh.vertices)
+    polygon = Polygon(vertices)
+    mesh_summary = get_mesh_summary_from_polygon(polygon)
+    normals = extract_outward_normal_hyperplanes(
+            mesh_summary.vertices.unsqueeze(0),
+            mesh_summary.faces.unsqueeze(0)
+        )[0].squeeze(0)
+    with open(output_path, 'w') as file:
+        # Write vertices to the file
+        for vertex in vertices.numpy():
+            file.write(f"v {vertex[0]} {vertex[1]} {vertex[2]}\n")
+
+        # Write normals to the file
+        for normal in normals.numpy():
+            file.write(f"vn {normal[0]} {normal[1]} {normal[2]}\n")
+
+        # Write faces to the file (assuming you have them)
+        # This is just a basic example, adjust based on your faces' structure
+        for face in mesh_summary.faces.numpy():
+            # +1 because obj indexing starts at 1, not 0
+            file.write(f"f {face[0]+1}//{face[0]+1} {face[1]+1}//{face[1]+1} {face[2]+1}//{face[2]+1}\n")
+    print(f'Saved to {output_path}')
 
 def maximal_volume_subset(mesh_path, vertex_count=20):
     mesh = trimesh.load_mesh(mesh_path)
@@ -220,8 +229,8 @@ if __name__ == '__main__':
     # mesh_to_cube(original_mesh, output_path)
     
     shrink_mesh_file(original_mesh, 8.7, rescale_mesh)
-    simplify_mesh(rescale_mesh, simplified_mesh, 0.5)
-    add_normals_to_obj(simplified_mesh, normal_mesh)
+    simplify_mesh(rescale_mesh, simplified_mesh, 0.02)
+    get_outward_surface_normals(simplified_mesh, normal_mesh)
     
     # Directly extract the bounding box of a mesh
     # simplify_to_cube(rescale_mesh, alt_simplified_mesh)

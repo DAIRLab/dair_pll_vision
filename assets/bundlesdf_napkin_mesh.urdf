@@ -1,21 +1,21 @@
 <?xml version="1.0"?>
-<robot name="cube" xmlns:drake="https://drake.mit.edu/">
+<robot name="napkin" xmlns:drake="https://drake.mit.edu/">
     <link name="body">
         <inertial>
             <origin xyz="0 0 0" rpy="0 0 0"/>
-            <mass value="0.37" />
+            <mass value="0.056" />
             <inertia
-                ixx="0.00081"
+                ixx="0.00010416"
                 ixy="0"
                 ixz="0"
-                iyy="0.00081"
+                iyy="0.00031107"
                 iyz="0"
-                izz="0.00081"/>
+                izz="0.00028084"/>
         </inertial>
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0" />
             <geometry>
-                <mesh filename="mesh_all_tosses_convex_hull_with_normals.obj"/>
+                <mesh filename="napkin_textured_mesh_with_normals.obj"/>
             </geometry>
             <material name="pennred">
                 <color rgba="0.6 0 0 1.0" />
@@ -23,7 +23,7 @@
         </visual>
         <collision>
             <geometry>
-                <mesh filename="mesh_all_tosses_convex_hull_with_normals.obj"/>
+                <mesh filename="napkin_textured_mesh_with_normals.obj"/>
             </geometry>
             <origin xyz="0 0 0" rpy="0 0 0" />
             <drake:proximity_properties>

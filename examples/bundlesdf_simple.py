@@ -42,7 +42,8 @@ ELBOW_SYSTEM = 'elbow'
 ASYMMETRIC_SYSTEM = 'asymmetric'
 BUNDLESDF_CUBE_SYSTEM = 'bundlesdf_cube'
 BUNDLESDF_BOTTLE_SYSTEM = 'bundlesdf_bottle'
-SYSTEMS = [BUNDLESDF_CUBE_SYSTEM, CUBE_SYSTEM, ELBOW_SYSTEM, ASYMMETRIC_SYSTEM, BUNDLESDF_BOTTLE_SYSTEM]
+BUNDLESDF_NAPKIN_SYSTEM = 'bundlesdf_napkin'
+SYSTEMS = [BUNDLESDF_CUBE_SYSTEM, CUBE_SYSTEM, ELBOW_SYSTEM, ASYMMETRIC_SYSTEM, BUNDLESDF_BOTTLE_SYSTEM, BUNDLESDF_NAPKIN_SYSTEM]
 
 # Possible dataset types
 SIM_SOURCE = 'simulation'
@@ -77,6 +78,7 @@ INERTIA_PARAM_OPTIONS = ['none', 'masses', 'CoMs', 'CoMs and masses', 'all']
 # File management.
 BUNDLESDF_CUBE_DATA_ASSET = 'bundlesdf_cube'
 BUNDLESDF_BOTTLE_DATA_ASSET = 'bundlesdf_bottle'
+BUNDLESDF_NAPKIN_DATA_ASSET = 'bundlesdf_napkin'
 CUBE_DATA_ASSET = 'contactnets_cube'
 ELBOW_DATA_ASSET = 'contactnets_elbow'
 CUBE_BOX_URDF_ASSET = 'contactnets_cube.urdf'
@@ -86,7 +88,8 @@ ELBOW_MESH_URDF_ASSET = 'contactnets_elbow_mesh.urdf'
 ASYMMETRIC_URDF_ASSET = 'contactnets_asymmetric.urdf'
 BUNDLESDF_CUBE_MESH_ASSET = 'bundlesdf_cube_mesh.urdf'
 BUNDLESDF_BOTTLE_MESH_ASSET = 'bundlesdf_bottle_mesh.urdf'
-REAL_DATA_ASSETS = {CUBE_SYSTEM: CUBE_DATA_ASSET, ELBOW_SYSTEM: ELBOW_DATA_ASSET, BUNDLESDF_CUBE_SYSTEM: BUNDLESDF_CUBE_DATA_ASSET, BUNDLESDF_BOTTLE_SYSTEM: BUNDLESDF_BOTTLE_DATA_ASSET}
+BUNDLESDF_NAPKIN_MESH_ASSET = 'bundlesdf_napkin_mesh.urdf'
+REAL_DATA_ASSETS = {CUBE_SYSTEM: CUBE_DATA_ASSET, ELBOW_SYSTEM: ELBOW_DATA_ASSET, BUNDLESDF_CUBE_SYSTEM: BUNDLESDF_CUBE_DATA_ASSET, BUNDLESDF_BOTTLE_SYSTEM: BUNDLESDF_BOTTLE_DATA_ASSET, BUNDLESDF_NAPKIN_SYSTEM: BUNDLESDF_NAPKIN_DATA_ASSET}
 
 MESH_TYPE = 'mesh'
 BOX_TYPE = 'box'
@@ -94,7 +97,8 @@ POLYGON_TYPE = 'polygon'
 GEOMETRY_TYPES = [BOX_TYPE, MESH_TYPE, POLYGON_TYPE]
 # BUNDLESDF_CUBE_URDFS = {POLYGON_TYPE: CUBE_MESH_URDF_ASSET}
 BUNDLESDF_CUBE_URDFS = {MESH_TYPE: BUNDLESDF_CUBE_MESH_ASSET, POLYGON_TYPE: BUNDLESDF_CUBE_MESH_ASSET}
-BUNDLESDF_BOTTLE_URDFS = {POLYGON_TYPE: BUNDLESDF_BOTTLE_MESH_ASSET}
+BUNDLESDF_BOTTLE_URDFS = {MESH_TYPE: BUNDLESDF_BOTTLE_MESH_ASSET, POLYGON_TYPE: BUNDLESDF_BOTTLE_MESH_ASSET}
+BUNDLESDF_NAPKIN_URDFS = {MESH_TYPE: BUNDLESDF_NAPKIN_MESH_ASSET, POLYGON_TYPE: BUNDLESDF_NAPKIN_MESH_ASSET}
 CUBE_URDFS = {MESH_TYPE: CUBE_MESH_URDF_ASSET,
               BOX_TYPE: CUBE_BOX_URDF_ASSET,
               POLYGON_TYPE: CUBE_MESH_URDF_ASSET}
@@ -104,7 +108,7 @@ ELBOW_URDFS = {MESH_TYPE: ELBOW_MESH_URDF_ASSET,
 ASYMMETRIC_URDFS = {MESH_TYPE: ASYMMETRIC_URDF_ASSET,
                     POLYGON_TYPE: ASYMMETRIC_URDF_ASSET}
 TRUE_URDFS = {CUBE_SYSTEM: CUBE_URDFS, ELBOW_SYSTEM: ELBOW_URDFS,
-              ASYMMETRIC_SYSTEM: ASYMMETRIC_URDFS, BUNDLESDF_CUBE_SYSTEM: BUNDLESDF_CUBE_URDFS, BUNDLESDF_BOTTLE_SYSTEM: BUNDLESDF_BOTTLE_URDFS}
+              ASYMMETRIC_SYSTEM: ASYMMETRIC_URDFS, BUNDLESDF_CUBE_SYSTEM: BUNDLESDF_CUBE_URDFS, BUNDLESDF_BOTTLE_SYSTEM: BUNDLESDF_BOTTLE_URDFS, BUNDLESDF_NAPKIN_SYSTEM: BUNDLESDF_NAPKIN_URDFS}
 
 CUBE_BOX_URDF_ASSET_BAD = 'contactnets_cube_bad_init.urdf'
 CUBE_BOX_URDF_ASSET_SMALL = 'contactnets_cube_small_init.urdf'
@@ -142,8 +146,14 @@ ASYMMETRIC_X_0 = torch.tensor(
 # TODO: seems not using this for real experiments
 BOTTLE_X_0 = torch.tensor(
     [1., 0., 0., 0., 0., 0., 0.21 + .015, 0., 0., 0., 0., 0., -.075])
-X_0S = {CUBE_SYSTEM: CUBE_X_0, ELBOW_SYSTEM: ELBOW_X_0,
-        ASYMMETRIC_SYSTEM: ASYMMETRIC_X_0, BUNDLESDF_CUBE_SYSTEM: CUBE_X_0, BUNDLESDF_BOTTLE_SYSTEM: BOTTLE_X_0}
+NAPKIN_X_0 = torch.tensor(
+    [1., 0., 0., 0., 0., 0., 0.21 + .015, 0., 0., 0., 0., 0., -.075])
+X_0S = {CUBE_SYSTEM: CUBE_X_0, 
+        ELBOW_SYSTEM: ELBOW_X_0,
+        ASYMMETRIC_SYSTEM: ASYMMETRIC_X_0, 
+        BUNDLESDF_CUBE_SYSTEM: CUBE_X_0, 
+        BUNDLESDF_BOTTLE_SYSTEM: BOTTLE_X_0, 
+        BUNDLESDF_NAPKIN_SYSTEM: NAPKIN_X_0}
 CUBE_SAMPLER_RANGE = torch.tensor([
     2 * np.pi, 2 * np.pi, 2 * np.pi, .03, .03, .015, 6., 6., 6., 1.5, 1.5, .075
 ])
@@ -171,15 +181,25 @@ ELBOW_LR = 1e-3
 ASYMMETRIC_LR = 1e-3
 BUNDLESDF_CUBE_LR = 1e-3
 BUNDLESDF_BOTTLE_LR = 1e-3
-LRS = {CUBE_SYSTEM: CUBE_LR, ELBOW_SYSTEM: ELBOW_LR,
-       ASYMMETRIC_SYSTEM: ASYMMETRIC_LR, BUNDLESDF_CUBE_SYSTEM: BUNDLESDF_CUBE_LR, BUNDLESDF_BOTTLE_SYSTEM: BUNDLESDF_BOTTLE_LR}
+BUNDLESDF_NAPKIN_LR = 1e-3
+LRS = {CUBE_SYSTEM: CUBE_LR, 
+       ELBOW_SYSTEM: ELBOW_LR,
+       ASYMMETRIC_SYSTEM: ASYMMETRIC_LR, 
+       BUNDLESDF_CUBE_SYSTEM: BUNDLESDF_CUBE_LR, 
+       BUNDLESDF_BOTTLE_SYSTEM: BUNDLESDF_BOTTLE_LR, 
+       BUNDLESDF_NAPKIN_SYSTEM: BUNDLESDF_NAPKIN_LR}
 CUBE_WD = 0.0
 ELBOW_WD = 0.0  #1e-4
 ASYMMETRIC_WD = 0.0
 BUNLESDF_CUBE_WD = 0.0
 BUNDLESDF_BOTTLE_WD = 0.0
-WDS = {CUBE_SYSTEM: CUBE_WD, ELBOW_SYSTEM: ELBOW_WD,
-       ASYMMETRIC_SYSTEM: ASYMMETRIC_WD, BUNDLESDF_CUBE_SYSTEM: BUNLESDF_CUBE_WD, BUNDLESDF_BOTTLE_SYSTEM: BUNDLESDF_BOTTLE_WD}
+BUNDLESDF_NAPKIN_WD = 0.0
+WDS = {CUBE_SYSTEM: CUBE_WD, 
+       ELBOW_SYSTEM: ELBOW_WD,
+       ASYMMETRIC_SYSTEM: ASYMMETRIC_WD, 
+       BUNDLESDF_CUBE_SYSTEM: BUNLESDF_CUBE_WD, 
+       BUNDLESDF_BOTTLE_SYSTEM: BUNDLESDF_BOTTLE_WD,
+       BUNDLESDF_NAPKIN_SYSTEM: BUNDLESDF_NAPKIN_WD}
 DEFAULT_WEIGHT_RANGE = (1e-2, 1e2)
 EPOCHS = 200            # change this (originally 500)
 PATIENCE = 10       # change this (originally EPOCHS)
@@ -282,9 +302,13 @@ def main(storage_folder_name: str = "",
     # This is a configuration for a DrakeSystem, which wraps a Drake
     # simulation for the described URDFs.
     # first, select urdfs
+    # if iteration == 0:
     urdf_asset = TRUE_URDFS[system][geometry]
-    print(f'>>>>>>>>>> Using gt-urdf: {urdf_asset}')
     urdf = file_utils.get_asset(urdf_asset)
+    # else:
+    #     urdf_asset = f'{REAL_DATA_ASSETS[system]}_mesh_vis.urdf'
+    #     urdf = file_utils.get_generated_urdf(file_utils.run_dir(storage_name, run_name), urdf_asset)
+    print(f'>>>>>>>>>> Using gt-urdf: {urdf}')
     urdfs = {system: urdf}
     base_config = DrakeSystemConfig(urdfs=urdfs)
 
@@ -487,6 +511,8 @@ def main(storage_folder_name: str = "",
               type=float,
               default=1e0,
               help="fraction of gravity constant to use.")
+# @click.option('--iteration',
+#               type=int, default=0,help="current iteration of combined training")
 def main_command(storage_folder_name: str, run_name: str, system: str,
                  source: str, structured: bool, contactnets: bool,
                  geometry: str, regenerate: bool, dataset_size: int,

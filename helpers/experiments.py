@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import argparse
 import pickle
 import os
+import seaborn as sns
 from scipy.spatial.transform import Rotation as R
 
 # The following are t values for 95% confidence interval.
@@ -156,8 +157,8 @@ def eval(storage):
     rot_errs = np.array(rot_errs)
     trans_errs = np.array(trans_errs)
     print(rot_errs.shape, trans_errs.shape)
-    np.savetxt('rot_errs_cluster.txt', rot_errs)
-    np.savetxt('trans_errs_cluster.txt', trans_errs)
+    np.savetxt('rot_errs.txt', rot_errs)
+    np.savetxt('trans_errs.txt', trans_errs)
 
 def set_of_vals_to_t_confidence_interval(ys):
     if len(ys) <= 1:
@@ -174,10 +175,16 @@ def set_of_vals_to_t_confidence_interval(ys):
     return mean, lower, upper
 
 def plot():
+    sns.set_style("whitegrid")
     rot_means, rot_lowers, rot_uppers = [], [], []
     trans_means, trans_lowers, trans_uppers = [], [], []
-    rot_errors = np.loadtxt('rot_errs.txt') #N,99
-    trans_errors = np.loadtxt('trans_errs.txt')
+    rot_error_local = np.loadtxt('rot_errs.txt') #N,99
+    trans_error_local = np.loadtxt('trans_errs.txt')
+    rot_errors_cluster = np.loadtxt('rot_errs_cluster.txt')
+    trans_errors_cluster = np.loadtxt('trans_errs_cluster.txt')
+    rot_errors = np.concatenate((rot_error_local, rot_errors_cluster))
+    trans_errors = np.concatenate((trans_error_local, trans_errors_cluster))
+    print(rot_errors.shape, trans_errors.shape)
     for i in range(rot_errors.shape[1]):
         mean, lower, upper = set_of_vals_to_t_confidence_interval(rot_errors[:,i])
         mean_trans, lower_trans, upper_trans = set_of_vals_to_t_confidence_interval(trans_errors[:,i])
@@ -190,28 +197,42 @@ def plot():
     
     timestamps = np.arange(rot_errors.shape[1])
     # rot error 
-    fig, ax = plt.subplots(figsize=(10,6))
-    ax.plot(timestamps, rot_means, color='blue', label='Mean Error')
-    ax.fill_between(timestamps, rot_lowers, rot_uppers, color='lightblue', alpha=0.6)
-    ax.set_xlabel('Step')
-    ax.set_ylabel('Rotational Error (rad)')
-    ax.set_title('Mean Rotaional Error with 95% Confidence Interval')
-    ax.legend()
+    plt.figure(figsize=(8, 7))
+    ax = sns.lineplot(x=timestamps, y=rot_means, label='Mean Rotation Error', color='blue')
+    ax.fill_between(timestamps, rot_lowers, rot_uppers, alpha=0.5, color=sns.xkcd_rgb['baby blue'], label='95% Confidence Interval')
+    ax.set_facecolor('lavender')  # Setting the background to light blue
+    plt.gca().set_facecolor('lavender')
+    ax.set_xlabel('Timesteps', fontsize=18)
+    ax.set_ylabel('Rotational Error (rad)', fontsize=18)
+    ax.set_xlim(0, 98)
+    ax.set_ylim(0, 3.0)
+    ax.set_title('Mean Rotation Error with 95% Confidence Interval', fontsize=18)
+    ax.tick_params(axis='x', labelsize=18)
+    ax.tick_params(axis='y', labelsize=18) 
+    ax.legend(fontsize=18)
+
     plt.tight_layout()
     plt.show()
     plt.savefig(f'./results/{storage}/{storage}_rot.png')
+    print(f'Saved to ./results/{storage}/{storage}_rot.png')
     # trans error 
-    fig, ax = plt.subplots(figsize=(10,6))
-    ax.plot(timestamps, trans_means, color='blue', label='Mean Error')
-    ax.fill_between(timestamps, trans_lowers, trans_uppers, color='lightblue', alpha=0.6)
-    ax.set_xlabel('Step')
-    ax.set_ylabel('Translational Error (m)')
-    ax.set_title('Mean Translational Error with 95% Confidence Interval')
-    ax.legend()
+    plt.figure(figsize=(8, 7))
+    ax = sns.lineplot(x=timestamps, y=trans_means, label='Mean Translation Error', color='blue')
+    ax.fill_between(timestamps, trans_lowers, trans_uppers, alpha=0.6, color=sns.xkcd_rgb['baby blue'], label='95% Confidence Interval')
+    ax.set_facecolor('lavender')  # Setting the background to light blue
+    plt.gca().set_facecolor('lavender')
+    ax.set_xlabel('Timesteps', fontsize=18)
+    ax.set_ylabel('Translational Error (m)', fontsize=18)
+    ax.set_xlim(0, 98)
+    ax.set_ylim(0, 0.25)
+    ax.set_title('Mean Translation Error with 95% Confidence Interval', fontsize=18)
+    ax.legend(fontsize=18)
+    ax.tick_params(axis='x', labelsize=18)  # Adjust x axis tick label font size
+    ax.tick_params(axis='y', labelsize=18) 
     plt.tight_layout()
     plt.show()
     plt.savefig(f'./results/{storage}/{storage}_trans.png')
-    
+    print(f'Saved to ./results/{storage}/{storage}_trans.png')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
