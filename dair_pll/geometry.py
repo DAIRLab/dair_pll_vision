@@ -619,6 +619,16 @@ class GeometryCollider:
         # axis of A points out of the plane.
         # pylint: disable=E1103
         R_AC = torch.eye(3).expand(p_AoAc_A.shape + (3,))
+
+        # Iterate through the points and add them to the list if they have a significant force.
+        contact_points = []
+        for i in range(p_BoBc_B.shape[1]):
+            if phi[0,i] < 1e-3:
+                contact_points.append(p_BoBc_B[:, i, :])
+        points_array = np.array(contact_points)
+        file_path = "./contact_points.npy"
+        np.save(file_path, points_array)
+        
         return phi, R_AC, p_AoAc_A, p_BoBc_B
 
     @staticmethod

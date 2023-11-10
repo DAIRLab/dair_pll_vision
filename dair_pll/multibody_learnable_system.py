@@ -458,6 +458,12 @@ class MultibodyLearnableSystem(System):
         constant_pred[invalid] *= 0.
         force[invalid.expand(force.shape)] = 0.
 
+        # Keep only contact points
+        threshold = 1e3
+        force_magnitude = force.norm(dim=-2, keepdim=True)
+        not_in_contact_mask = force_magnitude < threshold
+        force[not_in_contact_mask.expand(force.shape)] = 0
+
         loss_pred = 0.5 * pbmm(force.transpose(-1, -2), pbmm(Q, force)) \
                     + pbmm(force.transpose(-1, -2), q_pred) + constant_pred
         loss_comp = pbmm(force.transpose(-1, -2), q_comp)
