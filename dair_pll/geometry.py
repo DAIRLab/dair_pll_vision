@@ -625,7 +625,7 @@ class GeometryCollider:
         for i in range(p_BoBc_B.shape[1]):
             if phi[0,i] < 1e-3:
                 contact_points.append(p_BoBc_B[:, i, :])
-        points_array = np.array(contact_points)
+        points_array = np.array([point.detach().numpy() for point in contact_points])
         file_path = "./contact_points.npy"
         np.save(file_path, points_array)
         

@@ -655,9 +655,10 @@ class SupervisedLearningExperiment(ABC):
                            training_state.best_valid_loss)
 
         patience = self.config.optimizer_config.patience
-
+        print(f'patience: {patience}')
         # Start training loop.
         try:
+            print(f"training epoch: {training_state.epoch}, optimizer epoch: {self.config.optimizer_config.epochs}")
             while training_state.epoch <= self.config.optimizer_config.epochs:
                 if self.config.data_config.update_dynamically:
                     # reload training data
