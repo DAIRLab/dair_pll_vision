@@ -614,6 +614,7 @@ class MultibodyTerms(Module):
     plant_diagram: MultibodyPlantDiagram
     urdfs: Dict[str, str]
     inertia_mode: int
+    pretrained: bool
 
     def scalars_and_meshes(
             self) -> Tuple[Dict[str, float], Dict[str, MeshSummary]]:
@@ -651,9 +652,11 @@ class MultibodyTerms(Module):
                 geometry_mesh = None
                 if isinstance(geometry, DeepSupportConvex):
                     print(">>>>>>>>>> deep support")
+                    if self.pretrained:
+                        geometry.load_weights('ICNN_weights.pth')
                     geometry_mesh = extract_mesh_from_support_function(
                         geometry.network)
-
+                    geometry.save_weights('ICNN_weights.pth')
                 elif isinstance(geometry, Polygon):
                     print(">>>>>>>>>>> polygon")
                     geometry_mesh = get_mesh_summary_from_polygon(geometry)
@@ -705,7 +708,8 @@ class MultibodyTerms(Module):
     def __init__(self, urdfs: Dict[str, str], inertia_mode: int,
                  represent_geometry_as: str = 'box',
                  randomize_initialization: bool = False,
-                 g_frac: float = 1.0) -> None:
+                 g_frac: float = 1.0, 
+                 pretrained: bool = False) -> None:
         """Inits :py:class:`MultibodyTerms` for system described in URDFs
 
         Interpretation is performed as a thin wrapper around
@@ -757,6 +761,7 @@ class MultibodyTerms(Module):
         self.geometry_body_assignment = geometry_body_assignment
         self.plant_diagram = plant_diagram
         self.urdfs = urdfs
+        self.pretrained = pretrained
 
     def randomize_multibody_terms(self, inertia_int) -> None:
         r"""Adds random noise to multibody terms in the following ways:

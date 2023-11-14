@@ -95,7 +95,8 @@ class MultibodyLearnableSystem(System):
                  network_depth: int = 2,
                  represent_geometry_as: str = 'box',
                  randomize_initialization: bool = False,
-                 g_frac: float = 1.0) -> None:
+                 g_frac: float = 1.0,
+                 pretrained: bool = False) -> None:
         """Inits :py:class:`MultibodyLearnableSystem` with provided model URDFs.
 
         Implementation is primarily based on Drake. Bodies are modeled via
@@ -125,7 +126,7 @@ class MultibodyLearnableSystem(System):
         multibody_terms = MultibodyTerms(init_urdfs, inertia_mode,
                                          represent_geometry_as,
                                          randomize_initialization,
-                                         g_frac=g_frac)
+                                         g_frac=g_frac, pretrained=pretrained)
 
         space = multibody_terms.plant_diagram.space
         integrator = VelocityIntegrator(space, self.sim_step, dt)

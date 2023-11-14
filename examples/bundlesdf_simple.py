@@ -251,7 +251,8 @@ def main(storage_folder_name: str = "",
          w_res_w: float = 1e0,
          do_residual: bool = False,
          additional_forces: str = None,
-         g_frac: float = 1.0):
+         g_frac: float = 1.0,
+         pretrained: bool = False):
     """Execute ContactNets basic example on a system.
 
     Args:
@@ -295,7 +296,8 @@ def main(storage_folder_name: str = "",
          + f'\n\twith residual: {do_residual}' \
          + f'\n\tand starting with provided true_sys={true_sys}' \
          + f'\n\tinjecting into dynamics (if sim): {additional_forces}' \
-         + f'\n\twith gravity fraction (if gravity): {g_frac}')
+         + f'\n\twith gravity fraction (if gravity): {g_frac}' \
+         + f'\n\twith pretrained ICNN: {pretrained}')
 
     simulation = source == SIM_SOURCE
     dynamic = source == DYNAMIC_SOURCE
@@ -360,7 +362,7 @@ def main(storage_folder_name: str = "",
             w_res = Float(w_res, log=True, distribution=DEFAULT_WEIGHT_RANGE),
             w_res_w = Float(w_res_w, log=True, distribution=DEFAULT_WEIGHT_RANGE),
             do_residual=do_residual, represent_geometry_as=geometry,
-            randomize_initialization = not true_sys, g_frac=g_frac)
+            randomize_initialization = not true_sys, g_frac=g_frac, pretrained=pretrained)
 
     else:
         learnable_config = DeepLearnableSystemConfig(
@@ -536,13 +538,17 @@ def main(storage_folder_name: str = "",
               help="fraction of gravity constant to use.")
 # @click.option('--iteration',
 #               type=int, default=0,help="current iteration of combined training")
+@click.option('--pretrained',
+              type=bool,
+              default=False,
+              help='wether or not use the pretrained Homonogeneous ICNN')
 def main_command(storage_folder_name: str, run_name: str, system: str,
                  source: str, structured: bool, contactnets: bool,
                  geometry: str, regenerate: bool, dataset_size: int,
                  inertia_params: str, loss_variation: str, true_sys: bool,
                  wandb_project: str, w_pred: float, w_comp: float,
                  w_diss: float, w_pen: float, w_res: float, w_res_w: float,
-                 residual: bool, additional_forces: str, g_frac: float):
+                 residual: bool, additional_forces: str, g_frac: float, pretrained: bool):
     """Executes main function with argument interface."""
     assert storage_folder_name is not None
     assert run_name is not None
@@ -550,7 +556,7 @@ def main_command(storage_folder_name: str, run_name: str, system: str,
     main(storage_folder_name, run_name, system, source, structured, contactnets,
          geometry, regenerate, dataset_size, inertia_params, loss_variation,
          true_sys, wandb_project, w_pred, w_comp, w_diss, w_pen, w_res, w_res_w,
-         residual, additional_forces, g_frac)
+         residual, additional_forces, g_frac, pretrained)
 
 
 if __name__ == '__main__':

@@ -197,7 +197,8 @@ class HomogeneousICNN(Module):
                  depth: int,
                  width: int,
                  negative_slope: float = 0.5,
-                 scale=1.0) -> None:
+                 scale=1.0,
+                 pretrained_weights=None) -> None:
         r"""
         Args:
             depth: Network depth :math:`D`\ .
@@ -226,9 +227,15 @@ class HomogeneousICNN(Module):
         scale_out = scale * 2 * (2.0 / (width * (1 + negative_slope**2)))**0.5
         output_weight = 2 * (torch.rand(width) - 0.5) * scale_out
 
-        self.hidden_weights = ParameterList(hidden_weights)
-        self.input_weights = ParameterList(input_weights)
-        self.output_weight = Parameter(output_weight, requires_grad=True)
+        if pretrained_weights is not None:
+            # Load pre-trained weights
+            self.hidden_weights = pretrained_weights['hidden_weights']
+            self.input_weights = pretrained_weights['input_weights']
+            self.output_weight = pretrained_weights['output_weight']
+        else:
+            self.hidden_weights = ParameterList(hidden_weights)
+            self.input_weights = ParameterList(input_weights)
+            self.output_weight = Parameter(output_weight, requires_grad=True)
         self.activation = torch.nn.LeakyReLU(negative_slope=negative_slope)
 
     def abs_weights(self) -> Tuple[List[Tensor], Tensor]:

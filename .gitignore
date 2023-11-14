@@ -102,11 +102,7 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-<<<<<<< HEAD
-# Drake stuff:
-=======
 # special Drake version:
->>>>>>> upstream/main
 drake-dev*.deb
 
 # Sphinx documentation
@@ -173,3 +169,6 @@ dmypy.json
 # Some generated result files
 helpers/*.json
 helpers/*.csv
+
+*.pth
+*.npy

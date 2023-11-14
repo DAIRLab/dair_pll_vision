@@ -76,6 +76,8 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """Whether to randomize initialization."""
     g_frac: float = 1.0
     """What fraction of the true gravitational constant to use."""
+    pretrained: bool = False
+    """Whether use the pretrained ICNN weights."""
 
 
 class DrakeExperiment(SupervisedLearningExperiment, ABC):
@@ -306,7 +308,8 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
             do_residual=learnable_config.do_residual,
             represent_geometry_as=learnable_config.represent_geometry_as,
             randomize_initialization=learnable_config.randomize_initialization,
-            g_frac=learnable_config.g_frac)
+            g_frac=learnable_config.g_frac,
+            pretrained=learnable_config.pretrained)
 
     def write_to_wandb(self, epoch: int, learned_system: System,
                        statistics: Dict) -> None:

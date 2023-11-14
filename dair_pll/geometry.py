@@ -376,6 +376,12 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         """no scalars!"""
         return {}
 
+    def save_weights(self, file_path: str) -> None:
+        torch.save(self.network.state_dict(), file_path)
+    
+    def load_weights(self, file_path: str) -> None:
+        self.network.load_state_dict(torch.load(file_path))
+        self.network.train()
 
 class Box(SparseVertexConvexCollisionGeometry):
     """Implementation of cuboid geometry as a sparse vertex convex hull.
