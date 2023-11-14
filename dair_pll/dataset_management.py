@@ -36,11 +36,11 @@ class DataConfig:
     """:func:`~dataclasses.dataclass` for configuring a trajectory dataset."""
     dt: float = 1e-3
     r"""Time step, ``> 0``\ ."""
-    train_fraction: float = 0.5
+    train_fraction: float = 0.75 #0.5
     r"""Fraction of training trajectories to select, ``<= 1, >= 0``\ ."""
     valid_fraction: float = 0.25
     r"""Fraction of validation trajectories to select, ``<= 1, >= 0``\ ."""
-    test_fraction: float = 0.25
+    test_fraction: float = 0.0 #0.25
     r"""Fraction of testing trajectories to select, ``<= 1, >= 0``\ ."""
     slice_config: TrajectorySliceConfig = field(
         default_factory=TrajectorySliceConfig)
