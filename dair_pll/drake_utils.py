@@ -3,8 +3,8 @@
 This file implements :py:class:`MultibodyPlantDiagram`, which instantiates
 Drake simulation and visualization system for a given group of URDF files.
 
-Visualization is done via meshcat. Details on using meshcat are available
-in the documentation for :py:mod:`dair_pll.meshcat_utils`.
+Visualization is done via Drake's VideoWriter. Details on using the VideoWriter
+are available in the documentation for :py:mod:`dair_pll.vis_utils`.
 
 In order to make the Drake states compatible with available
 :py:class:`~dair_pll.state_space.StateSpace` inheriting classes,
@@ -19,14 +19,23 @@ or :py:class:`~dair_pll.state_space.FixedBaseSpace`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Tuple, Dict, List, Optional, Mapping, cast, Union, Type
-
+from typing import Tuple, Dict, List, Optional, Union, Type, cast
+try:
+    from typing import TypeAlias
+except ImportError:
+    from typing import TypeVar
+    TypeAlias = TypeVar('TypeAlias')
+import numpy as np
 from pydrake.autodiffutils import AutoDiffXd  # type: ignore
+# pylint: disable-next=import-error
 from pydrake.geometry import HalfSpace, SceneGraph  # type: ignore
+# pylint: disable-next=import-error
 from pydrake.geometry import SceneGraphInspector_, GeometryId  # type: ignore
-from pydrake.math import RigidTransform  # type: ignore
+from pydrake.math import RigidTransform, RollPitchYaw, \
+    RigidTransform_  # type: ignore
 from pydrake.multibody.parsing import Parser  # type: ignore
-from pydrake.multibody.plant import AddMultibodyPlantSceneGraph  # type: ignore
+from pydrake.multibody.plant import AddMultibodyPlantSceneGraph, \
+    CoulombFriction_  # type: ignore
 from pydrake.multibody.plant import CoulombFriction  # type: ignore
 from pydrake.multibody.plant import MultibodyPlant  # type: ignore
 from pydrake.multibody.plant import MultibodyPlant_  # type: ignore
@@ -35,8 +44,10 @@ from pydrake.multibody.tree import SpatialInertia_  # type: ignore
 from pydrake.multibody.tree import world_model_instance, Body_  # type: ignore
 from pydrake.symbolic import Expression  # type: ignore
 from pydrake.systems.analysis import Simulator  # type: ignore
-from pydrake.systems.framework import DiagramBuilder  # type: ignore
-from pydrake.systems.meshcat_visualizer import MeshcatVisualizer  # type: ignore
+from pydrake.systems.framework import DiagramBuilder, \
+    DiagramBuilder_  # type: ignore
+# pylint: disable-next=import-error
+from pydrake.visualization import VideoWriter  # type: ignore
 
 from dair_pll import state_space
 
@@ -46,24 +57,47 @@ DRAKE_FRICTION_PROPERTY = 'coulomb_friction'
 N_DRAKE_FLOATING_BODY_VELOCITIES = 6
 DEFAULT_DT = 1e-3
 
-DrakeTemplateType = Mapping[Type, Type]
-MultibodyPlant_ = cast(DrakeTemplateType, MultibodyPlant_)
-Body_ = cast(DrakeTemplateType, Body_)
-SceneGraphInspector_ = cast(DrakeTemplateType, SceneGraphInspector_)
-SpatialInertia_ = cast(DrakeTemplateType, SpatialInertia_)
+GROUND_COLOR = np.array([0.5, 0.5, 0.5, 0.1])
 
-#:
-DrakeMultibodyPlant = Union[MultibodyPlant_[float], MultibodyPlant_[AutoDiffXd],
-                            MultibodyPlant_[Expression]]
-#:
-DrakeBody = Union[Body_[float], Body_[AutoDiffXd], Body_[Expression]]
+CAM_FOV = np.pi / 5
+VIDEO_PIXELS = [480, 640]
+FPS = 30
 
+# TODO currently hard-coded camera pose could eventually be dynamically chosen
+# to fit the actual trajectory.
+SENSOR_RPY = np.array([-np.pi / 2, 0, np.pi / 2])
+SENSOR_POSITION = np.array([2., 0., 0.2])
+SENSOR_POSE = RigidTransform(
+    RollPitchYaw(SENSOR_RPY).ToQuaternion(), SENSOR_POSITION)
+
+MultibodyPlantFloat: TypeAlias = cast(Type, MultibodyPlant_[float])
+MultibodyPlantAutoDiffXd: TypeAlias = cast(Type, MultibodyPlant_[AutoDiffXd])
+MultibodyPlantExpression: TypeAlias = cast(Type, MultibodyPlant_[Expression])
+DrakeMultibodyPlant = Union[MultibodyPlantFloat, MultibodyPlantAutoDiffXd,
+                            MultibodyPlantExpression]
+
+BodyFloat: TypeAlias = cast(Type, Body_[float])
+BodyAutoDiffXd: TypeAlias = cast(Type, Body_[AutoDiffXd])
+BodyExpression: TypeAlias = cast(Type, Body_[Expression])
+DrakeBody = Union[BodyFloat, BodyAutoDiffXd, BodyExpression]
+
+SpatialInertiaFloat: TypeAlias = cast(Type, SpatialInertia_[float])
+SpatialInertiaAutoDiffXd: TypeAlias = cast(Type, SpatialInertia_[AutoDiffXd])
+SpatialInertiaExpression: TypeAlias = cast(Type, SpatialInertia_[Expression])
+DrakeSpatialInertia = Union[SpatialInertiaFloat, SpatialInertiaAutoDiffXd,
+                            SpatialInertiaExpression]
 #:
-DrakeSceneGraphInspector = Union[SceneGraphInspector_[float],
-                                 SceneGraphInspector_[AutoDiffXd]]
+SceneGraphInspectorFloat: TypeAlias = cast(Type, SceneGraphInspector_[float])
+SceneGraphInspectorAutoDiffXd: TypeAlias = cast(
+    Type, SceneGraphInspector_[AutoDiffXd])
+DrakeSceneGraphInspector = Union[SceneGraphInspectorFloat,
+                                 SceneGraphInspectorAutoDiffXd]
 #:
-DrakeSpatialInertia = Union[SpatialInertia_[float], SpatialInertia_[AutoDiffXd],
-                            SpatialInertia_[Expression]]
+DiagramBuilderFloat: TypeAlias = cast(Type, DiagramBuilder_[float])
+DiagramBuilderAutoDiffXd: TypeAlias = cast(Type, DiagramBuilder_[AutoDiffXd])
+DiagramBuilderExpression: TypeAlias = cast(Type, DiagramBuilder_[Expression])
+DrakeDiagramBuilder = Union[DiagramBuilderFloat, DiagramBuilderAutoDiffXd,
+                            DiagramBuilderExpression]
 #:
 UniqueBodyIdentifier = str
 
@@ -97,7 +131,7 @@ def unique_body_identifier(plant: DrakeMultibodyPlant,
 
 def get_all_bodies(
     plant: DrakeMultibodyPlant, model_instance_indices: List[ModelInstanceIndex]
-) -> Tuple[List[Body_], List[UniqueBodyIdentifier]]:
+) -> Tuple[List[DrakeBody], List[UniqueBodyIdentifier]]:
     """Get all bodies in plant's models."""
     bodies = []
     for model_instance_index in model_instance_indices:
@@ -164,7 +198,7 @@ def get_collision_geometry_set(
 
 
 def add_plant_from_urdfs(
-        builder: DiagramBuilder, urdfs: Dict[str, str], dt: float
+        builder: DrakeDiagramBuilder, urdfs: Dict[str, str], dt: float
 ) -> Tuple[List[ModelInstanceIndex], MultibodyPlant, SceneGraph]:
     """Add plant to builder with prescribed URDF models.
 
@@ -194,11 +228,11 @@ def add_plant_from_urdfs(
 
 
 class MultibodyPlantDiagram:
-    """Constructs and manages a diagram, simulator, and optionally a meshcat
-    visualizer for a multibody system described in a list of URDF's.
+    """Constructs and manages a diagram, simulator, and optionally a visualizer
+    for a multibody system described in a list of URDF's.
 
-    This minimal diagram consists on of a ``MultibodyPlant``, ``SceneGraph``,
-    and optionally a MeshcatVisualizer hooked up in the typical fashion.
+    This minimal diagram consists of a ``MultibodyPlant``, ``SceneGraph``, and
+    optionally a ``VideoWriter`` hooked up in the typical fashion.
 
     From the ``MultibodyPlant``, ``MultibodyPlantDiagram`` can infer the
     corresponding ``StateSpace`` from the dimension of the associated
@@ -209,7 +243,7 @@ class MultibodyPlantDiagram:
     sim: Simulator
     plant: MultibodyPlant
     scene_graph: SceneGraph
-    visualizer: Optional[MeshcatVisualizer]
+    visualizer: Optional[VideoWriter]
     model_ids: List[ModelInstanceIndex]
     collision_geometry_set: CollisionGeometrySet
     space: state_space.ProductSpace
@@ -217,20 +251,18 @@ class MultibodyPlantDiagram:
     def __init__(self,
                  urdfs: Dict[str, str],
                  dt: float = DEFAULT_DT,
-                 enable_visualizer: bool = False) -> None:
+                 visualization_file: Optional[str] = None) -> None:
         r"""Initialization generates a world containing each given URDF as a
         model instance, and a corresponding Drake ``Simulator`` set up to
         trigger a state update every ``dt``.
 
         By default, a ground plane is added at world height ``z = 0``.
 
-        If a visualizer is added, it listens on the default meshcat server
-        address, ``tcp://127.0.0.1:6000``\ .
-
         Args:
             urdfs: Names and corresponding URDFs to add as models to plant.
             dt: Time step of plant in seconds.
-            enable_visualizer: Whether to add visualization system to diagram.
+            visualization_file: Optional output GIF filename for trajectory
+              visualization.
         """
         builder = DiagramBuilder()
         model_ids, plant, scene_graph = add_plant_from_urdfs(builder, urdfs, dt)
@@ -239,23 +271,24 @@ class MultibodyPlantDiagram:
         # to False, in the hopes of saving computation time; may cause
         # re-initialization to produce erroneous visualizations.
         visualizer = None
-        if enable_visualizer:
-            visualizer = builder.AddSystem(
-                MeshcatVisualizer(open_browser=False,
-                                  window=None,
-                                  delete_prefix_on_load=False))
-            # clears visualizer
-            visualizer.delete_prefix()
-
-            builder.Connect(scene_graph.get_query_output_port(),
-                            visualizer.get_geometry_query_input_port())
+        if visualization_file:
+            visualizer = VideoWriter.AddToBuilder(filename=visualization_file,
+                                                  builder=builder,
+                                                  sensor_pose=SENSOR_POSE,
+                                                  fps=FPS,
+                                                  width=VIDEO_PIXELS[1],
+                                                  height=VIDEO_PIXELS[0],
+                                                  fov_y=CAM_FOV)
 
         # Adds ground plane at ``z = 0``
-        halfspace_transform = RigidTransform()
-        friction = CoulombFriction(1.0, 1.0)
+        halfspace_transform = RigidTransform_[float]()
+        friction = CoulombFriction_[float](1.0, 1.0)
         plant.RegisterCollisionGeometry(plant.world_body(), halfspace_transform,
                                         HalfSpace(), WORLD_GROUND_PLANE_NAME,
                                         friction)
+        plant.RegisterVisualGeometry(plant.world_body(), halfspace_transform,
+                                     HalfSpace(), WORLD_GROUND_PLANE_NAME,
+                                     GROUND_COLOR)
 
         # get collision candidates before default context filters for proximity.
         self.collision_geometry_set = get_collision_geometry_set(
