@@ -225,7 +225,7 @@ WDS = {CUBE_SYSTEM: CUBE_WD,
        BUNDLESDF_TOBLERONE_SYSTEM: BUNDLESDF_TOBLERONE_WD}
 DEFAULT_WEIGHT_RANGE = (1e-2, 1e2)
 EPOCHS = 200            # change this (originally 500)
-PATIENCE = 10       # change this (originally EPOCHS)
+PATIENCE = 8#10       # change this (originally EPOCHS)
 
 WANDB_DEFAULT_PROJECT = 'dair_pll-examples'
 

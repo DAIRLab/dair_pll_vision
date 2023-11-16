@@ -380,6 +380,7 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         torch.save(self.network.state_dict(), file_path)
     
     def load_weights(self, file_path: str) -> None:
+        print('>>>>>>>> Loading pretrained weight')
         self.network.load_state_dict(torch.load(file_path))
         self.network.train()
 
