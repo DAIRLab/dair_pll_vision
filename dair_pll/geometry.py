@@ -628,14 +628,11 @@ class GeometryCollider:
         R_AC = torch.eye(3).expand(p_AoAc_A.shape + (3,))
 
         # Iterate through the points and add them to the list if they have a significant force.
-        contact_points = []
-        for i in range(p_BoBc_B.shape[1]):
-            if phi[0,i] < 1e-3:
-                contact_points.append(p_BoBc_B[:, i, :])
-        points_array = np.array([point.detach().numpy() for point in contact_points])
         file_path = "./contact_points.npy"
-        np.save(file_path, points_array)
-        
+        import os
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        np.save(file_path, p_BoBc_B.detach().numpy())
         return phi, R_AC, p_AoAc_A, p_BoBc_B
 
     @staticmethod
