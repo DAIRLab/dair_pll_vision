@@ -9,6 +9,6 @@
 source /home/mengti/workspace/dair_pll/venv/bin/activate;
 export PYTHONPATH=${PWD}:${PYTHONPATH}
 
-cmd="WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-args=\"-screen 0 800x600x24\" python3 examples/bundlesdf_simple.py --structured --system=cube --geometry=mesh --source=real --contactnets --regenerate --no-residual --loss-variation=1 --inertia-params=0 --dataset-size 10 'test_export' 'test_export-1'"
+cmd="WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-args=\"-screen 0 800x600x24\" python3 examples/bundlesdf_simple.py --structured --system=cube --geometry=mesh --source=real --contactnets --regenerate --no-residual --loss-variation=1 --inertia-params=0 --w-pen=100.0 --dataset-size 10 'test_export_2' 'test'"
 echo "Running: $cmd"
 eval $cmd
