@@ -107,14 +107,15 @@ TOBLERONE_WD = 0.0
 WDS = {CUBE_SYSTEM: CUBE_WD, ELBOW_SYSTEM: ELBOW_WD, BUNDLESDF_PRISM_SYSTEM: PRISM_WD, BUNDLESDF_TOBLERONE_SYSTEM: TOBLERONE_WD}
 EPOCHS = 200 #500
 PATIENCE = 200 #EPOCHS
-BATCH_SIZE = 256
+# BATCH_SIZE = 256
 
 
 def main(system: str = CUBE_SYSTEM,
          source: str = SIM_SOURCE,
          contactnets: bool = True,
          box: bool = True,
-         regenerate: bool = False):
+         regenerate: bool = False,
+         dataset_size: int = 512):
     """Execute ContactNets basic example on a system.
 
     Args:
@@ -144,7 +145,7 @@ def main(system: str = CUBE_SYSTEM,
     optimizer_config.wd.value = WDS[system]
     optimizer_config.patience = PATIENCE
     optimizer_config.epochs = EPOCHS
-    optimizer_config.batch_size.value = BATCH_SIZE
+    optimizer_config.batch_size.value = int(dataset_size/2)#BATCH_SIZE
 
     # Describes the ground truth system; infers everything from the URDF.
     # This is a configuration for a DrakeSystem, which wraps a Drake
@@ -247,12 +248,15 @@ def main(system: str = CUBE_SYSTEM,
 @click.option('--regenerate/--no-regenerate',
               default=False,
               help="whether save updated URDF's each epoch.")
+@click.option('--dataset-size',
+              default=512,
+              help="dataset size")
 def main_command(system: str, source: str, contactnets: bool, box: bool,
-                 regenerate: bool):
+                 regenerate: bool, dataset_size: int):
     """Executes main function with argument interface."""
     if system == ELBOW_SYSTEM and source==REAL_SOURCE:
         raise NotImplementedError('Elbow real-world data not supported!')
-    main(system, source, contactnets, box, regenerate)
+    main(system, source, contactnets, box, regenerate, dataset_size)
 
 
 if __name__ == '__main__':
