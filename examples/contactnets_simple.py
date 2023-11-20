@@ -204,7 +204,8 @@ def main(system: str = CUBE_SYSTEM,
         generation_config=data_generation_config,
         import_directory=import_directory,
         dynamic_updates_from=dynamic_updates_from,
-        t_prediction=1 if contactnets else T_PREDICTION)
+        t_prediction=1 if contactnets else T_PREDICTION,
+        dataset_size=dataset_size)
 
     # Combines everything into config for entire experiment.
     experiment_config = SupervisedLearningExperimentConfig(
