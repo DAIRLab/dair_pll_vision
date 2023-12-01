@@ -203,9 +203,7 @@ class MultibodyLearnableSystem(System):
         if os.path.exists(file_path):
             os.remove(file_path)
         np.save(file_path, normal_forces.detach().numpy())
-        # in_contact_mask = normal_forces >= threshold
-        # force_ = force.copy() #torch.Size([5, 12, 1])
-
+        
         loss = 0.5 * pbmm(force.transpose(-1, -2), pbmm(Q, force)) + pbmm(
             force.transpose(-1, -2), q) + constant
 
