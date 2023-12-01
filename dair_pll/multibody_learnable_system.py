@@ -195,6 +195,17 @@ class MultibodyLearnableSystem(System):
         constant[invalid] *= 0.
         force[invalid.expand(force.shape)] = 0.
 
+        # Keep only normal forces
+        threshold = 1e3
+        normal_forces = force[:, :n_contacts]
+        file_path = './normal_forces.npy'
+        import os
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        np.save(file_path, normal_forces.detach().numpy())
+        # in_contact_mask = normal_forces >= threshold
+        # force_ = force.copy() #torch.Size([5, 12, 1])
+
         loss = 0.5 * pbmm(force.transpose(-1, -2), pbmm(Q, force)) + pbmm(
             force.transpose(-1, -2), q) + constant
 

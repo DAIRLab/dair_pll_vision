@@ -561,6 +561,11 @@ class GeometryCollider:
         # axis of A points out of the plane.
         # pylint: disable=E1103
         R_AC = torch.eye(3).expand(p_AoAc_A.shape + (3,))
+        file_path = "./contact_points.npy"
+        import os
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        np.save(file_path, p_BoBc_B.detach().numpy())
         return phi, R_AC, p_AoAc_A, p_BoBc_B
 
     @staticmethod
