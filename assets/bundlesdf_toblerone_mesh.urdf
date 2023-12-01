@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<robot name="toblerone" xmlns:drake="https://drake.mit.edu/">
+    <link name="body">
+        <inertial>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <mass value="0.056" />
+            <inertia
+                ixx="0.00010416"
+                ixy="0"
+                ixz="0"
+                iyy="0.00031107"
+                iyz="0"
+                izz="0.00028084"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="gt_toblerone_simple.obj"/>
+            </geometry>
+            <material name="pennred">
+                <color rgba="0.6 0 0 1.0" />
+            </material>
+        </visual>
+        <collision>
+            <geometry>
+                <mesh filename="gt_toblerone_simple.obj"/>
+            </geometry>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <drake:proximity_properties>
+                <drake:mu_static value="0.15" />
+            </drake:proximity_properties>
+        </collision>
+    </link>
+</robot>

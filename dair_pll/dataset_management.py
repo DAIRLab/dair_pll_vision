@@ -70,6 +70,7 @@ class DataConfig:
     """Alternatively, signals data import from separate directory."""
     dynamic_updates_from: Optional[int] = None
     """Alternatively, loads dynamically, but blocks on initial size set."""
+    dataset_size: int = 512
 
 
 class TrajectorySliceDataset(Dataset):
@@ -147,7 +148,8 @@ class SystemDataManager:
 
         elif do_import:
             file_utils.import_data_to_storage(config.storage,
-                                              config.import_directory)
+                                              config.import_directory,
+                                              config.dataset_size)
 
         else:
             print("Waiting for minimum trajectory count...")

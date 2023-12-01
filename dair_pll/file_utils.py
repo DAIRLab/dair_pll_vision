@@ -83,23 +83,55 @@ def assure_storage_tree_created(storage_name: str) -> None:
         assure_created(directory(storage_name))
 
 
-def import_data_to_storage(storage_name: str, import_data_dir: str) -> None:
+def import_data_to_storage(storage_name: str, import_data_dir: str, num: int = None) -> None:
     """Import data in external folder into data directory.
 
     Args:
         storage_name: Name of storage for data import.
         import_data_dir: Directory to import data from.
     """
-    # check if data is synchronized already
-    storage_data_dir = data_dir(storage_name)
-    storage_traj_count = get_numeric_file_count(storage_data_dir,
-                                                TRAJ_EXTENSION)
+    output_directories = [
+        data_dir(storage_name)
+    ]
     data_traj_count = get_numeric_file_count(import_data_dir, TRAJ_EXTENSION)
+    run_indices = [i for i in range(data_traj_count)]
 
-    # overwrite in case of any discrepeancies
-    if storage_traj_count != data_traj_count:
-        os.system(f'rm -r {storage_data_dir}')
-        os.system(f'cp -r {import_data_dir} {storage_data_dir}')
+    target_traj_number = data_traj_count if num is None else \
+                         min(num, data_traj_count)
+
+    # Check if data is synchronized already.
+    for output_directory in output_directories:
+        storage_traj_count = get_numeric_file_count(output_directory,
+                                                    TRAJ_EXTENSION)
+
+        # Overwrite in case of any discrepancies.
+        if storage_traj_count != target_traj_number:
+
+            # Copy entire directory if all trajectories are desired.
+            if target_traj_number == data_traj_count:
+                for output_dir in output_directories:
+                    os.system(f'rm -r {output_dir}')
+                    os.system(f'cp -r {import_data_dir} {output_dir}')
+
+            # Copy a random subset of trajectories if want a smaller number.
+            else:
+                import random
+                random.shuffle(run_indices)
+                run_indices = run_indices[:target_traj_number]
+                for output_dir in output_directories:
+                    os.system(f'rm -r {output_dir}')
+                    os.system(f'mkdir {output_dir}')
+
+                    # Copy over a random selection of trajectories, numbering
+                    # from 0.
+                    for i, run in zip(range(target_traj_number), run_indices):
+                        os.system(f'cp {import_data_dir}/{run}.pt ' + \
+                                  f'{output_dir}/{i}.pt')
+
+            # Can terminate outer loop over output directories since all output
+            # directories are written to at once.
+            return
+
 
 
 def storage_dir(storage_name: str) -> str:
