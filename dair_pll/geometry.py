@@ -369,6 +369,136 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         """no scalars!"""
         return {}
 
+    #########################################################
+    def pretrain_from_bundlesdf(self, sdf_network, num_epochs, learning_rate, lambda_val, sampling_precision, box_region_size):
+        """
+        Pretrains the support network to overfit a shape represented by a given SDF network.
+
+        Args:
+            sdf_network: The SDF network representing the target shape.
+            num_epochs: Number of epochs for training.
+            learning_rate: Learning rate for the optimizer.
+            lambda_val: Regularization parameter for the loss function.
+            sampling_precision: The precision for sampling directions.
+            box_region_size: Size of the box region for loss calculation.
+        """
+        optimizer = optim.Adam(self.network.parameters(), lr=learning_rate)
+
+        for epoch in range(num_epochs):
+            total_loss = 0
+
+            # Sample directions uniformly
+            directions = self.sample_uniform_directions(sampling_precision)
+
+            for direction in directions:
+                optimizer.zero_grad()
+
+                # Query support points
+                support_points = self.get_vertices(dir.unsqueeze(0))
+
+                # Forward support points through SDF network
+                point_sdf_values = sdf_network(support_points)
+
+                # Calculate loss
+                loss = self.calculate_loss(point_sdf_values, lambda_val, box_region_size, support_points, direction)
+
+                # Backpropagation
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss.item()
+
+            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss / len(directions)}")
+
+    def sample_uniform_directions(self, num_samples):
+        """
+        Samples 3D directions uniformly over a sphere.
+
+        Args:
+            num_samples: Number of samples to generate.
+
+        Returns:
+            Tensor: Uniformly sampled 3D directions.
+        """
+        azimuth = np.random.uniform(0, 2 * np.pi, num_samples)
+        polar = np.arccos(np.random.uniform(-1, 1, num_samples))
+        x = np.sin(polar) * np.cos(azimuth)
+        y = np.sin(polar) * np.sin(azimuth)
+        z = np.cos(polar)
+        directions = np.stack([x, y, z], axis=1)
+        return torch.tensor(directions, dtype=torch.float32)
+
+    def calculate_loss(self, point_sdf_values, lambda_val, box_region_size, support_point, direction):
+        """
+        Calculates the custom loss function for pretraining.
+
+        Args:
+            sdf_values: SDF values at the support point.
+            lambda_val: Regularization parameter.
+            box_region_size: Size of the box region for loss calculation.
+            support_point: The support point in the 3D space.
+            direction: The direction vector.
+
+        Returns:
+            Tensor: Calculated loss.
+        """
+        # Define the plane's orthogonal basis
+        orthogonal_direction = self.find_orthogonal_vector(direction)
+        second_orthogonal_direction = torch.cross(direction, orthogonal_direction)
+
+        # Create a grid of points on the plane
+        grid = self.create_plane_grid(box_region_size, orthogonal_direction, second_orthogonal_direction)
+        plane_points = support_point + grid
+
+        # Compute SDF values for all points on the plane
+        plane_sdf_values = self.sdf_network(plane_points)
+
+        # Calculate loss
+        if self.loss_type == 1:
+            loss = torch.min(plane_sdf_values) ** 2 + lambda_val * point_sdf_values ** 2
+        else:  # self.loss_type == 2
+            loss = torch.sum(plane_sdf_values ** 2) + lambda_val * point_sdf_values ** 2
+
+        return loss
+
+    def find_orthogonal_vector(self, v):
+        """
+        Finds a vector orthogonal to v.
+
+        Args:
+            v: A 3D vector.
+
+        Returns:
+            Tensor: An orthogonal 3D vector.
+        """
+        if v[0] == 0 and v[1] == 0:
+            if v[2] == 0:
+                # v is a zero vector
+                return torch.tensor([0, 0, 1], dtype=torch.float32)
+            # v is along z-axis
+            return torch.tensor([1, 0, 0], dtype=torch.float32)
+        return torch.tensor([-v[1], v[0], 0], dtype=torch.float32)
+
+    def create_plane_grid(self, box_size, dir1, dir2):
+        """
+        Creates a grid of points on a plane defined by two directions.
+
+        Args:
+            box_size: The size of the grid.
+            dir1, dir2: The directions defining the plane.
+
+        Returns:
+            Tensor: A grid of points on the plane.
+        """
+        # Generate grid points
+        lin = torch.linspace(-box_size / 2, box_size / 2, steps=int(np.sqrt(self.num_samples)))
+        grid_x, grid_y = torch.meshgrid(lin, lin)
+        grid = dir1.unsqueeze(0).unsqueeze(0) * grid_x.unsqueeze(-1) + dir2.unsqueeze(0).unsqueeze(0) * grid_y.unsqueeze(-1)
+
+        return grid.view(-1, 3)
+
+    #########################################################
+
 
 class Box(SparseVertexConvexCollisionGeometry):
     """Implementation of cuboid geometry as a sparse vertex convex hull."""
