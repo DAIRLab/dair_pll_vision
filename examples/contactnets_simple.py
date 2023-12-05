@@ -20,7 +20,9 @@ from dair_pll.state_space import UniformSampler
 
 CUBE_SYSTEM = 'cube'
 ELBOW_SYSTEM = 'elbow'
-SYSTEMS = [CUBE_SYSTEM, ELBOW_SYSTEM]
+BUNDLESDF_PRISM_SYSTEM = 'bundlesdf_prism'
+BUNDLESDF_TOBLERONE_SYSTEM = 'bundlesdf_toblerone'
+SYSTEMS = [CUBE_SYSTEM, ELBOW_SYSTEM, BUNDLESDF_PRISM_SYSTEM, BUNDLESDF_TOBLERONE_SYSTEM]
 SIM_SOURCE = 'simulation'
 REAL_SOURCE = 'real'
 DYNAMIC_SOURCE = 'dynamic'
@@ -29,18 +31,24 @@ DATA_SOURCES = [SIM_SOURCE, REAL_SOURCE, DYNAMIC_SOURCE]
 # File management.
 CUBE_DATA_ASSET = 'contactnets_cube'
 ELBOW_DATA_ASSET = 'contactnets_elbow'
+PRISM_DATA_ASSET = 'bundlesdf_prism'
+TOBLERONE_DATA_ASSET = 'bundlesdf_toblerone'
 CUBE_BOX_URDF_ASSET = 'contactnets_cube.urdf'
 CUBE_MESH_URDF_ASSET = 'contactnets_cube_mesh.urdf'
 ELBOW_BOX_URDF_ASSET = 'contactnets_elbow.urdf'
 ELBOW_MESH_URDF_ASSET = 'contactnets_elbow_mesh.urdf'
+PRISM_MESH_URDF_ASSET = 'bundlesdf_prism_mesh.urdf'
+TOBLERONE_MESH_URDF_ASSET = 'bundlesdf_toblerone_mesh.urdf'
 
-DATA_ASSETS = {CUBE_SYSTEM: CUBE_DATA_ASSET, ELBOW_SYSTEM: ELBOW_DATA_ASSET}
+DATA_ASSETS = {CUBE_SYSTEM: CUBE_DATA_ASSET, ELBOW_SYSTEM: ELBOW_DATA_ASSET, BUNDLESDF_PRISM_SYSTEM: PRISM_DATA_ASSET, BUNDLESDF_TOBLERONE_SYSTEM: TOBLERONE_DATA_ASSET}
 
 MESH_TYPE = 'mesh'
 BOX_TYPE = 'box'
 CUBE_URDFS = {MESH_TYPE: CUBE_MESH_URDF_ASSET, BOX_TYPE: CUBE_BOX_URDF_ASSET}
 ELBOW_URDFS = {MESH_TYPE: ELBOW_MESH_URDF_ASSET, BOX_TYPE: ELBOW_BOX_URDF_ASSET}
-URDFS = {CUBE_SYSTEM: CUBE_URDFS, ELBOW_SYSTEM: ELBOW_URDFS}
+PRISM_URDFS = {MESH_TYPE: PRISM_MESH_URDF_ASSET}
+TOBLERONE_URDFS = {MESH_TYPE: TOBLERONE_MESH_URDF_ASSET}
+URDFS = {CUBE_SYSTEM: CUBE_URDFS, ELBOW_SYSTEM: ELBOW_URDFS, BUNDLESDF_PRISM_SYSTEM: PRISM_URDFS, BUNDLESDF_TOBLERONE_SYSTEM: TOBLERONE_URDFS}
 
 STORAGE_NAME = os.path.join(os.path.dirname(__file__), 'storage',
                             CUBE_DATA_ASSET)
@@ -56,7 +64,19 @@ CUBE_X_0 = torch.tensor([
 ])
 ELBOW_X_0 = torch.tensor(
     [1., 0., 0., 0., 0., 0., 0.21 + .015, np.pi, 0., 0., 0., 0., 0., -.075, 0.])
-X_0S = {CUBE_SYSTEM: CUBE_X_0, ELBOW_SYSTEM: ELBOW_X_0}
+# TODO: seems not using this for real experiments
+BOTTLE_X_0 = torch.tensor(
+    [1., 0., 0., 0., 0., 0., 0.21 + .015, 0., 0., 0., 0., 0., -.075])
+NAPKIN_X_0 = torch.tensor(
+    [1., 0., 0., 0., 0., 0., 0.21 + .015, 0., 0., 0., 0., 0., -.075])
+PRISM_X_0 = torch.tensor(
+    [1., 0., 0., 0., 0., 0., 0.21 + .015, 0., 0., 0., 0., 0., -.075])
+TOBLERONE_X_0 = torch.tensor(
+    [1., 0., 0., 0., 0., 0., 0.21 + .015, 0., 0., 0., 0., 0., -.075])
+X_0S = {CUBE_SYSTEM: CUBE_X_0, 
+        ELBOW_SYSTEM: ELBOW_X_0,
+        BUNDLESDF_PRISM_SYSTEM: PRISM_X_0,
+        BUNDLESDF_TOBLERONE_SYSTEM: TOBLERONE_X_0}
 CUBE_SAMPLER_RANGE = 0.1 * torch.ones(CUBE_X_0.nelement() - 1)
 ELBOW_SAMPLER_RANGE = torch.tensor([
     2 * np.pi, 2 * np.pi, 2 * np.pi, .03, .03, .015, np.pi, 6., 6., 6., .5, .5,
@@ -77,20 +97,25 @@ T_PREDICTION = 1
 # Optimization configuration.
 CUBE_LR = 1e-3
 ELBOW_LR = 1e-3
-LRS = {CUBE_SYSTEM: CUBE_LR, ELBOW_SYSTEM: ELBOW_LR}
+PRISM_LR = 1e-3
+TOBLERONE_LR = 1e-3
+LRS = {CUBE_SYSTEM: CUBE_LR, ELBOW_SYSTEM: ELBOW_LR, BUNDLESDF_PRISM_SYSTEM: PRISM_LR, BUNDLESDF_TOBLERONE_SYSTEM: TOBLERONE_LR}
 CUBE_WD = 0.0
 ELBOW_WD = 1e-4
-WDS = {CUBE_SYSTEM: CUBE_WD, ELBOW_SYSTEM: ELBOW_WD}
+PRISM_WD = 0.0
+TOBLERONE_WD = 0.0
+WDS = {CUBE_SYSTEM: CUBE_WD, ELBOW_SYSTEM: ELBOW_WD, BUNDLESDF_PRISM_SYSTEM: PRISM_WD, BUNDLESDF_TOBLERONE_SYSTEM: TOBLERONE_WD}
 EPOCHS = 200 #500
-PATIENCE = 20 #EPOCHS
-BATCH_SIZE = 256
+PATIENCE = 200 #EPOCHS
+# BATCH_SIZE = 256
 
 
 def main(system: str = CUBE_SYSTEM,
          source: str = SIM_SOURCE,
          contactnets: bool = True,
          box: bool = True,
-         regenerate: bool = False):
+         regenerate: bool = False,
+         dataset_size: int = 512):
     """Execute ContactNets basic example on a system.
 
     Args:
@@ -120,7 +145,7 @@ def main(system: str = CUBE_SYSTEM,
     optimizer_config.wd.value = WDS[system]
     optimizer_config.patience = PATIENCE
     optimizer_config.epochs = EPOCHS
-    optimizer_config.batch_size.value = BATCH_SIZE
+    optimizer_config.batch_size.value = int(dataset_size/2)#BATCH_SIZE
 
     # Describes the ground truth system; infers everything from the URDF.
     # This is a configuration for a DrakeSystem, which wraps a Drake
@@ -179,7 +204,8 @@ def main(system: str = CUBE_SYSTEM,
         generation_config=data_generation_config,
         import_directory=import_directory,
         dynamic_updates_from=dynamic_updates_from,
-        t_prediction=1 if contactnets else T_PREDICTION)
+        t_prediction=1 if contactnets else T_PREDICTION,
+        dataset_size=dataset_size)
 
     # Combines everything into config for entire experiment.
     experiment_config = SupervisedLearningExperimentConfig(
@@ -223,12 +249,15 @@ def main(system: str = CUBE_SYSTEM,
 @click.option('--regenerate/--no-regenerate',
               default=False,
               help="whether save updated URDF's each epoch.")
+@click.option('--dataset-size',
+              default=512,
+              help="dataset size")
 def main_command(system: str, source: str, contactnets: bool, box: bool,
-                 regenerate: bool):
+                 regenerate: bool, dataset_size: int):
     """Executes main function with argument interface."""
     if system == ELBOW_SYSTEM and source==REAL_SOURCE:
         raise NotImplementedError('Elbow real-world data not supported!')
-    main(system, source, contactnets, box, regenerate)
+    main(system, source, contactnets, box, regenerate, dataset_size)
 
 
 if __name__ == '__main__':
