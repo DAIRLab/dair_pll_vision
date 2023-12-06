@@ -370,7 +370,6 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         """no scalars!"""
         return {}
 
-   
     #########################################################
     def pretrain_from_bundlesdf(self, sdf_network, num_epochs, learning_rate, lambda_val, sampling_precision, box_region_size):
         """
@@ -410,7 +409,7 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
 
                 total_loss += loss.item()
 
-            print(f"Epoch {epoch+1}/{num_epochs}, Loss: {total_loss/len(directions)}")
+            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss / len(directions)}")
 
     def sample_uniform_directions(self, num_samples):
         """
@@ -457,9 +456,9 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
 
         # Calculate loss
         if self.loss_type == 1:
-            loss = torch.min(plane_sdf_values)**2 + lambda_val * point_sdf_values**2
+            loss = torch.min(plane_sdf_values) ** 2 + lambda_val * point_sdf_values ** 2
         else:  # self.loss_type == 2
-            loss = torch.sum(plane_sdf_values**2) + lambda_val * point_sdf_values**2
+            loss = torch.sum(plane_sdf_values ** 2) + lambda_val * point_sdf_values ** 2
 
         return loss
 
@@ -496,7 +495,6 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         lin = torch.linspace(-box_size / 2, box_size / 2, steps=int(np.sqrt(self.num_samples)))
         grid_x, grid_y = torch.meshgrid(lin, lin)
         grid = dir1.unsqueeze(0).unsqueeze(0) * grid_x.unsqueeze(-1) + dir2.unsqueeze(0).unsqueeze(0) * grid_y.unsqueeze(-1)
-        
         return grid.view(-1, 3)
 
     #########################################################
