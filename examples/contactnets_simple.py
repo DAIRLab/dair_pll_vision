@@ -50,8 +50,6 @@ PRISM_URDFS = {MESH_TYPE: PRISM_MESH_URDF_ASSET}
 TOBLERONE_URDFS = {MESH_TYPE: TOBLERONE_MESH_URDF_ASSET}
 URDFS = {CUBE_SYSTEM: CUBE_URDFS, ELBOW_SYSTEM: ELBOW_URDFS, BUNDLESDF_PRISM_SYSTEM: PRISM_URDFS, BUNDLESDF_TOBLERONE_SYSTEM: TOBLERONE_URDFS}
 
-STORAGE_NAME = os.path.join(os.path.dirname(__file__), 'storage',
-                            CUBE_DATA_ASSET)
 
 # Data configuration.
 DT = 0.0068
@@ -115,7 +113,8 @@ def main(system: str = CUBE_SYSTEM,
          contactnets: bool = True,
          box: bool = True,
          regenerate: bool = False,
-         dataset_size: int = 512):
+         dataset_size: int = 512,
+         pretrained: bool = False):
     """Execute ContactNets basic example on a system.
 
     Args:
@@ -252,12 +251,16 @@ def main(system: str = CUBE_SYSTEM,
 @click.option('--dataset-size',
               default=512,
               help="dataset size")
+@click.option('--pretrained',
+              type=bool,
+              default=False,
+              help='wether or not use the pretrained Homonogeneous ICNN')
 def main_command(system: str, source: str, contactnets: bool, box: bool,
-                 regenerate: bool, dataset_size: int):
+                 regenerate: bool, dataset_size: int, pretrained: bool):
     """Executes main function with argument interface."""
     if system == ELBOW_SYSTEM and source==REAL_SOURCE:
         raise NotImplementedError('Elbow real-world data not supported!')
-    main(system, source, contactnets, box, regenerate, dataset_size)
+    main(system, source, contactnets, box, regenerate, dataset_size, pretrained)
 
 
 if __name__ == '__main__':

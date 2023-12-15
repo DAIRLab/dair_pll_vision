@@ -519,6 +519,7 @@ class MultibodyTerms(Module):
     geometry_body_assignment: Dict[str, List[int]]
     plant_diagram: MultibodyPlantDiagram
     urdfs: Dict[str, str]
+    pretrained: bool
 
     def scalars_and_meshes(
             self) -> Tuple[Dict[str, float], Dict[str, MeshSummary]]:
@@ -548,6 +549,8 @@ class MultibodyTerms(Module):
                     self.contact_terms.friction_coefficients[
                         geometry_index].item()
                 if isinstance(geometry, DeepSupportConvex):
+                    if self.pretrained:
+                        geometry.load_weights('ICNN_weights.pth')
                     geometry_mesh = extract_mesh(geometry.network)
                     meshes[body_id] = geometry_mesh
                     vertices = geometry_mesh.vertices
@@ -562,6 +565,7 @@ class MultibodyTerms(Module):
                         f'{body_id}_center_{axis}': value.item()
                         for axis, value in zip(['x', 'y', 'z'], center)
                     })
+                    geometry.save_weights('ICNN_weights.pth')
 
         return scalars, meshes
 
@@ -591,7 +595,7 @@ class MultibodyTerms(Module):
         delassus = pbmm(J, torch.linalg.solve(M, J.transpose(-1, -2)))
         return delassus, M, J, phi, non_contact_acceleration
 
-    def __init__(self, urdfs: Dict[str, str]) -> None:
+    def __init__(self, urdfs: Dict[str, str], pretrained: bool) -> None:
         """Inits ``MultibodyTerms`` for system described in URDFs
 
         Interpretation is performed as a thin wrapper around ``LagrangianTerms``
@@ -637,3 +641,4 @@ class MultibodyTerms(Module):
         self.geometry_body_assignment = geometry_body_assignment
         self.plant_diagram = plant_diagram
         self.urdfs = urdfs
+        self.pretrained = pretrained

@@ -49,7 +49,7 @@ class MultibodyLearnableSystem(System):
     solver: SAPSolver
     dt: float
 
-    def __init__(self, urdfs: Dict[str, str], dt: float) -> None:
+    def __init__(self, urdfs: Dict[str, str], dt: float, pretrained: bool = False) -> None:
         """Inits ``MultibodyLearnableSystem`` with provided model URDFs.
 
         Implementation is primarily based on Drake. Bodies are modeled via
@@ -62,7 +62,7 @@ class MultibodyLearnableSystem(System):
             ``MultibodyTerms``.
             dt: Time step of system in seconds.
         """
-        multibody_terms = MultibodyTerms(urdfs)
+        multibody_terms = MultibodyTerms(urdfs, pretrained=pretrained)
         space = multibody_terms.plant_diagram.space
         integrator = VelocityIntegrator(space, self.sim_step, dt)
         super().__init__(space, integrator)
@@ -198,12 +198,13 @@ class MultibodyLearnableSystem(System):
         # Keep only normal forces
         threshold = 1e3
         normal_forces = force[:, :n_contacts]
-        file_path = './normal_forces.npy'
-        import os
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        system = list(self.urdfs.keys())[0]
+        file_path = f'./normal_forces_{system}.npy'
+        # import os
+        # if os.path.exists(file_path):
+        #     os.remove(file_path)
         np.save(file_path, normal_forces.detach().numpy())
-        
+
         loss = 0.5 * pbmm(force.transpose(-1, -2), pbmm(Q, force)) + pbmm(
             force.transpose(-1, -2), q) + constant
 
