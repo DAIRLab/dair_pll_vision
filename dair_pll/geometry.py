@@ -691,11 +691,28 @@ class GeometryCollider:
         # axis of A points out of the plane.
         # pylint: disable=E1103
         R_AC = torch.eye(3).expand(p_AoAc_A.shape + (3,))
-        # import os
-        file_path = f"./contact_points_cube.npy"
-        # if os.path.exists(file_path):
-        #     os.remove(file_path)
-        np.save(file_path, p_BoBc_B.detach().numpy())
+        
+        import os
+        import re
+        def get_max_number_from_filenames(pattern, directory='./samples'):
+            max_number = -1
+            for filename in os.listdir(directory):
+                match = re.match(pattern, filename)
+                if match:
+                    number = int(match.group(1))
+                    max_number = max(max_number, number)
+            return max_number
+        pattern = r'contact_points_(\d+)\.npy'
+        max_number = get_max_number_from_filenames(pattern)
+        if max_number == -1:
+            new_number = 1
+        else:
+            new_number = max_number + 1
+        new_filename = f"contact_points_{new_number}.npy"
+
+        file_path = f"./samples/{new_filename}"
+        if p_BoBc_B.shape[0] >= 256:
+            np.save(file_path, p_BoBc_B.detach().numpy())
         return phi, R_AC, p_AoAc_A, p_BoBc_B
 
     @staticmethod

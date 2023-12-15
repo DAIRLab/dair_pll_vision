@@ -10,9 +10,12 @@ def load_normal_forces():
     Normal forces has shape (N, batch_size, 1)
     """
     curr_dir = os.path.dirname(os.path.abspath(__file__))
-    relative_path = "../normal_forces.npy"
+    relative_path = "../normal_forces_cube.npy"
     file_path = os.path.join(curr_dir, relative_path)
     normal_forces_array = np.load(file_path)
+    if normal_forces_array.shape[0]>=256:
+        np.save('normal_forces_save.npy', normal_forces_array)
+        print('Saved normal forces')
     print(normal_forces_array.shape)
 
 def load_contact_points(path):
@@ -20,10 +23,13 @@ def load_contact_points(path):
     Contact points has shape (N, batch_size, 3)
     """
     curr_dir = os.path.dirname(os.path.abspath(__file__))
-    relative_path = f"../{path}"
+    relative_path = "../contact_points_cube.npy"
     file_path = os.path.join(curr_dir, relative_path)
     contact_points_array = np.load(file_path)
-    print(contact_points_array)
+    if contact_points_array.shape[0]>=256:
+        np.save('contact_pts_save.npy', contact_points_array)
+        print('Saved contact points')
+    print(contact_points_array.shape)
 
 def load_pretrained_weights():
     state_dict = torch.load('ICNN_weights.pth')
