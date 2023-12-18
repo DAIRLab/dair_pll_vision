@@ -550,7 +550,9 @@ class MultibodyTerms(Module):
                         geometry_index].item()
                 if isinstance(geometry, DeepSupportConvex):
                     if self.pretrained:
-                        geometry.load_weights('ICNN_weights.pth')
+                        path = 'icnn_weight.pth'
+                        print(f'Loading pretrained ICNN weight from {path}')
+                        geometry.load_weights(path)
                     geometry_mesh = extract_mesh(geometry.network)
                     meshes[body_id] = geometry_mesh
                     vertices = geometry_mesh.vertices
@@ -565,7 +567,7 @@ class MultibodyTerms(Module):
                         f'{body_id}_center_{axis}': value.item()
                         for axis, value in zip(['x', 'y', 'z'], center)
                     })
-                    geometry.save_weights('ICNN_weights.pth')
+                    geometry.save_weights('icnn_weight_trained.pth')
 
         return scalars, meshes
 

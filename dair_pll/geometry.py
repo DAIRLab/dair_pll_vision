@@ -369,6 +369,13 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
     def scalars(self) -> Dict[str, float]:
         """no scalars!"""
         return {}
+    
+    def save_weights(self, file_path: str) -> None:
+        torch.save(self.network.state_dict(), file_path)
+    
+    def load_weights(self, file_path: str) -> None:
+        self.network.load_state_dict(torch.load(file_path))
+        self.network.train()
 
     #########################################################
     def pretrain_from_bundlesdf(self, sdf_network, num_epochs, learning_rate, lambda_val, sampling_precision, box_region_size):
@@ -692,27 +699,27 @@ class GeometryCollider:
         # pylint: disable=E1103
         R_AC = torch.eye(3).expand(p_AoAc_A.shape + (3,))
         
-        import os
-        import re
-        def get_max_number_from_filenames(pattern, directory='./samples'):
-            max_number = -1
-            for filename in os.listdir(directory):
-                match = re.match(pattern, filename)
-                if match:
-                    number = int(match.group(1))
-                    max_number = max(max_number, number)
-            return max_number
-        pattern = r'contact_points_(\d+)\.npy'
-        max_number = get_max_number_from_filenames(pattern)
-        if max_number == -1:
-            new_number = 1
-        else:
-            new_number = max_number + 1
-        new_filename = f"contact_points_{new_number}.npy"
+        # import os
+        # import re
+        # def get_max_number_from_filenames(pattern, directory='./samples'):
+        #     max_number = -1
+        #     for filename in os.listdir(directory):
+        #         match = re.match(pattern, filename)
+        #         if match:
+        #             number = int(match.group(1))
+        #             max_number = max(max_number, number)
+        #     return max_number
+        # pattern = r'contact_points_(\d+)\.npy'
+        # max_number = get_max_number_from_filenames(pattern)
+        # if max_number == -1:
+        #     new_number = 1
+        # else:
+        #     new_number = max_number + 1
+        # new_filename = f"contact_points_{new_number}.npy"
 
-        file_path = f"./samples/{new_filename}"
-        if p_BoBc_B.shape[0] >= 256:
-            np.save(file_path, p_BoBc_B.detach().numpy())
+        # file_path = f"./samples/{new_filename}"
+        # if p_BoBc_B.shape[0] >= 256:
+        #     np.save(file_path, p_BoBc_B.detach().numpy())
         return phi, R_AC, p_AoAc_A, p_BoBc_B
 
     @staticmethod

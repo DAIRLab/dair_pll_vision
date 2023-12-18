@@ -30,6 +30,8 @@ class MultibodyLosses(Enum):
 class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     loss: MultibodyLosses = MultibodyLosses.PREDICTION_LOSS
     """Whether to use ContactNets or prediction loss."""
+    pretrained: bool = False
+    """Whether use the pretrained ICNN weights."""
 
 
 class DrakeExperiment(SupervisedLearningExperiment):

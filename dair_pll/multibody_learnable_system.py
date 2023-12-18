@@ -196,30 +196,30 @@ class MultibodyLearnableSystem(System):
         force[invalid.expand(force.shape)] = 0.
 
         # Keep only normal forces
-        import os
-        import re
-        def get_max_number_from_filenames(pattern, directory='./samples'):
-            max_number = -1
-            for filename in os.listdir(directory):
-                match = re.match(pattern, filename)
-                if match:
-                    number = int(match.group(1))
-                    max_number = max(max_number, number)
-            return max_number
-        pattern = r'normal_forces_(\d+)\.npy'
-        max_number = get_max_number_from_filenames(pattern)
-        if max_number == -1:
-            new_number = 1
-        else:
-            new_number = max_number + 1
-        new_filename = f"normal_forces_{new_number}.npy"
+        # import os
+        # import re
+        # def get_max_number_from_filenames(pattern, directory='./samples'):
+        #     max_number = -1
+        #     for filename in os.listdir(directory):
+        #         match = re.match(pattern, filename)
+        #         if match:
+        #             number = int(match.group(1))
+        #             max_number = max(max_number, number)
+        #     return max_number
+        # pattern = r'normal_forces_(\d+)\.npy'
+        # max_number = get_max_number_from_filenames(pattern)
+        # if max_number == -1:
+        #     new_number = 1
+        # else:
+        #     new_number = max_number + 1
+        # new_filename = f"normal_forces_{new_number}.npy"
 
-        threshold = 1e3
-        normal_forces = force[:, :n_contacts]
-        system = list(self.urdfs.keys())[0]
-        file_path = f'./samples/{new_filename}'
-        if normal_forces.detach().numpy().shape[0] >=256:
-            np.save(file_path, normal_forces.detach().numpy())
+        # threshold = 1e3
+        # normal_forces = force[:, :n_contacts]
+        # system = list(self.urdfs.keys())[0]
+        # file_path = f'./samples/{new_filename}'
+        # if normal_forces.detach().numpy().shape[0] >=256:
+        #     np.save(file_path, normal_forces.detach().numpy())
 
         loss = 0.5 * pbmm(force.transpose(-1, -2), pbmm(Q, force)) + pbmm(
             force.transpose(-1, -2), q) + constant

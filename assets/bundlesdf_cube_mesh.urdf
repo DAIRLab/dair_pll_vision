@@ -15,7 +15,7 @@
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0" />
             <geometry>
-                <mesh filename="contactnets_cube.obj"/>
+                <mesh filename="post_processed_mesh_icnn.obj"/>
             </geometry>
             <material name="pennred">
                 <color rgba="0.6 0 0 1.0" />
@@ -23,7 +23,7 @@
         </visual>
         <collision>
             <geometry>
-                <mesh filename="contactnets_cube.obj"/>
+                <mesh filename="post_processed_mesh_icnn.obj"/>
             </geometry>
             <origin xyz="0 0 0" rpy="0 0 0" />
             <drake:proximity_properties>

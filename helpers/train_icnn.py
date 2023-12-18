@@ -136,11 +136,13 @@ def pretrain_icnn(path, gt_dirs, gt_pts):
         print(f"Epoch {epoch + 1}/{EPOCHS}, Loss: {total_loss / len(gt_dirs)}")
     
     network.load_state_dict(best_state)
-
-    mesh_name = "test.obj"
+    filename = path.split('/')[-1]
+    filename = filename.split('.')[0]
+    mesh_name = f"{filename}_icnn.obj"
     mesh_path = os.path.join(OUTPUT_DIR, mesh_name)
     with open(mesh_path, 'w', encoding="utf8") as new_obj_file:
         new_obj_file.write(extract_obj(network))
+    torch.save(best_state, f'icnn_weight.pth')
 
 def visualize_dirs_and_pts(directions, support_points):
     fig = plt.figure(figsize=(8, 8))
@@ -177,7 +179,8 @@ def plot_points(support_points):
     plt.show()
 
 if __name__ == '__main__':
-    path = './assets/mesh_cn_run_and_refined_convex_hull_with_normals.obj'
+    # path = './assets/mesh_cn_run_and_refined_convex_hull_with_normals.obj'
+    path = '/home/cnets-vision/mengti_ws/BundleSDF/results/cube_2/post_processed_mesh.obj'
     directions, pts = sample_directions_and_support_points(path, num_samples=NUM_SAMPLES)
     # print(directions.size(), pts.size())
     # visualize_dirs_and_pts(directions, pts)

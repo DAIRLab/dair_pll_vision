@@ -130,6 +130,10 @@ def main(system: str = CUBE_SYSTEM,
         regenerate: Whether save updated URDF's each epoch.
     """
     # pylint: disable=too-many-locals
+    print(f'\n\tPerforming on system: {system} \n\twith source: {source}' \
+         + f'\n\tusing ContactNets: {contactnets}' \
+         + f'\n\tregenerate: {regenerate}' \
+         + f'\n\twith pretrained ICNN: {pretrained}')
 
     # First step, clear out data on disk for a fresh start.
     simulation = source == SIM_SOURCE
@@ -166,7 +170,7 @@ def main(system: str = CUBE_SYSTEM,
     loss = MultibodyLosses.CONTACTNETS_LOSS \
         if contactnets else \
         MultibodyLosses.PREDICTION_LOSS
-    learnable_config = MultibodyLearnableSystemConfig(urdfs=urdfs, loss=loss)
+    learnable_config = MultibodyLearnableSystemConfig(urdfs=urdfs, loss=loss, pretrained=pretrained)
 
     # Describe data source
     data_generation_config = None
