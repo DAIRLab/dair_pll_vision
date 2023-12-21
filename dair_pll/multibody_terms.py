@@ -149,9 +149,10 @@ class LagrangianTerms(Module):
             body_variables,
             simplify_computation=DEFAULT_SIMPLIFIER)
 
+        # NOTE:  Manually turned off inertia learning by setting requires_grad=False
         # pylint: disable=E1103
         self.inertial_parameters = Parameter(body_parameters,
-                                             requires_grad=True)
+                                             requires_grad=False)
 
     # noinspection PyUnresolvedReferences
     @staticmethod
