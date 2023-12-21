@@ -373,9 +373,6 @@ class SupervisedLearningExperiment(ABC):
             learned_system: System being trained.
             statistics: Summary statistics for learning process.
         """
-
-        print(f'{epoch=}, {learned_system.multibody_terms.lagrangian_terms.inertial_parameters=}')
-
         # begin recording wall-clock logging time.
         assert self.tensorboard_manager is not None
         start_log_time = time.time()
