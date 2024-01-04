@@ -31,8 +31,8 @@ def load_contact_points(path):
         print('Saved contact points')
     print(contact_points_array.shape)
 
-def load_pretrained_weights():
-    state_dict = torch.load('ICNN_weights.pth')
+def load_pretrained_weights(path):
+    state_dict = torch.load(path)
 
     for layer_name, weights in state_dict.items():
         print(f"Layer: {layer_name}")

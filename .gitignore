@@ -153,6 +153,5 @@ dmypy.json
 .pyre/
 /docsrc/source/index.rst
 
-*.pth
 *.npy
 *.png

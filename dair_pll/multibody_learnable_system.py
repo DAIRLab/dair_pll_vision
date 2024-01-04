@@ -49,7 +49,7 @@ class MultibodyLearnableSystem(System):
     solver: SAPSolver
     dt: float
 
-    def __init__(self, urdfs: Dict[str, str], dt: float, pretrained: bool = False) -> None:
+    def __init__(self, urdfs: Dict[str, str], dt: float, pretrained: str = None) -> None:
         """Inits ``MultibodyLearnableSystem`` with provided model URDFs.
 
         Implementation is primarily based on Drake. Bodies are modeled via

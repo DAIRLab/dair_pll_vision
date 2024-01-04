@@ -119,7 +119,7 @@ def main(system: str = CUBE_SYSTEM,
          box: bool = True,
          regenerate: bool = False,
          dataset_size: int = 512,
-         pretrained: bool = False):
+         pretrained: str = None):
     """Execute ContactNets basic example on a system.
 
     Args:
@@ -261,11 +261,11 @@ def main(system: str = CUBE_SYSTEM,
               default=512,
               help="dataset size")
 @click.option('--pretrained',
-              type=bool,
-              default=False,
-              help='wether or not use the pretrained Homonogeneous ICNN')
+              type=str,
+              default=None,
+              help='pretrained weight of Homonogeneous ICNN')
 def main_command(system: str, source: str, contactnets: bool, box: bool,
-                 regenerate: bool, dataset_size: int, pretrained: bool):
+                 regenerate: bool, dataset_size: int, pretrained: str):
     """Executes main function with argument interface."""
     if system == ELBOW_SYSTEM and source==REAL_SOURCE:
         raise NotImplementedError('Elbow real-world data not supported!')
