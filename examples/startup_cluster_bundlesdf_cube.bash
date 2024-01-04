@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --gpus=0
-#SBATCH --mem-per-cpu=32G
+#SBATCH --mem-per-cpu=64G
 ##SBATCH --partition=posa-compute
 #SBATCH --cpus-per-task=8
-#SBATCH --qos=mp-med
+##SBATCH --qos=mp-med
 #SBATCH --time=12:00:00
 #SBATCH --job-name='pll'
 

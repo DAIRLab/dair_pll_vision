@@ -10,6 +10,7 @@ import torch.optim as optim
 import os
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+import argparse
 
 _DEEP_SUPPORT_DEFAULT_DEPTH = 2
 _DEEP_SUPPORT_DEFAULT_WIDTH = 256
@@ -142,7 +143,7 @@ def pretrain_icnn(path, gt_dirs, gt_pts):
     mesh_path = os.path.join(OUTPUT_DIR, mesh_name)
     with open(mesh_path, 'w', encoding="utf8") as new_obj_file:
         new_obj_file.write(extract_obj(network))
-    torch.save(best_state, f'icnn_weight.pth')
+    torch.save(best_state, f'icnn_weight_try.pth')
 
 def visualize_dirs_and_pts(directions, support_points):
     fig = plt.figure(figsize=(8, 8))
@@ -179,8 +180,22 @@ def plot_points(support_points):
     plt.show()
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--toss_id",
+        type=int,
+        required=True,
+    )
+    parser.add_argument(
+        "--type",
+        type=str,
+        required=True
+    )
+    args = parser.parse_args()
+    toss_type = args.type
+    toss_id = args.toss_id
     # path = './assets/mesh_cn_run_and_refined_convex_hull_with_normals.obj'
-    path = '/home/cnets-vision/mengti_ws/BundleSDF/results/cube_2/post_processed_mesh.obj'
+    path = f'textured_mesh_{toss_type}_{toss_id}.obj'
     directions, pts = sample_directions_and_support_points(path, num_samples=NUM_SAMPLES)
     # print(directions.size(), pts.size())
     # visualize_dirs_and_pts(directions, pts)
