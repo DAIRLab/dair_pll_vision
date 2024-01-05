@@ -212,14 +212,13 @@ class MultibodyLearnableSystem(System):
         #     new_number = 1
         # else:
         #     new_number = max_number + 1
-        # new_filename = f"normal_forces_{new_number}.npy"
-
-        # threshold = 1e3
-        # normal_forces = force[:, :n_contacts]
-        # system = list(self.urdfs.keys())[0]
-        # file_path = f'./samples/{new_filename}'
-        # if normal_forces.detach().numpy().shape[0] >=256:
-        #     np.save(file_path, normal_forces.detach().numpy())
+        filename = f"normal_forces.npy"
+        threshold = 1e3
+        normal_forces = force[:, :n_contacts]
+        system = list(self.urdfs.keys())[0]
+        file_path = f'./samples/{filename}'
+        if normal_forces.detach().numpy().shape[0] >=256:
+            np.save(file_path, normal_forces.detach().numpy())
 
         loss = 0.5 * pbmm(force.transpose(-1, -2), pbmm(Q, force)) + pbmm(
             force.transpose(-1, -2), q) + constant

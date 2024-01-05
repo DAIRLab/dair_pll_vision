@@ -586,11 +586,10 @@ class GeometryCollider:
         #     new_number = 1
         # else:
         #     new_number = max_number + 1
-        # new_filename = f"contact_points_{new_number}.npy"
-
-        # file_path = f"./samples/{new_filename}"
-        # if p_BoBc_B.shape[0] >= 256:
-        #     np.save(file_path, p_BoBc_B.detach().numpy())
+        filename = f"contact_points.npy"
+        file_path = f"./samples/{filename}"
+        if p_BoBc_B.shape[0] >= 256:
+            np.save(file_path, p_BoBc_B.detach().numpy())
         return phi, R_AC, p_AoAc_A, p_BoBc_B
 
     @staticmethod
