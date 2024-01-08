@@ -557,6 +557,7 @@ class MultibodyTerms(Module):
                     self.contact_terms.friction_coefficients[
                         geometry_index].item()
                 if isinstance(geometry, DeepSupportConvex):
+                    print('>>>>>>>>>>>>', self.pretrained)
                     if self.pretrained!=None:
                         print(f'Loading pretrained ICNN weight from {self.pretrained}')
                         geometry.load_weights(self.pretrained)
@@ -575,9 +576,10 @@ class MultibodyTerms(Module):
                         for axis, value in zip(['x', 'y', 'z'], center)
                     })
                     if self.pretrained!=None:
-                        path = self.pretrained.split('.')[0]
-                        geometry.save_weights(f'{path}_trained.pth')
+                        print(f'Saving trained weight to {self.pretrained}')
+                        geometry.save_weights(self.pretrained)
                     else:
+                        print(f'Saving trained weight to icnn_weight_trained.pth')
                         geometry.save_weights(f'icnn_weight_trained.pth')
 
         return scalars, meshes

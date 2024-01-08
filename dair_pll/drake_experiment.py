@@ -69,7 +69,7 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
         learnable_config = cast(MultibodyLearnableSystemConfig,
                                 self.config.learnable_config)
         return MultibodyLearnableSystem(learnable_config.urdfs,
-                                        self.config.data_config.dt)
+                                        self.config.data_config.dt, learnable_config.pretrained)
 
     def contactnets_loss(self,
                          x_past: Tensor,
