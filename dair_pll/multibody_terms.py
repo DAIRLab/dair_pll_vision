@@ -423,6 +423,10 @@ class ContactTerms(Module):
         phi(q) and J(q) are calculated implicitly from kinematics and collision
         geometries.
 
+        Note: Changes made on 1/8/2024 to return contact point locations in addition
+        to phi and J will only work for single geometry/geometry pairs, e.g. ground
+        and one object experiments.
+
         Args:
             q: (*, n_q) configuration batch.
             indices that can collide.
@@ -506,7 +510,10 @@ class ContactTerms(Module):
         J = ContactTerms.relative_velocity_to_contact_jacobian(
             torch.cat(Jv_v_W_BcAc_F, dim=-3), mu_repeated)
 
-        return phi, J
+        # Note:  p_BiBc_B works because the for loop over geometry/geometry pairs
+        # only runs once for our experiments, but this assumption may not hold for
+        # other use cases.
+        return phi, J, p_BiBc_B
 
 
 class MultibodyTerms(Module):
@@ -596,10 +603,10 @@ class MultibodyTerms(Module):
             (*, n_v) Contact-free acceleration inv(M(q)) * F(q).
         """
         M, non_contact_acceleration = self.lagrangian_terms(q, v, u)
-        phi, J = self.contact_terms(q)
+        phi, J, p_BiBc_B = self.contact_terms(q)
 
         delassus = pbmm(J, torch.linalg.solve(M, J.transpose(-1, -2)))
-        return delassus, M, J, phi, non_contact_acceleration
+        return delassus, M, J, phi, non_contact_acceleration, p_BiBc_B
 
     def __init__(self, urdfs: Dict[str, str], pretrained: str) -> None:
         """Inits ``MultibodyTerms`` for system described in URDFs

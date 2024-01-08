@@ -26,7 +26,7 @@ from dair_pll.hyperparameter import Float, Int
 from dair_pll.state_space import StateSpace
 from dair_pll.system import System
 from dair_pll.tensorboard_manager import TensorboardManager
-
+from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 TRAIN_SET = 'train'
 VALID_SET = 'valid'
 TEST_SET = 'test'
@@ -705,3 +705,16 @@ class SupervisedLearningExperiment(ABC):
             LEARNED_SYSTEM_NAME: learned_system
         }
         return self.evaluate_systems_on_sets(systems, sets)
+    
+    def generate_bundlesdf_data(self, learned_system: System) -> Tuple[Tensor, Tensor]:
+        assert isinstance(learned_system, MultibodyLearnableSystem)
+        training_set = self.data_manager.get_trajectory_split()[0]
+        slices_loader = DataLoader(training_set.slices,
+                                    batch_size=128,
+                                    shuffle=False)
+        points, directions = torch.zeros((0,3)), torch.zeros((0,3))
+        for batch_x, batch_y in slices_loader:
+            points_i, directions_i = learned_system.bundlesdf_data_generation_from_cnets(batch_x,batch_y,learned_system)
+            points = torch.cat((points, points_i),dim=0)
+            directions = torch.cat((directions,directions_i),dim=0)
+        return points, directions

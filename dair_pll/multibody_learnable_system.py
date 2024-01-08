@@ -23,6 +23,7 @@ Robotic Learning, 2020, https://proceedings.mlr.press/v155/pfrommer21a.html
 from multiprocessing import pool
 from os import path
 from typing import Tuple, Optional, Dict, cast
+from scipy.spatial.transform import Rotation as R
 
 import numpy as np
 import torch
@@ -39,7 +40,7 @@ from dair_pll.multibody_terms import MultibodyTerms
 from dair_pll.system import System, \
     SystemSummary
 from dair_pll.tensor_utils import pbmm, broadcast_lorentz
-
+from dair_pll import quaternion
 
 class MultibodyLearnableSystem(System):
     """``System`` interface for dynamics associated with ``MultibodyTerms``."""
@@ -129,7 +130,7 @@ class MultibodyLearnableSystem(System):
         dt = self.dt
         eps = 1e-3
 
-        delassus, M, J, phi, non_contact_acceleration = self.multibody_terms(
+        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B = self.multibody_terms(
             q_plus, v_plus, u)
 
         n_contacts = phi.shape[-1]
@@ -289,7 +290,7 @@ class MultibodyLearnableSystem(System):
         # pylint: disable=too-many-locals
         dt = self.dt
         eps = 1e6
-        delassus, M, J, phi, non_contact_acceleration = self.multibody_terms(
+        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B = self.multibody_terms(
             q, v, u)
         n_contacts = phi.shape[-1]
         contact_filter = (broadcast_lorentz(phi) <= eps).unsqueeze(-1)
@@ -361,3 +362,103 @@ class MultibodyLearnableSystem(System):
         videos = cast(Dict[str, Tuple[np.ndarray, int]], {})
 
         return SystemSummary(scalars=scalars, videos=videos, meshes=meshes)
+    
+    def bundlesdf_data_generation_from_cnets(self,
+                         x: Tensor,
+                         u: Tensor,
+                         x_plus: Tensor,
+                         loss_pool: Optional[pool.Pool] = None):
+        
+        # pylint: disable-msg=too-many-locals
+        v = self.space.v(x)
+        q_plus, v_plus = self.space.q_v(x_plus)
+        dt = self.dt
+        eps = 1e-3
+
+        delassus, M, J, phi, non_contact_acceleration, p_BiBc_B = self.multibody_terms(
+            q_plus, v_plus, u)
+
+        n_contacts = phi.shape[-1]
+        n = n_contacts * 3
+        reorder_mat = torch.zeros((n, n))
+        for i in range(n_contacts):
+            reorder_mat[i][3 * i + 2] = 1
+            reorder_mat[n_contacts + 2 * i][3 * i] = 1
+            reorder_mat[n_contacts + 2 * i + 1][3 * i + 1] = 1
+        reorder_mat = reorder_mat.reshape(
+            (1,) * (delassus.dim() -2) + reorder_mat.shape).expand(
+                delassus.shape)
+        J_t = J[..., n_contacts:, :]
+
+        # pylint: disable=E1103
+        double_zero_vector = torch.zeros(phi.shape[:-1] + (2 * n_contacts,))
+        phi_then_zero = torch.cat((phi, double_zero_vector), dim=-1)
+
+        # pylint: disable=E1103
+        sliding_velocities = pbmm(J_t, v_plus.unsqueeze(-1))
+        sliding_speeds = sliding_velocities.reshape(phi.shape[:-1] +
+                                                    (n_contacts, 2)).norm(
+                                                        dim=-1, keepdim=True)
+
+        L = torch.linalg.cholesky(torch.inverse((M)))
+        Q = delassus + eps * torch.eye(3 * n_contacts)
+        J_bar = pbmm(reorder_mat.transpose(-1,-2),pbmm(J,L))
+
+        dv = (v_plus - (v + non_contact_acceleration * dt)).unsqueeze(-2)
+
+        q_pred = -pbmm(J, dv.transpose(-1, -2))
+        q_comp = torch.abs(phi_then_zero).unsqueeze(-1)
+        q_diss = dt * torch.cat((sliding_speeds, sliding_velocities), dim=-2)
+        q = q_pred + q_comp + q_diss
+
+
+        penetration_penalty = (torch.maximum(
+            -phi, torch.zeros_like(phi))**2).sum(dim=-1)
+
+        penetration_penalty = penetration_penalty.reshape(
+            penetration_penalty.shape + (1, 1)) * 100.
+
+        constant = 0.5 * pbmm(dv, pbmm(M, dv.transpose(
+            -1, -2))) + penetration_penalty
+
+        # Envelope theorem guarantees that gradient of loss w.r.t. parameters
+        # can ignore the gradient of the force w.r.t. the QCQP parameters.
+        # Therefore, we can detach ``force`` from pytorch's computation graph
+        # without causing error in the overall loss gradient.
+        # pylint: disable=E1103
+        #force = self.solver.apply(Q, q, torch.rand(q.shape), 1e-7, 1000, 1e-7,
+        #                          loss_pool).detach()
+        force = pbmm(reorder_mat,
+                     self.solver.apply(J_bar, pbmm(reorder_mat.transpose(-1,-2),
+                         q).squeeze(-1),
+                     eps).detach().unsqueeze(-1))
+
+        # Hack: remove elements of ``force`` where solver likely failed.
+        invalid = torch.any((force.abs() > 1e3) | force.isnan() | force.isinf(),
+                            dim=-2,
+                            keepdim=True)
+
+        constant[invalid] *= 0.
+        force[invalid.expand(force.shape)] = 0.
+
+        # Get the normal forces
+        normal_forces = force[:, :n_contacts].reshape(-1,n_contacts)
+        orientation = q_plus[:, 3:]
+        orientation_b = self.ground_orientation_in_body_frame(orientation)
+        
+        # Get the contact points that correspond to high normal forces
+        points, directions = torch.zeros((0,3)), torch.zeros((0,3))
+        thres = 0.1
+        for force_i, points_i, orientation_i in zip(normal_forces, p_BiBc_B, orientation_b):
+            mask = force_i>thres
+            support_points = points_i[mask]
+            support_function = orientation_i[mask]
+            points = torch.cat((points, support_points),dim=0)
+            directions = torch.cat((directions, support_function),dim=0)
+        return points, directions
+    
+    def ground_orientation_in_body_frame(self, object_orientation):
+        """
+        Convert ground orientation from world frame to object's body frame.
+        """
+        return quaternion.rotate(quaternion.inverse(object_orientation), torch.tensor([0,0,-1]))

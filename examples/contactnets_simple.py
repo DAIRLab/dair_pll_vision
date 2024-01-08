@@ -108,7 +108,7 @@ ELBOW_WD = 1e-4
 PRISM_WD = 0.0
 TOBLERONE_WD = 0.0
 WDS = {CUBE_SYSTEM: CUBE_WD, ELBOW_SYSTEM: ELBOW_WD, BUNDLESDF_CUBE_SYSTEM: CUBE_WD, BUNDLESDF_PRISM_SYSTEM: PRISM_WD, BUNDLESDF_TOBLERONE_SYSTEM: TOBLERONE_WD}
-EPOCHS = 500
+EPOCHS = 10 #500
 PATIENCE = EPOCHS
 # BATCH_SIZE = 256
 
@@ -236,10 +236,13 @@ def main(system: str = CUBE_SYSTEM,
         learned_system.generate_updated_urdfs(storage_name)
 
     # Trains system.
-    experiment.train(
+    _,_,learned_system = experiment.train(
         regenerate_callback if regenerate else default_epoch_callback
     )
-
+    print(f'Saving points and directions...')
+    points, directions = experiment.generate_bundlesdf_data(learned_system)
+    torch.save(f'./points.pt', points)
+    torch.save(f'./directions.pt', directions)
 
 @click.command()
 @click.option('--system',
