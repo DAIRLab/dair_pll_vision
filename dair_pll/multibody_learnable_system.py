@@ -445,6 +445,14 @@ class MultibodyLearnableSystem(System):
         # orientation_b = self.ground_orientation_in_body_frame(orientation)
         
         # Get the contact points that correspond to high normal forces
+        def ground_orientation_in_body_frame(object_orientation, n_lambda):
+            """
+            Convert ground orientation from world frame to object's body frame.
+            """
+            n_hat = torch.tensor([.0,.0,-1.0])
+            n_hat_repeated = torch.tile(n_hat.unsqueeze(0), (n_lambda,1))
+            return quaternion.rotate(quaternion.inverse(object_orientation), n_hat_repeated)
+        
         points, directions = torch.zeros((0,3)), torch.zeros((0,3))
         thres = 0.1
         n_lambda = normal_forces.shape[1]
@@ -452,16 +460,9 @@ class MultibodyLearnableSystem(System):
         for force_i, points_i, orientation_i in zip(normal_forces, p_BiBc_B, orientation):
             mask = force_i>thres
             support_points = points_i[mask]
-            orientation_i = self.ground_orientation_in_body_frame(orientation_i, n_lambda)
+            orientation_i = ground_orientation_in_body_frame(orientation_i, n_lambda)
             support_function = orientation_i[mask]
             points = torch.cat((points, support_points),dim=0)
             directions = torch.cat((directions, support_function),dim=0)
         return points, directions
     
-    def ground_orientation_in_body_frame(self, object_orientation, n_lambda):
-        """
-        Convert ground orientation from world frame to object's body frame.
-        """
-        n_hat = torch.tensor([.0,.0,-1.0])
-        n_hat_repeated = torch.tile(n_hat.unsqueeze(0), (n_lambda,1))
-        return quaternion.rotate(quaternion.inverse(object_orientation), n_hat_repeated)
