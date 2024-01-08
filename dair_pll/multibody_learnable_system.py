@@ -33,8 +33,6 @@ from torch import Tensor
 from dair_pll import file_utils
 from dair_pll import urdf_utils
 from dair_pll.drake_system import DrakeSystem
-from dair_pll.experiment import LEARNED_SYSTEM_NAME, \
-    PREDICTION_NAME, TARGET_NAME
 from dair_pll.integrator import VelocityIntegrator
 from dair_pll.multibody_terms import MultibodyTerms
 from dair_pll.system import System, \
@@ -443,22 +441,27 @@ class MultibodyLearnableSystem(System):
 
         # Get the normal forces
         normal_forces = force[:, :n_contacts].reshape(-1,n_contacts)
-        orientation = q_plus[:, 3:]
-        orientation_b = self.ground_orientation_in_body_frame(orientation)
+        orientation = q_plus[..., :4]
+        # orientation_b = self.ground_orientation_in_body_frame(orientation)
         
         # Get the contact points that correspond to high normal forces
         points, directions = torch.zeros((0,3)), torch.zeros((0,3))
         thres = 0.1
-        for force_i, points_i, orientation_i in zip(normal_forces, p_BiBc_B, orientation_b):
+        n_lambda = normal_forces.shape[1]
+        orientation = torch.tile(orientation.unsqueeze(1), (1, n_lambda, 1))
+        for force_i, points_i, orientation_i in zip(normal_forces, p_BiBc_B, orientation):
             mask = force_i>thres
             support_points = points_i[mask]
+            orientation_i = self.ground_orientation_in_body_frame(orientation_i, n_lambda)
             support_function = orientation_i[mask]
             points = torch.cat((points, support_points),dim=0)
             directions = torch.cat((directions, support_function),dim=0)
         return points, directions
     
-    def ground_orientation_in_body_frame(self, object_orientation):
+    def ground_orientation_in_body_frame(self, object_orientation, n_lambda):
         """
         Convert ground orientation from world frame to object's body frame.
         """
-        return quaternion.rotate(quaternion.inverse(object_orientation), torch.tensor([0,0,-1]))
+        n_hat = torch.tensor([.0,.0,-1.0])
+        n_hat_repeated = torch.tile(n_hat.unsqueeze(0), (n_lambda,1))
+        return quaternion.rotate(quaternion.inverse(object_orientation), n_hat_repeated)

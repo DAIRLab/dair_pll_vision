@@ -714,7 +714,10 @@ class SupervisedLearningExperiment(ABC):
                                     shuffle=False)
         points, directions = torch.zeros((0,3)), torch.zeros((0,3))
         for batch_x, batch_y in slices_loader:
-            points_i, directions_i = learned_system.bundlesdf_data_generation_from_cnets(batch_x,batch_y,learned_system)
+            x = batch_x[..., -1, :]
+            u = torch.zeros(x.shape[:-1] + (0,))
+            x_plus = batch_y[..., 0, :]
+            points_i, directions_i = learned_system.bundlesdf_data_generation_from_cnets(x,u,x_plus)
             points = torch.cat((points, points_i),dim=0)
             directions = torch.cat((directions,directions_i),dim=0)
         return points, directions
