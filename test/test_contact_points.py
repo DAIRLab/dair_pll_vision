@@ -4,6 +4,7 @@ import os
 import re
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from helpers.train_icnn import visualize_dirs_and_pts
 
 def load_normal_forces():
     """
@@ -23,13 +24,19 @@ def load_contact_points(path):
     Contact points has shape (N, batch_size, 3)
     """
     curr_dir = os.path.dirname(os.path.abspath(__file__))
-    relative_path = "../contact_points_cube.npy"
+    relative_path = f"../{path}"
     file_path = os.path.join(curr_dir, relative_path)
-    contact_points_array = np.load(file_path)
-    if contact_points_array.shape[0]>=256:
-        np.save('contact_pts_save.npy', contact_points_array)
-        print('Saved contact points')
-    print(contact_points_array.shape)
+    contact_points = torch.load(file_path)
+    print(contact_points.shape)
+    return contact_points
+
+def load_directions(path):
+    curr_dir = os.path.dirname(os.path.abspath(__file__))
+    relative_path = f"../{path}"
+    file_path = os.path.join(curr_dir, relative_path)
+    directions = torch.load(file_path)
+    print(directions.shape)
+    return directions
 
 def load_pretrained_weights(path):
     state_dict = torch.load(path)
@@ -126,9 +133,7 @@ def combine_pts(path):
 
 if __name__ == "__main__":
     # load_pretrained_weights()
-    # load_normal_forces()
-    # npy_path = "contact_pts_save_8.npy"
-    # force_path = "normal_forces_save_8.npy"
-    # load_contact_points(npy_path)
-    # visualize(npy_path, force_path, 'contact_pts_save_8.png')
-    combine_pts('./storage')
+    # combine_pts('./storage')
+    points = load_contact_points('points.pt')
+    directions = load_directions('directions.pt')
+    visualize_dirs_and_pts(directions, points)
