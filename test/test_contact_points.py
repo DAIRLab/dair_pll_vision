@@ -28,7 +28,7 @@ def load_contact_points(path):
     file_path = os.path.join(curr_dir, relative_path)
     contact_points = torch.load(file_path)
     print(contact_points.shape)
-    return contact_points
+    return contact_points.detach().numpy()
 
 def load_directions(path):
     curr_dir = os.path.dirname(os.path.abspath(__file__))
@@ -36,7 +36,7 @@ def load_directions(path):
     file_path = os.path.join(curr_dir, relative_path)
     directions = torch.load(file_path)
     print(directions.shape)
-    return directions
+    return directions.detach().numpy()
 
 def load_pretrained_weights(path):
     state_dict = torch.load(path)
