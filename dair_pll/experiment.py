@@ -564,6 +564,9 @@ class SupervisedLearningExperiment(ABC):
 
         # Reload best parameters.
         learned_system.load_state_dict(best_learned_system_state)
+        
+        epoch_callback(epoch, learned_system, training_loss,
+                           best_valid_loss)
 
         # kill tensorboard.
         print("killing tboard")

@@ -241,9 +241,9 @@ def main(system: str = CUBE_SYSTEM,
     )
     print(f'Saving points and directions...')
     points, directions, normal_forces = experiment.generate_bundlesdf_data(learned_system)
-    torch.save(points, './points.pt')
-    torch.save(directions, './directions.pt')
-    torch.save(normal_forces, './normal_forces.pt')
+    torch.save(points, './points_new.pt')
+    torch.save(directions, './directions_new.pt')
+    torch.save(normal_forces, './normal_forces_new.pt')
 
 @click.command()
 @click.option('--system',
