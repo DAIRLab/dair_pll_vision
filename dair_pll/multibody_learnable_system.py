@@ -442,10 +442,12 @@ class MultibodyLearnableSystem(System):
         n_lambda = normal_forces.shape[1]
         orientation = torch.tile(orientation.unsqueeze(1), (1, n_lambda, 1))
         for force_i, points_i, orientation_i in zip(normal_forces, p_BiBc_B, orientation):
-            mask = force_i>thres
-            support_points = points_i[mask]
+            # mask = force_i>thres
+            # support_points = points_i[mask]
+            support_points = points_i
             orientation_i = ground_orientation_in_body_frame(orientation_i, n_lambda)
-            support_function = orientation_i[mask]
+            support_function = orientation_i
+            # support_function = orientation_i[mask]
             points = torch.cat((points, support_points),dim=0)
             directions = torch.cat((directions, support_function),dim=0)
         return points, directions
