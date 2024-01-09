@@ -56,7 +56,7 @@ URDFS = {CUBE_SYSTEM: CUBE_URDFS, ELBOW_SYSTEM: ELBOW_URDFS, BUNDLESDF_CUBE_SYST
 
 
 # Data configuration.
-DT = 0.0068
+DT = 0.0333 #0.0068 # 1/frame rate of the camera
 
 # Generation configuration.
 N_POP = 256
