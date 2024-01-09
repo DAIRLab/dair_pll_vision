@@ -25,128 +25,160 @@ BOUNDED_NEARBY_N_QUERY = 100
 BOUNDED_FAR_N_QUERY = 100
 
 
-def generate_point_sdf_pairs_from_point_direction(
-        point: Tensor, direction: Tensor) -> Tuple[Tensor, Tensor]:
+def generate_point_sdf_pairs(points: Tensor, directions: Tensor
+                             ) -> Tuple[Tensor, Tensor]:
     """Generate pairs of 3D points and their associated signed distance, given
-    a point with known signed distance of zero and a direction associated with
-    that point's contact direction.
+    a list of points with known signed distance of zero and directions
+    associated with those points' contact directions.
 
     Args:
-        point (3,):  support point of the object geometry for the given support
-            direction.
-        direction (3,):  support direction.
+        point (M, 3):  M support points of the object geometry for the given
+            support directions.
+        direction (M, 3):  associated support directions.
 
     Outputs:
-        points_on_axis (N, 3):  N 3D points, generated along the ray passing
-            through the provided point in the provided direction.
-        signed_distances (N,):  N signed distances associated with the points.
+        points_on_axis (M*N, 3):  N 3D points generated along the ray passing
+            through the first provided point in the first provided direction,
+            followed by N 3D points w.r.t. the second point and direction, etc.
+        signed_distances (M*N,):  signed distances associated with the points,
+            in the same order as points_on_axis.
     """
-    assert point.shape == (3,), f'Expected {point.shape=} to be (3,).'
-    assert direction.shape == (3,), f'Expected {direction.shape=} to be (3,).'
+    # Perform input checks.
+    assert points.ndim == directions.ndim == 2, f'Expected 2-dimensional ' \
+        f'shapes for {points.shape=} and {directions.shape=}.'
+    n_points = points.shape[0]
+    assert points.shape == (n_points, 3), f'Expected {points.shape=} to ' \
+        + 'be (n_points, 3).'
+    assert directions.shape == (n_points, 3), f'Expected {directions.shape=} ' \
+        + 'to be (n_points, 3).'
     
-    # Randomly sample distances inside and outside the object geometry at the
-    # provided support point.
-    signed_distances = torch.cat((
-        -AXIS_NEARBY_DEPTH*torch.rand(AXIS_NEARBY_N_QUERY),
-        AXIS_NEARBY_DEPTH*torch.rand(AXIS_NEARBY_N_QUERY),
-        AXIS_OUTSIDE_DEPTH*torch.rand(AXIS_OUTSIDE_N_QUERY)
-    ))
+    # The signed distances will be tiled such that the first N correspond to
+    # point 1, the next N correspond to point 2, etc.
+    distance_scalings = torch.cat((
+        -AXIS_NEARBY_DEPTH*torch.ones(AXIS_NEARBY_N_QUERY),
+        AXIS_NEARBY_DEPTH*torch.ones(AXIS_NEARBY_N_QUERY),
+        AXIS_OUTSIDE_DEPTH*torch.ones(AXIS_OUTSIDE_N_QUERY)
+    )).repeat(n_points)
+    signed_distances = distance_scalings * torch.rand_like(distance_scalings)
 
-    n_points = 2*AXIS_NEARBY_N_QUERY + AXIS_OUTSIDE_N_QUERY
-    
-    repeated_point = point.repeat((n_points, 1))
-    repeated_direction = direction.repeat((n_points, 1))
+    n_per_point = 2*AXIS_NEARBY_N_QUERY + AXIS_OUTSIDE_N_QUERY
+
+    # Get N repeated for first point, then N repeated for second point, etc.
+    repeated_points = points.unsqueeze(1).repeat(1, n_per_point, 1
+                                                 ).reshape(-1,3)
+    repeated_directions = directions.unsqueeze(1).repeat(1, n_per_point, 1
+                                                         ).reshape(-1,3)
 
     # Get the 3D points corresponding to the generated signed distances.
-    points_on_axis = repeated_point + \
-        signed_distances.unsqueeze(1).repeat(1,3)*repeated_direction
+    points_on_axis = repeated_points + \
+        signed_distances.unsqueeze(1).repeat(1,3)*repeated_directions
 
     return points_on_axis, signed_distances
 
 
-def generate_point_sdf_bound_pairs_from_point_direction(
-        point: Tensor, direction: Tensor) -> Tuple[Tensor, Tensor]:
+def generate_point_sdf_bound_pairs(points: Tensor, directions: Tensor
+                             ) -> Tuple[Tensor, Tensor]:
     """Generate pairs of 3D points and their associated minimum signed distance
-    bound, given a point with known signed distance of zero and a direction
-    associated with that point's contact direction.
+    bounds, given a list of points with known signed distance of zero and
+    directions associated with those points' contact directions.
 
     Args:
-        point (3,):  support point of the object geometry for the given support
-            direction.
-        direction (3,):  support direction.
+        points (M, 3):  M support points of the object geometry for the given
+            support directions.
+        directions (M, 3):  associated support directions.
 
     Outputs:
-        points_in_space (N, 3):  N 3D points, generated randomly.
-        min_signed_distances (N,):  N minimum signed distance bounds associated
-            with the points.
+        points_in_space (M*N, 3):  N 3D points generated randomly, associated
+            with the first provided point in the first provided direction,
+            followed by N 3D points w.r.t. the second point and direction, etc.
+        min_signed_distances (M*N,):  minimum signed distance bounds associated
+            with the points, in the same order as points_in_space.
     """
-    assert point.shape == (3,), f'Expected {point.shape=} to be (3,).'
-    assert direction.shape == (3,), f'Expected {direction.shape=} to be (3,).'
-
+    # Perform input checks.
+    assert points.ndim == directions.ndim == 2, f'Expected 2-dimensional ' \
+        f'shapes for {points.shape=} and {directions.shape=}.'
+    n_points = points.shape[0]
+    assert points.shape == (n_points, 3), f'Expected {points.shape=} to ' \
+        + 'be (n_points, 3).'
+    assert directions.shape == (n_points, 3), f'Expected {directions.shape=} ' \
+        + 'to be (n_points, 3).'
+    
     # Get one unit vector orthogonal to the provided direction vector.  Can use
     # an intermediate random vector, then cross with `direction` to get an
     # orthogonal one.
     orth_dir_x = torch.nn.functional.normalize(
-        torch.cross(direction, torch.rand(3)), dim=0
+        torch.cross(directions, torch.rand_like(directions), dim=1), dim=1
     )
 
     # Get the third unit vector to complete the coordinate system, where the z
     # axis is represented by the input `direction``.
     orth_dir_y = torch.nn.functional.normalize(
-        torch.cross(direction, orth_dir_x), dim=0
+        torch.cross(directions, orth_dir_x, dim=1), dim=1
     )
 
-    # Randomly sample radii, heights, and angles.
-    radii = torch.cat((
-        BOUNDED_NEARBY_RADIUS*torch.rand(2*BOUNDED_NEARBY_N_QUERY),
-        BOUNDED_FAR_RADIUS*torch.rand(BOUNDED_FAR_N_QUERY)
-    ))
-    heights = torch.cat((
-        -BOUNDED_NEARBY_DEPTH*torch.rand(BOUNDED_NEARBY_N_QUERY),
-        BOUNDED_NEARBY_DEPTH*torch.rand(BOUNDED_NEARBY_N_QUERY),
-        BOUNDED_FAR_DEPTH*torch.rand(BOUNDED_FAR_N_QUERY)
-    ))
-    n_points = 2*BOUNDED_NEARBY_N_QUERY + BOUNDED_FAR_N_QUERY
-    angles = 2*torch.pi*torch.rand(n_points)
-    
-    repeated_point = point.repeat((n_points, 1))
-    repeated_z = direction.repeat((n_points, 1))
-    repeated_x = orth_dir_x.repeat((n_points, 1))
-    repeated_y = orth_dir_y.repeat((n_points, 1))
+    # Randomly sample radii, heights, and angles.  Everything will be tiled such
+    # that the first N correspond to point 1, the next N correspond to point 2,
+    # etc.
+    n_per_point = 2*BOUNDED_NEARBY_N_QUERY + BOUNDED_FAR_N_QUERY
+    radius_scalings = torch.cat((
+        BOUNDED_NEARBY_RADIUS*torch.ones(2*BOUNDED_NEARBY_N_QUERY),
+        BOUNDED_FAR_RADIUS*torch.ones(BOUNDED_FAR_N_QUERY)
+    )).repeat(n_points)
+    height_scalings = torch.cat((
+        -BOUNDED_NEARBY_DEPTH*torch.ones(BOUNDED_NEARBY_N_QUERY),
+        BOUNDED_NEARBY_DEPTH*torch.ones(BOUNDED_NEARBY_N_QUERY),
+        BOUNDED_FAR_DEPTH*torch.ones(BOUNDED_FAR_N_QUERY)
+    )).repeat(n_points)
+    angle_scalings = 2*torch.pi*torch.ones(n_points).repeat(n_per_point)
+    radii = radius_scalings * torch.rand_like(radius_scalings)
+    heights = height_scalings * torch.rand_like(height_scalings)
+    angles = angle_scalings * torch.rand_like(angle_scalings)
+
+    repeated_points = points.unsqueeze(1).repeat(1, n_per_point, 1
+                                                ).reshape(-1, 3)
+    repeated_zs = directions.unsqueeze(1).repeat(1, n_per_point, 1
+                                                ).reshape(-1, 3)
+    repeated_xs = orth_dir_x.unsqueeze(1).repeat(1, n_per_point, 1
+                                                ).reshape(-1, 3)
+    repeated_ys = orth_dir_y.unsqueeze(1).repeat(1, n_per_point, 1
+                                                ).reshape(-1, 3)
     repeated_radii = radii.unsqueeze(1).repeat(1,3)
     repeated_heights = heights.unsqueeze(1).repeat(1,3)
     repeated_angles = angles.unsqueeze(1).repeat(1,3)
 
     # Construct the 3D points from the radii, heights, and angles.
-    points_in_space = repeated_point + \
-        repeated_heights*repeated_z + \
-        repeated_radii*torch.cos(repeated_angles)*repeated_x + \
-        repeated_radii*torch.sin(repeated_angles)*repeated_y
+    points_in_space = repeated_points + \
+        repeated_heights*repeated_zs + \
+        repeated_radii*torch.cos(repeated_angles)*repeated_xs + \
+        repeated_radii*torch.sin(repeated_angles)*repeated_ys
 
     min_signed_distances = heights
 
     return points_in_space, min_signed_distances
 
 
-def visualize_sdfs(point: Tensor, direction: Tensor) -> None:
+def visualize_sdfs(points: Tensor, directions: Tensor) -> None:
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
 
     # Plot the original support point and direction.
-    ax.plot(*point, marker='*', markersize=20, color='r',
-            label='support point')
-    ax.quiver(*point, *direction, color='r', label='support direction')
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2], marker='*', s=20,
+               color='r', label='Support points')
+    prefix = [''] + ['_']*(len(directions)-1)
+    for i in range(len(directions)):
+        ax.quiver(*points[i], *directions[i]/4, color='r',
+                  label=prefix[i]+'Support directions')
 
     # Generate SDF points along axis.
-    ps, sdfs = generate_point_sdf_pairs_from_point_direction(point, direction)
+    ps, sdfs = generate_point_sdf_pairs(points, directions)
     colored_sdfs = ax.scatter(ps[:, 0], ps[:, 1], ps[:, 2], c=sdfs,
-                              cmap='viridis', marker='o')
+                              cmap='viridis', marker='o',
+                              label='Points with assigned SDF')
     
     # Generate more bounded SDFs.
-    vs, sdf_bounds = generate_point_sdf_bound_pairs_from_point_direction(
-        point, direction)
+    vs, sdf_bounds = generate_point_sdf_bound_pairs(points, directions)
     ax.scatter(vs[:, 0], vs[:, 1], vs[:, 2], c=sdf_bounds, cmap='viridis',
-               marker='.')
+               marker='.', label='Points with SDF bound')
 
     # Because both scatter series are using the 'viridis' color map, the
     # colorbar will share a mapping for both series.
@@ -166,14 +198,15 @@ def visualize_sdfs(point: Tensor, direction: Tensor) -> None:
 
 # points = torch.load('./points.pt')
 # directions = torch.load('./directions.pt')
-points = torch.Tensor([[1.2, 0.8, 1.0]])
-directions = torch.Tensor([[1., 0., 0.]])
+points = torch.Tensor([[1.2, 0.8, 1.0],
+                       [0.7, 1.1, 0.2]])
+directions = torch.Tensor([[1., 0., 0.],
+                           [0.707, 0., 0.707]])
 
 print(f'{points.shape=}, {directions.shape=}')
 
-# ps, sdfs = generate_point_sdf_pairs_from_point_direction(points[0], directions[0])
-# vs, sdf_bounds = generate_point_sdf_bound_pairs_from_point_direction(points[0], directions[0])
-
-visualize_sdfs(points[0], directions[0])
+# ps, sdfs = generate_point_sdf_pairs(points, directions)
+# vs, sdf_bounds = generate_point_sdf_bound_pairs(points, directions)
+visualize_sdfs(points, directions)
 
 pdb.set_trace()
