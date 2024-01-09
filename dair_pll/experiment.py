@@ -27,6 +27,8 @@ from dair_pll.state_space import StateSpace
 from dair_pll.system import System
 from dair_pll.tensorboard_manager import TensorboardManager
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
+from dair_pll.geometry import _DEEP_SUPPORT_DEFAULT_N_QUERY
+
 TRAIN_SET = 'train'
 VALID_SET = 'valid'
 TEST_SET = 'test'
@@ -713,11 +715,14 @@ class SupervisedLearningExperiment(ABC):
                                     batch_size=128,
                                     shuffle=False)
         points, directions = torch.zeros((0,3)), torch.zeros((0,3))
+        # _DEEP_SUPPORT_DEFAULT_N_QUERY is hardcoded
+        normal_forces = torch.zeros((0,_DEEP_SUPPORT_DEFAULT_N_QUERY))
         for batch_x, batch_y in slices_loader:
             x = batch_x[..., -1, :]
             u = torch.zeros(x.shape[:-1] + (0,))
             x_plus = batch_y[..., 0, :]
-            points_i, directions_i = learned_system.bundlesdf_data_generation_from_cnets(x,u,x_plus)
+            points_i, directions_i, normal_forces_i = learned_system.bundlesdf_data_generation_from_cnets(x,u,x_plus)
             points = torch.cat((points, points_i),dim=0)
             directions = torch.cat((directions,directions_i),dim=0)
-        return points, directions
+            normal_forces = torch.cat((normal_forces, normal_forces_i),dim=0)
+        return points, directions, normal_forces

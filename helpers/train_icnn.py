@@ -158,7 +158,8 @@ def visualize_dirs_and_pts(directions, support_points):
     ax.set_zlabel('Z axis')
     ax.set_title('Visualization of Directions and Support Points')
     ax.legend()
-    plt.show()
+    # plt.show()
+    plt.savefig('./vis.png')
 
 def plot_directions(directions):
     fig = plt.figure()

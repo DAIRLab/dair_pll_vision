@@ -108,7 +108,7 @@ ELBOW_WD = 1e-4
 PRISM_WD = 0.0
 TOBLERONE_WD = 0.0
 WDS = {CUBE_SYSTEM: CUBE_WD, ELBOW_SYSTEM: ELBOW_WD, BUNDLESDF_CUBE_SYSTEM: CUBE_WD, BUNDLESDF_PRISM_SYSTEM: PRISM_WD, BUNDLESDF_TOBLERONE_SYSTEM: TOBLERONE_WD}
-EPOCHS = 100 #500
+EPOCHS = 1 #500
 PATIENCE = EPOCHS
 # BATCH_SIZE = 256
 
@@ -240,9 +240,10 @@ def main(system: str = CUBE_SYSTEM,
         regenerate_callback if regenerate else default_epoch_callback
     )
     print(f'Saving points and directions...')
-    points, directions = experiment.generate_bundlesdf_data(learned_system)
+    points, directions, normal_forces = experiment.generate_bundlesdf_data(learned_system)
     torch.save(points, './points.pt')
     torch.save(directions, './directions.pt')
+    torch.save(normal_forces, './normal_forces.pt')
 
 @click.command()
 @click.option('--system',

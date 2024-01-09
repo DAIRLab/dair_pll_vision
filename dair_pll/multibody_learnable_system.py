@@ -438,8 +438,9 @@ class MultibodyLearnableSystem(System):
             return quaternion.rotate(quaternion.inverse(object_orientation), n_hat_repeated)
         
         points, directions = torch.zeros((0,3)), torch.zeros((0,3))
-        thres = 0.1
         n_lambda = normal_forces.shape[1]
+        # thres = 0.1
+        
         orientation = torch.tile(orientation.unsqueeze(1), (1, n_lambda, 1))
         for force_i, points_i, orientation_i in zip(normal_forces, p_BiBc_B, orientation):
             # mask = force_i>thres
@@ -450,5 +451,6 @@ class MultibodyLearnableSystem(System):
             # support_function = orientation_i[mask]
             points = torch.cat((points, support_points),dim=0)
             directions = torch.cat((directions, support_function),dim=0)
-        return points, directions
+
+        return points, directions, normal_forces
     
