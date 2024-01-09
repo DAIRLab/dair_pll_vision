@@ -56,7 +56,7 @@ URDFS = {CUBE_SYSTEM: CUBE_URDFS, ELBOW_SYSTEM: ELBOW_URDFS, BUNDLESDF_CUBE_SYST
 
 
 # Data configuration.
-DT = 0.0068
+DT = 0.0333 #0.0068 # 1/frame rate of the camera
 
 # Generation configuration.
 N_POP = 256
@@ -240,9 +240,10 @@ def main(system: str = CUBE_SYSTEM,
         regenerate_callback if regenerate else default_epoch_callback
     )
     print(f'Saving points and directions...')
-    points, directions = experiment.generate_bundlesdf_data(learned_system)
-    torch.save(points, './points.pt')
-    torch.save(directions, './directions.pt')
+    points, directions, normal_forces = experiment.generate_bundlesdf_data(learned_system)
+    torch.save(points, './points_new.pt')
+    torch.save(directions, './directions_new.pt')
+    torch.save(normal_forces, './normal_forces_new.pt')
 
 @click.command()
 @click.option('--system',

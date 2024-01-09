@@ -6,18 +6,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from helpers.train_icnn import visualize_dirs_and_pts
 
-def load_normal_forces():
-    """
-    Normal forces has shape (N, batch_size, 1)
-    """
-    curr_dir = os.path.dirname(os.path.abspath(__file__))
-    relative_path = "../normal_forces_cube.npy"
-    file_path = os.path.join(curr_dir, relative_path)
-    normal_forces_array = np.load(file_path)
-    if normal_forces_array.shape[0]>=256:
-        np.save('normal_forces_save.npy', normal_forces_array)
-        print('Saved normal forces')
-    print(normal_forces_array.shape)
+FORCE_THRES = 0.3676 #N
 
 def load_contact_points(path):
     """
@@ -28,7 +17,7 @@ def load_contact_points(path):
     file_path = os.path.join(curr_dir, relative_path)
     contact_points = torch.load(file_path)
     print(contact_points.shape)
-    return contact_points
+    return contact_points.detach().numpy()
 
 def load_directions(path):
     curr_dir = os.path.dirname(os.path.abspath(__file__))
@@ -36,7 +25,15 @@ def load_directions(path):
     file_path = os.path.join(curr_dir, relative_path)
     directions = torch.load(file_path)
     print(directions.shape)
-    return directions
+    return directions.detach().numpy()
+
+def load_forces(path):
+    curr_dir = os.path.dirname(os.path.abspath(__file__))
+    relative_path = f"../{path}"
+    file_path = os.path.join(curr_dir, relative_path)
+    directions = torch.load(file_path)
+    print(directions.shape)
+    return directions.detach().numpy()
 
 def load_pretrained_weights(path):
     state_dict = torch.load(path)
@@ -71,32 +68,46 @@ def filter_pts(contact_points, normal_forces):
     flattened_filtered_points = filtered_points.reshape(-1, 3)
     return flattened_filtered_points
 
-def visualize_and_filter(pts_path, force_path, img_path):
-    contact_points = np.load(pts_path)
-    normal_forces = np.load(force_path)
-    # force_threshold = 0.05
-    flattened_filtered_points = filter_pts(contact_points, normal_forces)
-    print(f'filtered_pts: {flattened_filtered_points.shape}')
-    np.save('filtered_contact_points.npy', flattened_filtered_points)
+def filter_pts_and_dirs(contact_points, directions, normal_forces):
+    '''
+    Filter out points that are not in contact with the ground.
+    '''
+    assert normal_forces.ndim == 1
+    assert contact_points.ndim == directions.ndim == 2
+    assert normal_forces.shape[0] == contact_points.shape[0] == directions.shape[0]
+    assert contact_points.shape[1] == directions.shape[1] == 3
+    mask = normal_forces > FORCE_THRES
+    filtered_points = contact_points[mask]
+    filtered_directions = directions[mask]
+    # flattened_filtered_points = filtered_points.reshape(-1, 3)
+
+    print(f'{points.shape=}')
+    print(f'{filtered_points.shape=}')
+
+    visualize_and_filter(directions, contact_points, filtered_directions, filtered_points)
+    # return flattened_filtered_points
+
+def visualize_and_filter(directions, points, filtered_directions, filtered_points):
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(flattened_filtered_points[:, 0], flattened_filtered_points[:, 1], flattened_filtered_points[:, 2])
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2], s=10, label='unfiltered')
+    ax.scatter(filtered_points[:, 0], filtered_points[:, 1], filtered_points[:, 2], s=30, label='filtered')
+    # origin = [0, 0, 0]
+    # for i in range(len(directions)):
+    #     ax.quiver(*origin, *directions[i], length=np.linalg.norm(points[i]), arrow_length_ratio=0.1, color='r')
 
     ax.set_xlabel('X axis')
     ax.set_ylabel('Y axis')
     ax.set_zlabel('Z axis')
+    plt.legend()
+    plt.show()
+    # plt.savefig(img_path)
 
-    plt.savefig(img_path)
-
-def visualize(contact_points, img_path):
+def visualize_forces(normal_forces, img_path=None):
     fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(contact_points[:, 0], contact_points[:, 1], contact_points[:, 2])
-    ax.set_xlabel('X axis')
-    ax.set_ylabel('Y axis')
-    ax.set_zlabel('Z axis')
-
-    plt.savefig(img_path)
+    plt.hist(normal_forces.flatten(), bins=30)
+    plt.xlabel('contact impulse (Ns)')
+    plt.show()
 
 def combine_pts(path):
     '''
@@ -129,11 +140,12 @@ def combine_pts(path):
     pts_arrays = np.vstack(pts_arrays)
     print(pts_arrays.shape)
     np.save('./final_pts.npy', pts_arrays)
-    visualize(pts_arrays, 'filtered_plot.png')
 
 if __name__ == "__main__":
     # load_pretrained_weights()
     # combine_pts('./storage')
     points = load_contact_points('points.pt')
     directions = load_directions('directions.pt')
-    visualize_dirs_and_pts(directions, points)
+    forces = load_forces('normal_forces.pt')
+    # visualize_forces(forces)
+    filter_pts_and_dirs(points,directions,forces.flatten()/0.0068)

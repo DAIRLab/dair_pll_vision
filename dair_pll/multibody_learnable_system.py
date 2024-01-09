@@ -194,31 +194,6 @@ class MultibodyLearnableSystem(System):
         constant[invalid] *= 0.
         force[invalid.expand(force.shape)] = 0.
 
-        # Keep only normal forces
-        # import os
-        # import re
-        # def get_max_number_from_filenames(pattern, directory='./samples'):
-        #     max_number = -1
-        #     for filename in os.listdir(directory):
-        #         match = re.match(pattern, filename)
-        #         if match:
-        #             number = int(match.group(1))
-        #             max_number = max(max_number, number)
-        #     return max_number
-        # pattern = r'normal_forces_(\d+)\.npy'
-        # max_number = get_max_number_from_filenames(pattern)
-        # if max_number == -1:
-        #     new_number = 1
-        # else:
-        #     new_number = max_number + 1
-        filename = f"normal_forces.npy"
-        threshold = 1e3
-        normal_forces = force[:, :n_contacts]
-        system = list(self.urdfs.keys())[0]
-        file_path = f'./samples/{filename}'
-        if normal_forces.detach().numpy().shape[0] >=256:
-            np.save(file_path, normal_forces.detach().numpy())
-
         loss = 0.5 * pbmm(force.transpose(-1, -2), pbmm(Q, force)) + pbmm(
             force.transpose(-1, -2), q) + constant
 
@@ -440,10 +415,9 @@ class MultibodyLearnableSystem(System):
         force[invalid.expand(force.shape)] = 0.
 
         # Get the normal forces
-        normal_forces = force[:, :n_contacts].reshape(-1,n_contacts)
+        normal_impulses = force[:, :n_contacts].reshape(-1,n_contacts)
         orientation = q_plus[..., :4]
-        # orientation_b = self.ground_orientation_in_body_frame(orientation)
-        
+
         # Get the contact points that correspond to high normal forces
         def ground_orientation_in_body_frame(object_orientation, n_lambda):
             """
@@ -454,15 +428,16 @@ class MultibodyLearnableSystem(System):
             return quaternion.rotate(quaternion.inverse(object_orientation), n_hat_repeated)
         
         points, directions = torch.zeros((0,3)), torch.zeros((0,3))
-        thres = 0.1
-        n_lambda = normal_forces.shape[1]
+        impulses_flat = torch.zeros((0))
+        n_lambda = normal_impulses.shape[1]
+        
         orientation = torch.tile(orientation.unsqueeze(1), (1, n_lambda, 1))
-        for force_i, points_i, orientation_i in zip(normal_forces, p_BiBc_B, orientation):
-            mask = force_i>thres
-            support_points = points_i[mask]
+        for force_i, points_i, orientation_i in zip(normal_impulses, p_BiBc_B, orientation):
+            support_points = points_i
             orientation_i = ground_orientation_in_body_frame(orientation_i, n_lambda)
-            support_function = orientation_i[mask]
+            support_function = orientation_i
             points = torch.cat((points, support_points),dim=0)
             directions = torch.cat((directions, support_function),dim=0)
-        return points, directions
+            impulses_flat = torch.cat((impulses_flat, force_i),dim=0)
+        return points, directions, impulses_flat/self.dt
     
