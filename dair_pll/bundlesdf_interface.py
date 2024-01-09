@@ -157,7 +157,39 @@ def generate_point_sdf_bound_pairs(points: Tensor, directions: Tensor
     return points_in_space, min_signed_distances
 
 
-def visualize_sdfs(points: Tensor, directions: Tensor) -> None:
+def visualize_sdfs(points: Tensor, directions: Tensor, ps: Tensor = None,
+                   sdfs: Tensor = None, vs: Tensor = None,
+                   sdf_bounds: Tensor = None) -> None:
+    """Visualize the generated data from provided points and associated
+    directions.  If the data is not already generated, this function will do so.
+
+    Args:
+        points (N, 3):  observed support points from ContactNets.
+        directions (N, 3):  directions associated with the provided points.
+        ps (M, 3):  new points generated along rays through support points along
+            the provided directions.
+        sdfs (M,):  signed distances associated with the generated ps.
+        vs (L, 3):  new points generated randomly in the neighborhood around
+            support points.
+        sdf_bounds (L,):  minimum signed distance bounds associated with the
+            generated vs.
+    """
+    # Check if any of the inputs weren't provided and need to be generated.
+    if ps is None or sdfs is None:
+        # Generate SDF points along axis.
+        ps, sdfs = generate_point_sdf_pairs(points, directions)
+    if vs is None or sdf_bounds is None:
+        # Generate more bounded SDFs.
+        vs, sdf_bounds = generate_point_sdf_bound_pairs(points, directions)
+
+    # Do some input checking.
+    assert points.shape == directions.shape
+    assert ps.shape[0] == sdfs.shape[0]
+    assert vs.shape[0] == sdf_bounds.shape[0]
+    assert points.ndim == ps.ndim == vs.ndim == 2
+    assert sdfs.ndim == sdf_bounds.ndim == 1
+    assert points.shape[1] == ps.shape[1] == vs.shape[1] == 3
+
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
 
@@ -169,14 +201,10 @@ def visualize_sdfs(points: Tensor, directions: Tensor) -> None:
         ax.quiver(*points[i], *directions[i]/4, color='r',
                   label=prefix[i]+'Support directions')
 
-    # Generate SDF points along axis.
-    ps, sdfs = generate_point_sdf_pairs(points, directions)
+    # Plot the generated data and their associated SDFs.
     colored_sdfs = ax.scatter(ps[:, 0], ps[:, 1], ps[:, 2], c=sdfs,
                               cmap='viridis', marker='o',
                               label='Points with assigned SDF')
-    
-    # Generate more bounded SDFs.
-    vs, sdf_bounds = generate_point_sdf_bound_pairs(points, directions)
     ax.scatter(vs[:, 0], vs[:, 1], vs[:, 2], c=sdf_bounds, cmap='viridis',
                marker='.', label='Points with SDF bound')
 
@@ -196,6 +224,35 @@ def visualize_sdfs(points: Tensor, directions: Tensor) -> None:
     plt.show()
 
 
+def generate_training_data(points: Tensor, directions: Tensor) -> None:
+    """Given points and directions, create points with SDF values or bounds for
+    training BundleSDF.
+    
+    Args:
+        points (N, 3):  observed support points from ContactNets.
+        directions (N, 3):  directions associated with the provided points.
+
+    Outputs:
+        ps (M, 3):  new points generated along rays through support points along
+            the provided directions.
+        sdfs (M,):  signed distances associated with the generated ps.
+        vs (L, 3):  new points generated randomly in the neighborhood around
+            support points.
+        sdf_bounds (L,):  minimum signed distance bounds associated with the
+            generated vs.
+    """
+    # Do some input checking.
+    assert points.shape == directions.shape
+    assert points.ndim == directions.ndim == 2
+    assert points.shape[1] == directions.shape[1] == 3
+
+    # Compute the outputs.
+    ps, sdfs = generate_point_sdf_pairs(points, directions)
+    vs, sdf_bounds = generate_point_sdf_bound_pairs(points, directions)
+
+    return ps, sdfs, vs, sdf_bounds
+
+
 # points = torch.load('./points.pt')
 # directions = torch.load('./directions.pt')
 points = torch.Tensor([[1.2, 0.8, 1.0],
@@ -205,8 +262,12 @@ directions = torch.Tensor([[1., 0., 0.],
 
 print(f'{points.shape=}, {directions.shape=}')
 
-# ps, sdfs = generate_point_sdf_pairs(points, directions)
-# vs, sdf_bounds = generate_point_sdf_bound_pairs(points, directions)
-visualize_sdfs(points, directions)
+# Generate training data.
+ps, sdfs, vs, sdf_bounds = generate_training_data(points, directions)
+
+# Visualize it.  Note:  can call this visualization function without providing
+# the training data, and it will generate some for visualization purposes.
+visualize_sdfs(points, directions, ps=ps, sdfs=sdfs, vs=vs,
+               sdf_bounds=sdf_bounds)
 
 pdb.set_trace()
