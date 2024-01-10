@@ -8,32 +8,13 @@ from helpers.train_icnn import visualize_dirs_and_pts
 
 FORCE_THRES = 0.3676 #N
 
-def load_contact_points(path):
-    """
-    Contact points has shape (N, batch_size, 3)
-    """
+def load_pts(path):
     curr_dir = os.path.dirname(os.path.abspath(__file__))
     relative_path = f"../{path}"
     file_path = os.path.join(curr_dir, relative_path)
-    contact_points = torch.load(file_path)
-    print(contact_points.shape)
-    return contact_points.detach().numpy()
-
-def load_directions(path):
-    curr_dir = os.path.dirname(os.path.abspath(__file__))
-    relative_path = f"../{path}"
-    file_path = os.path.join(curr_dir, relative_path)
-    directions = torch.load(file_path)
-    print(directions.shape)
-    return directions.detach().numpy()
-
-def load_forces(path):
-    curr_dir = os.path.dirname(os.path.abspath(__file__))
-    relative_path = f"../{path}"
-    file_path = os.path.join(curr_dir, relative_path)
-    directions = torch.load(file_path)
-    print(directions.shape)
-    return directions.detach().numpy()
+    data = torch.load(file_path)
+    print(data.shape)
+    return data.detach().numpy()
 
 def load_pretrained_weights(path):
     state_dict = torch.load(path)
@@ -79,13 +60,11 @@ def filter_pts_and_dirs(contact_points, directions, normal_forces):
     mask = normal_forces > FORCE_THRES
     filtered_points = contact_points[mask]
     filtered_directions = directions[mask]
-    # flattened_filtered_points = filtered_points.reshape(-1, 3)
 
     print(f'{points.shape=}')
     print(f'{filtered_points.shape=}')
 
     visualize_and_filter(directions, contact_points, filtered_directions, filtered_points)
-    # return flattened_filtered_points
 
 def visualize_and_filter(directions, points, filtered_directions, filtered_points):
     fig = plt.figure()
@@ -101,7 +80,6 @@ def visualize_and_filter(directions, points, filtered_directions, filtered_point
     ax.set_zlabel('Z axis')
     plt.legend()
     plt.show()
-    # plt.savefig(img_path)
 
 def visualize_forces(normal_forces, img_path=None):
     fig = plt.figure()
@@ -142,10 +120,8 @@ def combine_pts(path):
     np.save('./final_pts.npy', pts_arrays)
 
 if __name__ == "__main__":
-    # load_pretrained_weights()
-    # combine_pts('./storage')
-    points = load_contact_points('points.pt')
-    directions = load_directions('directions.pt')
-    forces = load_forces('normal_forces.pt')
+    points = load_pts('points_new.pt')
+    directions = load_pts('directions_new.pt')
+    forces = load_pts('normal_forces_new.pt')
     # visualize_forces(forces)
-    filter_pts_and_dirs(points,directions,forces.flatten()/0.0068)
+    filter_pts_and_dirs(points,directions,forces)
