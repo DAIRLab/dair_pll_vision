@@ -24,6 +24,8 @@ BOUNDED_FAR_RADIUS = 0.2
 BOUNDED_NEARBY_N_QUERY = 100
 BOUNDED_FAR_N_QUERY = 100
 
+# Hyperparameters for filtering support points
+FORCE_THRES = 0.3676 #N
 
 def generate_point_sdf_pairs(points: Tensor, directions: Tensor
                              ) -> Tuple[Tensor, Tensor]:
@@ -252,22 +254,40 @@ def generate_training_data(points: Tensor, directions: Tensor) -> None:
 
     return ps, sdfs, vs, sdf_bounds
 
+def filter_pts_and_dirs(contact_points, directions, normal_forces):
+    """Filter out points that are not exactly in contact with the ground.
+    """
+    assert normal_forces.ndim == 1
+    assert contact_points.ndim == directions.ndim == 2
+    assert normal_forces.shape[0] == contact_points.shape[0] == directions.shape[0]
+    assert contact_points.shape[1] == directions.shape[1] == 3
+    mask = normal_forces > FORCE_THRES
+    filtered_points = contact_points[mask]
+    filtered_directions = directions[mask]
+    return filtered_directions.detach(), filtered_points.detach()
 
-# points = torch.load('./points.pt')
-# directions = torch.load('./directions.pt')
-points = torch.Tensor([[1.2, 0.8, 1.0],
-                       [0.7, 1.1, 0.2]])
-directions = torch.Tensor([[1., 0., 0.],
-                           [0.707, 0., 0.707]])
+normal_forces = torch.load('./normal_forces_new.pt')
+points = torch.load('./points_new.pt')
+directions = torch.load('./directions_new.pt')
+filterted_dirs, filterted_pts = filter_pts_and_dirs(points, directions, normal_forces)
+# points = torch.Tensor([[1.2, 0.8, 1.0],
+#                        [0.7, 1.1, 0.2]])
+# directions = torch.Tensor([[1., 0., 0.],
+#                            [0.707, 0., 0.707]])
 
-print(f'{points.shape=}, {directions.shape=}')
+print(f'{filterted_pts.shape=}, {filterted_dirs.shape=}')
 
 # Generate training data.
-ps, sdfs, vs, sdf_bounds = generate_training_data(points, directions)
+ps, sdfs, vs, sdf_bounds = generate_training_data(filterted_pts, filterted_dirs)
 
 # Visualize it.  Note:  can call this visualization function without providing
 # the training data, and it will generate some for visualization purposes.
-visualize_sdfs(points, directions, ps=ps, sdfs=sdfs, vs=vs,
+visualize_sdfs(filterted_pts, filterted_dirs, ps=ps, sdfs=sdfs, vs=vs,
                sdf_bounds=sdf_bounds)
 
 pdb.set_trace()
+
+torch.save(ps, 'support_pts.pt')
+torch.save(sdfs, 'sdfs_from_cnets.pt')
+torch.save(vs, 'sampled_pts.pt')
+torch.save(sdf_bounds, 'sdf_bounds_from_cnets.pt')
