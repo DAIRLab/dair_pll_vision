@@ -31,6 +31,7 @@ from pydrake.geometry import Mesh as DrakeMesh  # type: ignore
 from pydrake.geometry import Shape  # type: ignore
 from torch import Tensor
 from torch.nn import Module, Parameter
+import torch.optim as optim
 
 from dair_pll.deep_support_function import HomogeneousICNN, extract_mesh
 from dair_pll.tensor_utils import pbmm, tile_dim, \
@@ -45,8 +46,8 @@ _ROT_Z_45 = Tensor([[2**(-0.5), -(2**(-0.5)), 0.], [2**(-0.5), 2**(-0.5), 0.],
 
 _total_ordering = ['Plane', 'Polygon', 'Box', 'Sphere', 'DeepSupportConvex']
 
-_POLYGON_DEFAULT_N_QUERY = 4
-_DEEP_SUPPORT_DEFAULT_N_QUERY = 4
+_POLYGON_DEFAULT_N_QUERY = 5
+_DEEP_SUPPORT_DEFAULT_N_QUERY = 5
 _DEEP_SUPPORT_DEFAULT_DEPTH = 2
 _DEEP_SUPPORT_DEFAULT_WIDTH = 256
 
@@ -285,7 +286,7 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
                  n_query: int = _DEEP_SUPPORT_DEFAULT_N_QUERY,
                  depth: int = _DEEP_SUPPORT_DEFAULT_DEPTH,
                  width: int = _DEEP_SUPPORT_DEFAULT_WIDTH,
-                 perturbation: float = 0.4) -> None:
+                 perturbation: float = 0.5) -> None:
         r"""Inits ``DeepSupportConvex`` object with initial vertex set.
 
         When calculating a sparse vertex set with :py:meth:`get_vertices`,
@@ -320,7 +321,13 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         """
         perturbed = directions.unsqueeze(-2)
         perturbed = tile_dim(perturbed, self.n_query, -2)
-        perturbed += self.perturbations.expand(perturbed.shape)
+        #perturbed += self.perturbations.expand(perturbed.shape)
+        perturbed += torch.cat((torch.zeros(
+            (1, 3)), 1.99 * (torch.rand((_DEEP_SUPPORT_DEFAULT_N_QUERY - 1, 3)) - 0.5))).expand(perturbed.shape)
+        #import pdb
+        #pdb.set_trace()
+        #R_CA = rotation_matrix_from_one_vector(directions, 2).transpose(-1,-2)
+        #perturbed += 0.7 * pbmm(torch.tensor([[0., 0, 0],[-1, 0, 0],[1, 0, 0],[0, -1, 0],[0, 1, 0]]), R_CA).expand(perturbed.shape)
         perturbed /= perturbed.norm(dim=-1, keepdim=True)
         return self.network(perturbed)
 
@@ -362,6 +369,13 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
     def scalars(self) -> Dict[str, float]:
         """no scalars!"""
         return {}
+    
+    def save_weights(self, file_path: str) -> None:
+        torch.save(self.network.state_dict(), file_path)
+    
+    def load_weights(self, file_path: str) -> None:
+        self.network.load_state_dict(torch.load(file_path))
+        self.network.train()
 
 
 class Box(SparseVertexConvexCollisionGeometry):
@@ -579,6 +593,11 @@ class GeometryCollider:
         # axis of A points out of the plane.
         # pylint: disable=E1103
         R_AC = torch.eye(3).expand(p_AoAc_A.shape + (3,))
+        
+        # filename = f"contact_points.npy"
+        # file_path = f"./samples/{filename}"
+        # if p_BoBc_B.shape[0] >= 256:
+        #     np.save(file_path, p_BoBc_B.detach().numpy())
         return phi, R_AC, p_AoAc_A, p_BoBc_B
 
     @staticmethod

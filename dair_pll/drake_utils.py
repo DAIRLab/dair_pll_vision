@@ -19,9 +19,13 @@ or :py:class:`~dair_pll.state_space.FixedBaseSpace`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Tuple, Dict, List, Optional, Union, Type, cast, \
-    TypeAlias
-
+from typing import Tuple, Dict, List, Optional, Union, Type, cast
+try:
+    from typing import TypeAlias
+except ImportError:
+    from typing import TypeVar
+    TypeAlias = TypeVar('TypeAlias')
+    
 import numpy as np
 from pydrake.autodiffutils import AutoDiffXd  # type: ignore
 # pylint: disable-next=import-error

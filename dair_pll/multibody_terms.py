@@ -152,9 +152,10 @@ class LagrangianTerms(Module):
             body_variables,
             simplify_computation=DEFAULT_SIMPLIFIER)
 
+        # NOTE:  Manually turned off inertia learning by setting requires_grad=False
         # pylint: disable=E1103
         self.inertial_parameters = Parameter(body_parameters,
-                                             requires_grad=True)
+                                             requires_grad=False)
 
     # noinspection PyUnresolvedReferences
     @staticmethod
@@ -370,7 +371,7 @@ class ContactTerms(Module):
                 context=context,
                 with_respect_to=JacobianWrtVariable.kV,
                 frame_B=geometry_frame,
-                p_BP=geometry_pose.translation().reshape(3, 1),
+                p_BoBp_B=geometry_pose.translation().reshape(3, 1),
                 frame_A=world_frame,
                 frame_E=world_frame)
             drake_spatial_jacobians.append(drake_spatial_jacobian)
@@ -433,6 +434,10 @@ class ContactTerms(Module):
 
         phi(q) and J(q) are calculated implicitly from kinematics and collision
         geometries.
+
+        Note: Changes made on 1/8/2024 to return contact point locations in addition
+        to phi and J will only work for single geometry/geometry pairs, e.g. ground
+        and one object experiments.
 
         Args:
             q: (\*, n_q) configuration batch.
@@ -518,7 +523,10 @@ class ContactTerms(Module):
         J = ContactTerms.relative_velocity_to_contact_jacobian(
             torch.cat(Jv_v_W_BcAc_F, dim=-3), mu_repeated)
 
-        return phi, J
+        # Note:  p_BiBc_B works because the for loop over geometry/geometry pairs
+        # only runs once for our experiments, but this assumption may not hold for
+        # other use cases.
+        return phi, J, p_BiBc_B
 
 
 class MultibodyTerms(Module):
@@ -532,6 +540,7 @@ class MultibodyTerms(Module):
     geometry_body_assignment: Dict[str, List[int]]
     plant_diagram: MultibodyPlantDiagram
     urdfs: Dict[str, str]
+    pretrained_icnn_weights_filepath: str
 
     def scalars_and_meshes(
             self) -> Tuple[Dict[str, float], Dict[str, MeshSummary]]:
@@ -564,6 +573,11 @@ class MultibodyTerms(Module):
                     friction_coefficients[geometry_index].item()
 
                 if isinstance(geometry, DeepSupportConvex):
+                    print('>>>>>>>>>>>>', self.pretrained_icnn_weights_filepath)
+                    if self.pretrained_icnn_weights_filepath is not None:
+                        print(f'Loading pretrained ICNN weight from ' \
+                              + f'{self.pretrained_icnn_weights_filepath}')
+                        geometry.load_weights(self.pretrained_icnn_weights_filepath)
                     geometry_mesh = extract_mesh(geometry.network)
                     meshes[body_id] = geometry_mesh
                     vertices = geometry_mesh.vertices
@@ -578,6 +592,13 @@ class MultibodyTerms(Module):
                         f'{body_id}_center_{axis}': value.item()
                         for axis, value in zip(['x', 'y', 'z'], center)
                     })
+                    if self.pretrained_icnn_weights_filepath is not None:
+                        print(f'Saving trained weight to ' \
+                              + f'{self.pretrained_icnn_weights_filepath}')
+                        geometry.save_weights(self.pretrained_icnn_weights_filepath)
+                    else:
+                        print(f'Saving trained weight to icnn_weight_trained.pth')
+                        geometry.save_weights(f'icnn_weight_trained.pth')
 
         return scalars, meshes
 
@@ -603,12 +624,13 @@ class MultibodyTerms(Module):
             (\*, n_v) Contact-free acceleration inv(M(q)) * F(q).
         """
         M, non_contact_acceleration = self.lagrangian_terms(q, v, u)
-        phi, J = self.contact_terms(q)
+        phi, J, p_BiBc_B = self.contact_terms(q)
 
         delassus = pbmm(J, torch.linalg.solve(M, J.transpose(-1, -2)))
-        return delassus, M, J, phi, non_contact_acceleration
+        return delassus, M, J, phi, non_contact_acceleration, p_BiBc_B
 
-    def __init__(self, urdfs: Dict[str, str]) -> None:
+    def __init__(self, urdfs: Dict[str, str],
+                 pretrained_icnn_weights_filepath: str) -> None:
         """Inits :py:class:`MultibodyTerms` for system described in URDFs
 
         Interpretation is performed as a thin wrapper around
@@ -622,7 +644,9 @@ class MultibodyTerms(Module):
 
         Args:
             urdfs: Dictionary of named URDF XML file names, containing
-            description of multibody system.
+                description of multibody system.
+            pretrained_icnn_weights_filepath: Filepath to a set of
+                pretrained ICNN weights.
         """
         super().__init__()
 
@@ -654,3 +678,4 @@ class MultibodyTerms(Module):
         self.geometry_body_assignment = geometry_body_assignment
         self.plant_diagram = plant_diagram
         self.urdfs = urdfs
+        self.pretrained_icnn_weights_filepath = pretrained_icnn_weights_filepath

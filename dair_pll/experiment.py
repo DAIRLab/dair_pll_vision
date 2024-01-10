@@ -25,6 +25,7 @@ from dair_pll import file_utils
 from dair_pll.dataset_management import ExperimentDataManager, \
     TrajectorySet
 from dair_pll.experiment_config import SupervisedLearningExperimentConfig
+from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 from dair_pll.state_space import StateSpace
 from dair_pll.system import System, SystemSummary
 from dair_pll.wandb_manager import WeightsAndBiasesManager
@@ -386,7 +387,6 @@ class SupervisedLearningExperiment(ABC):
             learned_system: System being trained.
             statistics: Summary statistics for learning process.
         """
-
         # begin recording wall-clock logging time.
         assert self.wandb_manager is not None
         start_log_time = time.time()
@@ -849,3 +849,21 @@ class SupervisedLearningExperiment(ABC):
             statistics = self._evaluation(learned_system)
 
         return learned_system, statistics
+    
+    def generate_bundlesdf_data(self, learned_system: System) -> Tuple[Tensor, Tensor]:
+        assert isinstance(learned_system, MultibodyLearnableSystem)
+        training_set = self.data_manager.get_trajectory_split()[0]
+        slices_loader = DataLoader(training_set.slices,
+                                    batch_size=128,
+                                    shuffle=False)
+        points, directions = torch.zeros((0,3)), torch.zeros((0,3))
+        normal_forces = torch.zeros((0))
+        for batch_x, batch_y in slices_loader:
+            x = batch_x[..., -1, :]
+            u = torch.zeros(x.shape[:-1] + (0,))
+            x_plus = batch_y[..., 0, :]
+            points_i, directions_i, normal_forces_i = learned_system.bundlesdf_data_generation_from_cnets(x,u,x_plus)
+            points = torch.cat((points, points_i),dim=0)
+            directions = torch.cat((directions,directions_i),dim=0)
+            normal_forces = torch.cat((normal_forces, normal_forces_i),dim=0)
+        return points, directions, normal_forces

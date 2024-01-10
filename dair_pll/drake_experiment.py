@@ -34,6 +34,8 @@ class MultibodyLosses(Enum):
 class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     loss: MultibodyLosses = MultibodyLosses.PREDICTION_LOSS
     """Whether to use ContactNets or prediction loss."""
+    pretrained_icnn_weights_filepath: str = None
+    """If provided, filepath to pretrained ICNN weights."""
 
 
 @dataclass
@@ -179,9 +181,11 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
                                 self.config.learnable_config)
         output_dir = file_utils.get_learned_urdf_dir(self.config.storage,
                                                      self.config.run_name)
-        return MultibodyLearnableSystem(learnable_config.urdfs,
-                                        self.config.data_config.dt,
-                                        output_urdfs_dir=output_dir)
+        return MultibodyLearnableSystem(
+            learnable_config.urdfs, self.config.data_config.dt,
+            output_urdfs_dir=output_dir,
+            learnable_config.pretrained_icnn_weights_filepath
+        )
 
     def visualizer_regeneration_is_required(self) -> bool:
         return cast(DrakeMultibodyLearnableExperimentConfig,

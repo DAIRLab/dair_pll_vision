@@ -21,6 +21,7 @@ Contact Dynamics with Smooth, Implicit Representations," Conference on
 Robotic Learning, 2020, https://proceedings.mlr.press/v155/pfrommer21a.html
 """
 from multiprocessing import pool
+import os
 from os import path
 from typing import Tuple, Optional, Dict, cast
 
@@ -36,7 +37,7 @@ from dair_pll.multibody_terms import MultibodyTerms
 from dair_pll.system import System, \
     SystemSummary
 from dair_pll.tensor_utils import pbmm, broadcast_lorentz
-
+from dair_pll import quaternion
 
 class MultibodyLearnableSystem(System):
     """:py:class:`System` interface for dynamics associated with
@@ -51,7 +52,8 @@ class MultibodyLearnableSystem(System):
     def __init__(self,
                  init_urdfs: Dict[str, str],
                  dt: float,
-                 output_urdfs_dir: Optional[str] = None) -> None:
+                 output_urdfs_dir: Optional[str] = None,
+                 pretrained_icnn_weights_filepath: Optional[str] = None) -> None:
         """Inits :py:class:`MultibodyLearnableSystem` with provided model URDFs.
 
         Implementation is primarily based on Drake. Bodies are modeled via
@@ -65,8 +67,11 @@ class MultibodyLearnableSystem(System):
             dt: Time step of system in seconds.
             output_urdfs_dir: Optionally, a directory that learned URDFs can be
               written to.
+            pretrained_icnn_weights_filepath: Filepath of a set of pretrained
+              ICNN weights.
         """
-        multibody_terms = MultibodyTerms(init_urdfs)
+        multibody_terms = MultibodyTerms(
+          urdfs, pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath)
         space = multibody_terms.plant_diagram.space
         integrator = VelocityIntegrator(space, self.sim_step, dt)
         super().__init__(space, integrator)
@@ -79,8 +84,13 @@ class MultibodyLearnableSystem(System):
         self.set_carry_sampler(lambda: Tensor([False]))
         self.max_batch_dim = 1
 
-    def generate_updated_urdfs(self) -> Dict[str, str]:
+    def generate_updated_urdfs(self, epoch: int = None) -> Dict[str, str]:
         """Exports current parameterization as a :py:class:`DrakeSystem`.
+
+        Args:
+            storage_name: name of file storage location in which to store new
+              URDFs for Drake to read.
+            epoch: optionally can include epoch in generated filenames.
 
         Returns:
             New Drake system instantiated on new URDFs.
@@ -95,6 +105,16 @@ class MultibodyLearnableSystem(System):
         # but in new folder.
         for urdf_name, new_urdf_string in new_urdf_strings.items():
             old_urdf_filename = path.basename(old_urdfs[urdf_name])
+
+            if epoch:
+                # rename test.obj to test_{epoch}.obj
+                obj_file = os.path.join(self.output_urdfs_dir, 'test.obj')
+                new_obj_file = os.path.join(self.output_urdfs_dir, f'test_{epoch}.obj')
+                os.rename(obj_file, new_obj_file)
+                
+                # replace references in the urdf to the new filename
+                new_urdf_string = new_urdf_string.replace('test.obj', f'test_{epoch}.obj')
+                
             new_urdf_path = path.join(self.output_urdfs_dir, old_urdf_filename)
             file_utils.save_string(new_urdf_path, new_urdf_string)
             new_urdfs[urdf_name] = new_urdf_path
@@ -129,7 +149,7 @@ class MultibodyLearnableSystem(System):
         dt = self.dt
         eps = 1e-3
 
-        delassus, M, J, phi, non_contact_acceleration = self.multibody_terms(
+        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B = self.multibody_terms(
             q_plus, v_plus, u)
 
         n_contacts = phi.shape[-1]
@@ -164,7 +184,7 @@ class MultibodyLearnableSystem(System):
             -phi, torch.zeros_like(phi))**2).sum(dim=-1)
 
         penetration_penalty = penetration_penalty.reshape(
-            penetration_penalty.shape + (1, 1))
+            penetration_penalty.shape + (1, 1)) * 100.
 
         constant = 0.5 * pbmm(dv, pbmm(M, dv.transpose(
             -1, -2))) + penetration_penalty
@@ -260,7 +280,7 @@ class MultibodyLearnableSystem(System):
         # pylint: disable=too-many-locals
         dt = self.dt
         eps = 1e6
-        delassus, M, J, phi, non_contact_acceleration = self.multibody_terms(
+        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B = self.multibody_terms(
             q, v, u)
         n_contacts = phi.shape[-1]
         contact_filter = (broadcast_lorentz(phi) <= eps).unsqueeze(-1)
@@ -331,3 +351,105 @@ class MultibodyLearnableSystem(System):
         videos = cast(Dict[str, Tuple[np.ndarray, int]], {})
 
         return SystemSummary(scalars=scalars, videos=videos, meshes=meshes)
+    
+    def bundlesdf_data_generation_from_cnets(self,
+                         x: Tensor,
+                         u: Tensor,
+                         x_plus: Tensor,
+                         loss_pool: Optional[pool.Pool] = None):
+        
+                # pylint: disable-msg=too-many-locals
+        v = self.space.v(x)
+        q_plus, v_plus = self.space.q_v(x_plus)
+        dt = self.dt
+        eps = 1e-3
+
+        delassus, M, J, phi, non_contact_acceleration, p_BiBc_B = self.multibody_terms(
+            q_plus, v_plus, u)
+
+        n_contacts = phi.shape[-1]
+        reorder_mat = tensor_utils.sappy_reorder_mat(n_contacts)
+        reorder_mat = reorder_mat.reshape((1,) * (delassus.dim() - 2) +
+                                          reorder_mat.shape).expand(
+                                              delassus.shape)
+        J_t = J[..., n_contacts:, :]
+
+        # pylint: disable=E1103
+        double_zero_vector = torch.zeros(phi.shape[:-1] + (2 * n_contacts,))
+        phi_then_zero = torch.cat((phi, double_zero_vector), dim=-1)
+
+        # pylint: disable=E1103
+        sliding_velocities = pbmm(J_t, v_plus.unsqueeze(-1))
+        sliding_speeds = sliding_velocities.reshape(phi.shape[:-1] +
+                                                    (n_contacts, 2)).norm(
+                                                        dim=-1, keepdim=True)
+
+        Q = delassus + eps * torch.eye(3 * n_contacts)
+        J_M = pbmm(reorder_mat.transpose(-1, -2),
+                   pbmm(J, torch.linalg.cholesky(torch.inverse((M)))))
+
+        dv = (v_plus - (v + non_contact_acceleration * dt)).unsqueeze(-2)
+
+        q_pred = -pbmm(J, dv.transpose(-1, -2))
+        q_comp = torch.abs(phi_then_zero).unsqueeze(-1)
+        q_diss = dt * torch.cat((sliding_speeds, sliding_velocities), dim=-2)
+        q = q_pred + q_comp + q_diss
+
+        penetration_penalty = (torch.maximum(
+            -phi, torch.zeros_like(phi))**2).sum(dim=-1)
+
+        penetration_penalty = penetration_penalty.reshape(
+            penetration_penalty.shape + (1, 1)) * 100.
+
+        constant = 0.5 * pbmm(dv, pbmm(M, dv.transpose(
+            -1, -2))) + penetration_penalty
+
+        # Envelope theorem guarantees that gradient of loss w.r.t. parameters
+        # can ignore the gradient of the force w.r.t. the QCQP parameters.
+        # Therefore, we can detach ``force`` from pytorch's computation graph
+        # without causing error in the overall loss gradient.
+        # pylint: disable=E1103
+        #force = self.solver.apply(Q, q, torch.rand(q.shape), 1e-7, 1000, 1e-7,
+        #                          loss_pool).detach()
+        force = pbmm(
+            reorder_mat,
+            self.solver.apply(
+                J_M,
+                pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1),
+                eps).detach().unsqueeze(-1))
+
+        # Hack: remove elements of ``force`` where solver likely failed.
+        invalid = torch.any((force.abs() > 1e3) | force.isnan() | force.isinf(),
+                            dim=-2,
+                            keepdim=True)
+
+        constant[invalid] *= 0.
+        force[invalid.expand(force.shape)] = 0.
+
+        # Get the normal forces
+        normal_impulses = force[:, :n_contacts].reshape(-1,n_contacts)
+        orientation = q_plus[..., :4]
+
+        # Get the contact points that correspond to high normal forces
+        def ground_orientation_in_body_frame(object_orientation, n_lambda):
+            """
+            Convert ground orientation from world frame to object's body frame.
+            """
+            n_hat = torch.tensor([.0,.0,-1.0])
+            n_hat_repeated = torch.tile(n_hat.unsqueeze(0), (n_lambda,1))
+            return quaternion.rotate(quaternion.inverse(object_orientation), n_hat_repeated)
+        
+        points, directions = torch.zeros((0,3)), torch.zeros((0,3))
+        impulses_flat = torch.zeros((0))
+        n_lambda = normal_impulses.shape[1]
+        
+        orientation = torch.tile(orientation.unsqueeze(1), (1, n_lambda, 1))
+        for force_i, points_i, orientation_i in zip(normal_impulses, p_BiBc_B, orientation):
+            support_points = points_i
+            orientation_i = ground_orientation_in_body_frame(orientation_i, n_lambda)
+            support_function = orientation_i
+            points = torch.cat((points, support_points),dim=0)
+            directions = torch.cat((directions, support_function),dim=0)
+            impulses_flat = torch.cat((impulses_flat, force_i),dim=0)
+        return points, directions, impulses_flat/self.dt
+    

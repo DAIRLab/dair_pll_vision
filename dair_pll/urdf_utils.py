@@ -347,6 +347,7 @@ def represent_multibody_terms_as_urdfs(multibody_terms: MultibodyTerms,
             multibody_terms.plant_diagram.plant.GetModelInstanceByName(
                 urdf_name)
 
+        register_namespace('drake', 'https://drake.mit.edu/')
         urdf_tree = ElementTree.parse(urdf)
 
         for element in urdf_tree.iter():
