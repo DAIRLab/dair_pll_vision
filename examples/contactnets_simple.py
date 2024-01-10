@@ -233,7 +233,7 @@ def main(system: str = CUBE_SYSTEM,
                             best_valid_loss: Tensor) -> None:
         default_epoch_callback(
             epoch, learned_system, train_loss, best_valid_loss)
-        learned_system.generate_updated_urdfs(storage_name)
+        learned_system.generate_updated_urdfs(storage_name, epoch)
 
     # Trains system.
     _,_,learned_system = experiment.train(

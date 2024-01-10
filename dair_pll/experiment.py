@@ -545,6 +545,7 @@ class SupervisedLearningExperiment(ABC):
                                                    training_duration)
 
             # Check for validation loss improvement.
+            print(f'{epoch=},{valid_loss=},{best_valid_loss=}')
             if valid_loss <= best_valid_loss:
                 best_valid_loss = valid_loss
                 best_learned_system_state = deepcopy(
@@ -563,10 +564,10 @@ class SupervisedLearningExperiment(ABC):
                            best_valid_loss)
 
         # Reload best parameters.
-        learned_system.load_state_dict(best_learned_system_state)
+        # learned_system.load_state_dict(best_learned_system_state)
         
-        epoch_callback(epoch, learned_system, training_loss,
-                           best_valid_loss)
+        # epoch_callback(epoch, learned_system, training_loss,
+        #                    best_valid_loss)
 
         # kill tensorboard.
         print("killing tboard")

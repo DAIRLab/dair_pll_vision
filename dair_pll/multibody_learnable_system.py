@@ -21,6 +21,7 @@ Contact Dynamics with Smooth, Implicit Representations," Conference on
 Robotic Learning, 2020, https://proceedings.mlr.press/v155/pfrommer21a.html
 """
 from multiprocessing import pool
+import os
 from os import path
 from typing import Tuple, Optional, Dict, cast
 from scipy.spatial.transform import Rotation as R
@@ -73,7 +74,7 @@ class MultibodyLearnableSystem(System):
         self.set_carry_sampler(lambda: Tensor([False]))
         self.max_batch_dim = 1
 
-    def generate_updated_urdfs(self, storage_name: str) -> Dict[str, str]:
+    def generate_updated_urdfs(self, storage_name: str, epoch: int=None) -> Dict[str, str]:
         """Exports current parameterization as a ``DrakeSystem``.
 
         Args:
@@ -93,6 +94,13 @@ class MultibodyLearnableSystem(System):
         # but in new folder.
         for urdf_name, new_urdf_string in new_urdf_strings.items():
             old_urdf_filename = path.basename(old_urdfs[urdf_name])
+            if epoch:
+                # rename test.obj to test_{epoch}.obj
+                obj_file = os.path.join(urdf_dir, 'test.obj')
+                new_obj_file = os.path.join(urdf_dir, f'test_{epoch}.obj')
+                os.rename(obj_file, new_obj_file)
+                # replace references in the urdf to the new filename
+                new_urdf_string = new_urdf_string.replace('test.obj', f'test_{epoch}.obj')
             new_urdf_path = path.join(urdf_dir, old_urdf_filename)
             with open(new_urdf_path, 'w', encoding="utf8") as new_urdf_file:
                 new_urdf_file.write(new_urdf_string)
