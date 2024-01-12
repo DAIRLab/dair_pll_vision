@@ -543,6 +543,7 @@ class SupervisedLearningExperiment(ABC):
             # saved to disk.
             torch.save(dataclasses.asdict(training_state), checkpoint_filename)
 
+        self.wandb_manager = None
         if self.config.run_wandb:
             assert self.config.wandb_project is not None
             wandb_directory = file_utils.wandb_dir(self.config.storage,
@@ -727,6 +728,10 @@ class SupervisedLearningExperiment(ABC):
             return possible_tensor
 
         for set_name, trajectory_set in sets.items():
+            # Avoid error case if one of the sets is empty (e.g. test set).
+            if trajectory_set.indices.shape[0] == 0:
+                continue
+
             trajectories = trajectory_set.trajectories
             n_saved_trajectories = min(MAX_SAVED_TRAJECTORIES,
                                        len(trajectories))
@@ -850,20 +855,43 @@ class SupervisedLearningExperiment(ABC):
 
         return learned_system, statistics
     
-    def generate_bundlesdf_data(self, learned_system: System) -> Tuple[Tensor, Tensor]:
+    def generate_bundlesdf_data(self, learned_system: System) -> None:
+        """Usually called after training, this method generates and saves to
+        file data that can be processed later for training BundleSDF's object
+        reconstruction.  Namely this generates query points on the deep support
+        convex geometry's surface, those query points' associated query
+        directions, and the normal forces estimated via the ContactNets loss at
+        those points."""
         assert isinstance(learned_system, MultibodyLearnableSystem)
-        training_set = self.data_manager.get_trajectory_split()[0]
+
+        training_set = self.learning_data_manager.get_updated_trajectory_sets()[0]
         slices_loader = DataLoader(training_set.slices,
                                     batch_size=128,
                                     shuffle=False)
+        
+        # Instantiate tensors that will hold all the points, directions, forces.
+        # Points and directions are 3D while forces are 1D for a given point.
         points, directions = torch.zeros((0,3)), torch.zeros((0,3))
         normal_forces = torch.zeros((0))
+
+        # Iterate over all the training data.
         for batch_x, batch_y in slices_loader:
             x = batch_x[..., -1, :]
             u = torch.zeros(x.shape[:-1] + (0,))
             x_plus = batch_y[..., 0, :]
-            points_i, directions_i, normal_forces_i = learned_system.bundlesdf_data_generation_from_cnets(x,u,x_plus)
-            points = torch.cat((points, points_i),dim=0)
-            directions = torch.cat((directions,directions_i),dim=0)
-            normal_forces = torch.cat((normal_forces, normal_forces_i),dim=0)
-        return points, directions, normal_forces
+
+            # The bulk of the computation is done in the like-named method of
+            # the associated learned system for a single batch of data.
+            points_i, directions_i, normal_forces_i = \
+                learned_system.bundlesdf_data_generation_from_cnets(x,u,x_plus)
+            
+            # Store the results in a growing tensor.
+            points = torch.cat((points, points_i), dim=0)
+            directions = torch.cat((directions,directions_i), dim=0)
+            normal_forces = torch.cat((normal_forces, normal_forces_i), dim=0)
+
+        # Store the results to file.
+        file_utils.store_geom_for_bsdf(
+            self.config.storage, self.config.run_name, points, directions,
+            normal_forces
+        )

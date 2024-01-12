@@ -184,7 +184,8 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
         return MultibodyLearnableSystem(
             learnable_config.urdfs, self.config.data_config.dt,
             output_urdfs_dir=output_dir,
-            learnable_config.pretrained_icnn_weights_filepath
+            pretrained_icnn_weights_filepath = \
+                learnable_config.pretrained_icnn_weights_filepath
         )
 
     def visualizer_regeneration_is_required(self) -> bool:

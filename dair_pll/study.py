@@ -180,6 +180,7 @@ if __name__ == '__main__':
 
     import_directory = file_utils.get_asset(CUBE_DATA_ASSET)
 
+    # TODO:  This is out of date with DataConfig format.
     data_config = DataConfig(storage=STORAGE_NAME,
                              dt=DT,
                              n_train=4,

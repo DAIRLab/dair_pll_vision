@@ -63,15 +63,17 @@ class MultibodyLearnableSystem(System):
 
         Args:
             init_urdfs: Names and corresponding URDFs to model with
-              :py:class:`MultibodyTerms`.
+                :py:class:`MultibodyTerms`.
             dt: Time step of system in seconds.
             output_urdfs_dir: Optionally, a directory that learned URDFs can be
-              written to.
+                written to.
             pretrained_icnn_weights_filepath: Filepath of a set of pretrained
-              ICNN weights.
+                ICNN weights.
         """
         multibody_terms = MultibodyTerms(
-          urdfs, pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath)
+            init_urdfs,
+            pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath
+        )
         space = multibody_terms.plant_diagram.space
         integrator = VelocityIntegrator(space, self.sim_step, dt)
         super().__init__(space, integrator)

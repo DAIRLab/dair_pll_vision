@@ -35,6 +35,10 @@ class DataConfig:
     r"""Config for arranging trajectories into times slices for training."""
     update_dynamically: bool = False
     """Whether to check for new trajectories after each epoch."""
+    dataset_size: int = 0
+    """Total number of trajectories to use in (train, valid, test) sets.  If set
+    to zero, then the dataset size will unboundedly match the number of
+    trajectories available."""
 
     def __post_init__(self):
         """Method to check validity of parameters."""
@@ -43,3 +47,4 @@ class DataConfig:
         ]
         assert all(0. <= fraction <= 1. for fraction in fractions)
         assert sum(fractions) <= 1
+        assert self.dataset_size >= 0

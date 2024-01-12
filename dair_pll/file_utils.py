@@ -8,8 +8,12 @@ import glob
 import json
 import os
 import pickle
+import random
 from os import path
 from typing import List, Callable, BinaryIO, Any, TextIO, Optional
+
+import torch
+from torch import Tensor
 
 from dair_pll.experiment_config import SupervisedLearningExperimentConfig
 
@@ -25,6 +29,10 @@ RUNS_SUBFOLDER_NAME = 'runs'
 STUDIES_SUBFOLDER_NAME = 'studies'
 URDFS_SUBFOLDER_NAME = 'urdfs'
 WANDB_SUBFOLDER_NAME = 'wandb'
+BSDF_SUBFOLDER_NAME = 'geom_for_bsdf'
+EXPORT_POINTS_DEFAULT_NAME = 'points.pt'
+EXPORT_DIRECTIONS_DEFAULT_NAME = 'directions.pt'
+EXPORT_FORCES_DEFAULT_NAME = 'normal_forces.pt'
 TRAJECTORY_GIF_DEFAULT_NAME = 'trajectory.gif'
 FINAL_EVALUATION_NAME = f'statistics{STATS_EXTENSION}'
 HYPERPARAMETERS_FILENAME = f'optimal_hyperparameters{HYPERPARAMETERS_EXTENSION}'
@@ -51,6 +59,7 @@ def assure_created(directory: str) -> str:
 
 MAIN_DIR = path.dirname(path.dirname(__file__))
 ASSETS_DIR = assure_created(os.path.join(MAIN_DIR, 'assets'))
+RESULTS_DIR = assure_created(os.path.join(MAIN_DIR, 'results'))
 # str: locations of key static directories
 
 
@@ -79,15 +88,19 @@ def assure_storage_tree_created(storage_name: str) -> None:
         assure_created(directory(storage_name))
 
 
-def import_data_to_storage(storage_name: str, import_data_dir: str, num: int = None) -> None:
+def import_data_to_storage(storage_name: str, import_data_dir: str,
+                           num: int = None) -> None:
     """Import data in external folder into data directory.
 
     Args:
         storage_name: Name of storage for data import.
         import_data_dir: Directory to import data from.
+        num: Number of trajectories to import.  If larger than the number of
+            trajectories present in import_data_dir, will import them all.
     """
     output_directories = [
-        data_dir(storage_name)
+        ground_truth_data_dir(storage_name),
+        learning_data_dir(storage_name)
     ]
     data_traj_count = get_numeric_file_count(import_data_dir, TRAJ_EXTENSION)
     run_indices = [i for i in range(data_traj_count)]
@@ -100,18 +113,21 @@ def import_data_to_storage(storage_name: str, import_data_dir: str, num: int = N
         storage_traj_count = get_numeric_file_count(output_directory,
                                                     TRAJ_EXTENSION)
 
-        # Overwrite in case of any discrepancies.
+        # Add trajectories if more requested than already present in output dir.
         if storage_traj_count != target_traj_number:
 
-            # Copy entire directory if all trajectories are desired.
-            if target_traj_number == data_traj_count:
+            # If output directory is empty and all trajectories are desired,
+            # copy them all over.
+            if (storage_traj_count == 0) and \
+               (target_traj_number >= data_traj_count):
                 for output_dir in output_directories:
                     os.system(f'rm -r {output_dir}')
                     os.system(f'cp -r {import_data_dir} {output_dir}')
 
-            # Copy a random subset of trajectories if want a smaller number.
-            else:
-                import random
+            # If output directory is empty and a subset is desired, copy a
+            # random subset of trajectories.
+            elif (storage_traj_count == 0) and \
+                 (target_traj_number < data_traj_count):
                 random.shuffle(run_indices)
                 run_indices = run_indices[:target_traj_number]
                 for output_dir in output_directories:
@@ -124,9 +140,56 @@ def import_data_to_storage(storage_name: str, import_data_dir: str, num: int = N
                         os.system(f'cp {import_data_dir}/{run}.pt ' + \
                                   f'{output_dir}/{i}.pt')
 
+            # If output directory has fewer trajectories than desired, add a
+            # random subset of additional trajectories.
+            elif (storage_traj_count < target_traj_number):
+                n_to_add = target_traj_number - storage_traj_count
+                new_traj_idx = storage_traj_count
+
+                random.shuffle(run_indices)
+                traj_idx_to_try = 0
+
+                # Need to check that we don't add a duplicate trajectory.
+                while n_to_add > 0:
+                    import_traj_name = f'{run_indices[traj_idx_to_try]}.pt'
+                    import_traj = torch.load(path.join(import_data_dir,
+                                                    import_traj_name))
+                    
+                    traj_idx_to_try += 1
+
+                    if check_duplicate_trajectory(output_directory, import_traj):
+                        continue
+
+                    for output_dir in output_directories:
+                        os.system(
+                            f'cp {import_data_dir}/{import_traj_name} ' + \
+                            f'{output_dir}/{new_traj_idx}.pt')
+
+                    n_to_add -= 1
+                    new_traj_idx += 1
+
+
+            # If output directory has the right number or more of trajectories
+            # than desired, all good and can continue.
+            else:
+                continue
+
             # Can terminate outer loop over output directories since all output
             # directories are written to at once.
             return
+        
+
+def check_duplicate_trajectory(data_dir: str, traj: Tensor) -> bool:
+    """Checks if a trajectory is already represented in a data directory."""
+    existing_traj_files = glob.glob(
+        path.join(data_dir, './[0-9]*' + TRAJ_EXTENSION)
+    )
+    for existing_traj_file in existing_traj_files:
+        existing_traj = torch.load(existing_traj_file)
+        if torch.all(traj == existing_traj).item():
+            return True
+    return False
+
 
 
 def storage_dir(storage_name: str) -> str:
@@ -220,9 +283,24 @@ def get_learned_urdf_dir(storage_name: str, run_name: str) -> str:
 
 
 def wandb_dir(storage_name: str, run_name: str) -> str:
-    """Absolute path of tensorboard storage folder"""
+    """Absolute path of W&B storage folder"""
     return assure_created(
         path.join(run_dir(storage_name, run_name), WANDB_SUBFOLDER_NAME))
+
+
+def geom_for_bsdf_dir(storage_name: str, run_name: str) -> str:
+    """Absolute path of geometry for BundleSDF storage folder"""
+    return assure_created(
+        path.join(run_dir(storage_name, run_name), BSDF_SUBFOLDER_NAME))
+
+
+def store_geom_for_bsdf(storage_name: str, run_name: str, points: Tensor,
+                        directions: Tensor, normal_forces: Tensor) -> None:
+    """Store geometry-related data exports for BundleSDF."""
+    output_dir = geom_for_bsdf_dir(storage_name, run_name)
+    torch.save(points, path.join(output_dir, EXPORT_POINTS_DEFAULT_NAME))
+    torch.save(directions, path.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME))
+    torch.save(normal_forces, path.join(output_dir, EXPORT_FORCES_DEFAULT_NAME))
 
 
 def get_evaluation_filename(storage_name: str, run_name: str) -> str:

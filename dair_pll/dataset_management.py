@@ -125,6 +125,8 @@ class ExperimentDataManager:
     """Test trajectory set."""
     n_sorted: int
     """Number of files on disk split into (train, valid, test) sets so far."""
+    n_target: int
+    """Target number of files to distribute into sets."""
 
     def __init__(self, storage: str, config: DataConfig,
                  initial_split: Optional[Tuple[Tensor, Tensor, Tensor]] = None,
@@ -137,7 +139,8 @@ class ExperimentDataManager:
               should be sorted into (train, valid, test) sets from the
               beginning.
             use_ground_truth: Whether trajectories should be sourced from
-              ground-truth or learning data.
+              ground-truth or learning data (there is only a difference for
+              simulation data; these are the same for real data).
         """
         if use_ground_truth:
             self.trajectory_dir = file_utils.ground_truth_data_dir(storage)
@@ -148,6 +151,8 @@ class ExperimentDataManager:
         self.valid_set = self.make_empty_trajectory_set()
         self.test_set = self.make_empty_trajectory_set()
         self.n_sorted = 0
+        self.n_target = torch.inf if config.dataset_size == 0 else \
+                        config.dataset_size
         if initial_split:
             self.extend_trajectory_sets(initial_split)
 
@@ -190,9 +195,16 @@ class ExperimentDataManager:
             trajectory_set.add_trajectories(trajectories, trajectory_indices)
             self.n_sorted += trajectory_indices.nelement()
 
+        # Check that the sets extension won't yield more trajectories than
+        # desired.
+        assert self.n_sorted <= self.n_target, f'Sorted too many ' \
+        + f'trajectories:  wanted {self.n_target} but was told to add ' \
+        + f'{self.n_sorted}.'
+
     def get_updated_trajectory_sets(
             self) -> Tuple[TrajectorySet, TrajectorySet, TrajectorySet]:
-        """Returns an up-to-date partition of trajectories on disk.
+        """Returns an up-to-date partition of trajectories on disk, up to the
+        target number of trajectories.
 
         Checks if some trajectories on disk have yet to be sorted,
         and supplements the (train, valid, test) sets with these additional
@@ -205,18 +217,27 @@ class ExperimentDataManager:
         """
         config = self.config
         n_on_disk = file_utils.get_trajectory_count(self.trajectory_dir)
-        if n_on_disk != self.n_sorted:
+
+        # Aim for n_target, or as many as available if fewer.
+        n_to_use = min(n_on_disk, self.n_target)
+        
+        if n_to_use != self.n_sorted:
+            # There may be more total available unsorted trajectories than the
+            # number of trajectories to add.
             n_unsorted = n_on_disk - self.n_sorted
-            n_train = round(n_unsorted * config.train_fraction)
-            n_valid = round(n_unsorted * config.valid_fraction)
-            n_remaining = n_unsorted - n_valid - n_train
-            n_test = min(n_remaining, round(n_unsorted * config.test_fraction))
+            n_to_add = n_to_use - self.n_sorted
+
+            n_train = round(n_to_add * config.train_fraction)
+            n_valid = round(n_to_add * config.valid_fraction)
+            n_remaining = n_to_add - n_valid - n_train
+            n_test = min(n_remaining, round(n_to_add * config.test_fraction))
 
             n_requested = n_train + n_valid + n_test
-            assert n_requested <= n_unsorted
+            assert n_requested <= n_to_add
 
             # pylint: disable=no-member
-            trajectory_order = torch.randperm(n_unsorted) + self.n_sorted
+            trajectory_order = torch.randperm(n_unsorted)[:n_to_add] + \
+                self.n_sorted
             train_indices = trajectory_order[:n_train]
             trajectory_order = trajectory_order[n_train:]
 

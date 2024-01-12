@@ -131,7 +131,6 @@ WDS = {CUBE_SYSTEM: CUBE_WD,
        BUNDLESDF_TOBLERONE_SYSTEM: TOBLERONE_WD}
 EPOCHS = 100 #500
 PATIENCE = EPOCHS
-# BATCH_SIZE = 256
 
 WANDB_PROJECT = 'dair_pll-examples'
 
@@ -160,22 +159,25 @@ def main(run_name: str = "",
         clear_data: Whether to clear storage folder before running.
     """
     # pylint: disable=too-many-locals, too-many-arguments
-    print(f'\n\tPerforming on system: {system} \n\twith source: {source}' \
+    if run_name == "":
+        run_name = f'run_{str(int(time.time()))}'
+
+    print(f'\n\tCreating (or restarting) run: {run_name}' \
+         + f'\n\ton system: {system} \n\twith source: {source}' \
          + f'\n\tusing ContactNets: {contactnets}' \
          + f'\n\tregenerate: {regenerate}' \
          + f'\n\tdataset_size: {dataset_size}' \
          + f'\n\twith pretrained ICNN weights at: {pretrained_icnn_weights_filepath}' \
-         + f'\n\tclear_data: {clear_data}')
+         + f'\n\tclear_data: {clear_data}\n')
 
     # First step, clear out data on disk for a fresh start.
     simulation = source == SIM_SOURCE
     dynamic = source == DYNAMIC_SOURCE
     data_asset = DATA_ASSETS[system]
     # where to store data
-    storage_name = os.path.join(os.path.dirname(__file__), 'storage',
-                                data_asset)
-    if run_name == "":
-        run_name = f'run_{str(int(time.time()))}'
+    storage_name = file_utils.assure_created(
+        os.path.join(file_utils.RESULTS_DIR, data_asset)
+    )
 
     if clear_data:
         os.system(f'rm -r {file_utils.storage_dir(storage_name)}')
@@ -187,7 +189,7 @@ def main(run_name: str = "",
                                        wd=Float(WDS[system]),
                                        patience=PATIENCE,
                                        epochs=EPOCHS,
-                                       batch_size=Int(dataset_size/2))
+                                       batch_size=Int(int(dataset_size/2)))
 
     # Describes the ground truth system; infers everything from the URDF.
     # This is a configuration for a DrakeSystem, which wraps a Drake
@@ -219,7 +221,8 @@ def main(run_name: str = "",
                              valid_fraction=0.0 if dynamic else 0.3,
                              test_fraction=0.0 if dynamic else 0.0,
                              slice_config=slice_config,
-                             update_dynamically=dynamic)
+                             update_dynamically=dynamic,
+                             dataset_size=dataset_size)
 
     # Combines everything into config for entire experiment.
     experiment_config = DrakeMultibodyLearnableExperimentConfig(
@@ -236,9 +239,11 @@ def main(run_name: str = "",
     )
 
     # Makes experiment.
+    print('Making experiment.')
     experiment = DrakeMultibodyLearnableExperiment(experiment_config)
 
     # Prepare data.
+    print('Preparing data.')
     x_0 = X_0S[system]
     if simulation:
 
@@ -287,23 +292,20 @@ def main(run_name: str = "",
         cast(MultibodyLearnableSystem, learned_system).generate_updated_urdfs()
 
     # Trains system and saves final results.
-    print(f'\nTraining the model.')
+    print(f'Training the model.')
     learned_system, stats = experiment.generate_results(
         regenerate_callback if regenerate else default_epoch_callback)
 
     # Save the final urdf.
-    print(f'\nSaving the final learned URDF.')
+    print(f'\nSaving the final learned URDF...', end=' ')
     learned_system = cast(MultibodyLearnableSystem, learned_system)
     learned_system.generate_updated_urdfs()
     print(f'Done!')
 
     # Export BundleSDF training data.
-    # BIBIT TODO:  Save these in experiment output directory.
-    print(f'Saving points and directions...')
-    points, directions, normal_forces = experiment.generate_bundlesdf_data(learned_system)
-    torch.save(points, './points_new.pt')
-    torch.save(directions, './directions_new.pt')
-    torch.save(normal_forces, './normal_forces_new.pt')
+    print(f'Saving points and directions...', end=' ')
+    experiment.generate_bundlesdf_data(learned_system)
+    print(f'Done!')
 
     
 @click.command()
@@ -336,13 +338,13 @@ def main(run_name: str = "",
 
 def main_command(run_name: str, system: str, source: str, contactnets: bool,
                  box: bool, regenerate: bool, dataset_size: int,
-                 pretrained_icnn_weights_filepath: str, clear_data: bool):
+                 pretrained: str, clear_data: bool):
     # pylint: disable=too-many-arguments
     """Executes main function with argument interface."""
     if system == ELBOW_SYSTEM and source == REAL_SOURCE:
         raise NotImplementedError('Elbow real-world data not supported!')
     main(run_name, system, source, contactnets, box, regenerate, dataset_size,
-         pretrained_icnn_weights_filepath, clear_data)
+         pretrained_icnn_weights_filepath=pretrained, clear_data=clear_data)
 
 
 
