@@ -13,16 +13,16 @@ import pdb
 # Hyperparameters for querying into and outside of the object at an SDF=0 point.
 AXIS_NEARBY_DEPTH = 0.005
 AXIS_OUTSIDE_DEPTH = 0.1
-AXIS_NEARBY_N_QUERY = 10#50     # will do twice this:  once inside, once outside
-AXIS_OUTSIDE_N_QUERY = 10#50
+AXIS_NEARBY_N_QUERY = 1#50     # will do twice this:  once inside, once outside
+AXIS_OUTSIDE_N_QUERY = 1#50
 
 # Hyperparameters for querying around an object with SDF minimum bounds.
 BOUNDED_NEARBY_DEPTH = 0.005
 BOUNDED_NEARBY_RADIUS = 0.1
 BOUNDED_FAR_DEPTH = 0.1
 BOUNDED_FAR_RADIUS = 0.2
-BOUNDED_NEARBY_N_QUERY = 10#100
-BOUNDED_FAR_N_QUERY = 10#100
+BOUNDED_NEARBY_N_QUERY = 1#100
+BOUNDED_FAR_N_QUERY = 1#100
 
 # Hyperparameters for filtering support points
 FORCE_THRES = 0.3676 #N
