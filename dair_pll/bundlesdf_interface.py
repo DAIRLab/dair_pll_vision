@@ -272,7 +272,7 @@ def filter_pts_and_dirs(contact_points, directions, normal_forces):
     return filtered_directions.detach(), filtered_points.detach()
 
 
-run_name = 'test_002'
+run_name = 'test_003'
 system = 'bundlesdf_cube'
 data_asset = DATA_ASSETS[system]
 storage_name = file_utils.assure_created(
@@ -282,7 +282,7 @@ output_dir = geom_for_bsdf_dir(storage_name, run_name)
 normal_forces = torch.load(os.path.join(output_dir, 'normal_forces.pt'))
 points = torch.load(os.path.join(output_dir, 'points.pt'))
 directions = torch.load(os.path.join(output_dir, 'directions.pt'))
-
+print(f'{points.shape=}, {directions.shape=}')
 filterted_dirs, filterted_pts = filter_pts_and_dirs(points, directions, normal_forces)
 print(f'{filterted_pts.shape=}, {filterted_dirs.shape=}')
 
@@ -292,8 +292,8 @@ print(f'{ps.shape=},{sdfs.shape=},{vs.shape=},{sdf_bounds.shape=}')
 
 # Visualize it.  Note:  can call this visualization function without providing
 # the training data, and it will generate some for visualization purposes.
-# visualize_sdfs(filterted_pts, filterted_dirs, ps=ps, sdfs=sdfs, vs=vs,
-#                sdf_bounds=sdf_bounds)
+visualize_sdfs(filterted_pts, filterted_dirs, ps=ps, sdfs=sdfs, vs=vs,
+               sdf_bounds=sdf_bounds)
 
 
 torch.save(ps, os.path.join(output_dir, 'support_pts.pt'))

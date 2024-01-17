@@ -5,7 +5,9 @@ import re
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from helpers.train_icnn import visualize_dirs_and_pts
-
+from dair_pll import file_utils
+from dair_pll.file_utils import geom_for_bsdf_dir
+from examples.contactnets_simple import DATA_ASSETS
 FORCE_THRES = 0.3676 #N
 
 def load_pts(path):
@@ -86,6 +88,7 @@ def visualize_forces(normal_forces, img_path=None):
     plt.hist(normal_forces.flatten(), bins=30)
     plt.xlabel('contact impulse (Ns)')
     plt.show()
+    plt.savefig(img_path)
 
 def combine_pts(path):
     '''
@@ -120,8 +123,15 @@ def combine_pts(path):
     np.save('./final_pts.npy', pts_arrays)
 
 if __name__ == "__main__":
-    points = load_pts('points_new.pt')
-    directions = load_pts('directions_new.pt')
-    forces = load_pts('normal_forces_new.pt')
-    # visualize_forces(forces)
-    filter_pts_and_dirs(points,directions,forces)
+    run_name = 'test_003'
+    system = 'bundlesdf_cube'
+    data_asset = DATA_ASSETS[system]
+    storage_name = file_utils.assure_created(
+            os.path.join(file_utils.RESULTS_DIR, data_asset)
+        )
+    output_dir = geom_for_bsdf_dir(storage_name, run_name)
+    normal_forces = torch.load(os.path.join(output_dir, 'normal_forces.pt'))
+    points = torch.load(os.path.join(output_dir, 'points.pt'))
+    directions = torch.load(os.path.join(output_dir, 'directions.pt'))
+    visualize_forces(normal_forces, 'forces.png')
+    # filter_pts_and_dirs(points,directions,forces)
