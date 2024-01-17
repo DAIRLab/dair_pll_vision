@@ -11,6 +11,6 @@ source /home/mengti/workspace/dair_pll/venv/bin/activate;
 export PYTHONPATH=${PWD}:${PYTHONPATH}
 
 
-cmd="WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-args=\"-screen 0 800x600x24\" python3 examples/contactnets_simple.py --system=bundlesdf_cube --mesh --source=real --contactnets --regenerate --dataset-size=23"
+cmd="WANDB__SERVICE_WAIT=300 PYTHONUNBUFFERED=1 xvfb-run --server-args=\"-screen 0 800x600x24\" python3 examples/contactnets_simple.py --system=bundlesdf_cube --mesh --source=real --contactnets --regenerate --dataset-size=10 --run-name=test_001"
 echo "Running: $cmd"
 eval $cmd
