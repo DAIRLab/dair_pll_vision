@@ -435,13 +435,12 @@ class ContactTerms(Module):
         phi(q) and J(q) are calculated implicitly from kinematics and collision
         geometries.
 
-        Note: Changes made on 1/8/2024 to return contact point locations in addition
-        to phi and J will only work for single geometry/geometry pairs, e.g. ground
-        and one object experiments.
+        Note: Changes made on 1/8/2024 to return contact point locations in
+        addition to phi and J will only work for single geometry/geometry pairs,
+        e.g. ground and one object experiments.
 
         Args:
             q: (\*, n_q) configuration batch.
-            indices that can collide.
 
         Returns:
             (\*, n_collisions) signed distance phi(q).

@@ -411,8 +411,6 @@ class MultibodyLearnableSystem(System):
         # Therefore, we can detach ``force`` from pytorch's computation graph
         # without causing error in the overall loss gradient.
         # pylint: disable=E1103
-        #force = self.solver.apply(Q, q, torch.rand(q.shape), 1e-7, 1000, 1e-7,
-        #                          loss_pool).detach()
         force = pbmm(
             reorder_mat,
             self.solver.apply(
@@ -439,19 +437,24 @@ class MultibodyLearnableSystem(System):
             """
             n_hat = torch.tensor([.0,.0,-1.0])
             n_hat_repeated = torch.tile(n_hat.unsqueeze(0), (n_lambda,1))
-            return quaternion.rotate(quaternion.inverse(object_orientation), n_hat_repeated)
+            return quaternion.rotate(quaternion.inverse(object_orientation),
+                                     n_hat_repeated)
         
         points, directions = torch.zeros((0,3)), torch.zeros((0,3))
         impulses_flat = torch.zeros((0))
         n_lambda = normal_impulses.shape[1]
         
         orientation = torch.tile(orientation.unsqueeze(1), (1, n_lambda, 1))
-        for force_i, points_i, orientation_i in zip(normal_impulses, p_BiBc_B, orientation):
+        for force_i, points_i, orientation_i in \
+            zip(normal_impulses, p_BiBc_B, orientation):
+            
             support_points = points_i
-            orientation_i = ground_orientation_in_body_frame(orientation_i, n_lambda)
+            orientation_i = ground_orientation_in_body_frame(orientation_i,
+                                                             n_lambda)
             support_function = orientation_i
             points = torch.cat((points, support_points),dim=0)
             directions = torch.cat((directions, support_function),dim=0)
             impulses_flat = torch.cat((impulses_flat, force_i),dim=0)
+
         return points, directions, impulses_flat/self.dt
     

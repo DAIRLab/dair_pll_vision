@@ -48,6 +48,7 @@ _total_ordering = ['Plane', 'Polygon', 'Box', 'Sphere', 'DeepSupportConvex']
 
 _POLYGON_DEFAULT_N_QUERY = 5
 _DEEP_SUPPORT_DEFAULT_N_QUERY = 5
+_DEEP_SUPPORT_EVAL_N_QUERY = 10
 _DEEP_SUPPORT_DEFAULT_DEPTH = 2
 _DEEP_SUPPORT_DEFAULT_WIDTH = 256
 
@@ -319,16 +320,17 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         Returns:
             ``(*, n_query, 3)`` sampled support points.
         """
+        # Can query different number of directions during training/evaluation.
+        n_to_add = self.n_query if self.network.training else \
+            _DEEP_SUPPORT_EVAL_N_QUERY
+
         perturbed = directions.unsqueeze(-2)
-        perturbed = tile_dim(perturbed, self.n_query, -2)
-        #perturbed += self.perturbations.expand(perturbed.shape)
+        perturbed = tile_dim(perturbed, n_to_add, -2)
+        
         perturbed += torch.cat((torch.zeros(
-            (1, 3)), 1.99 * (torch.rand((_DEEP_SUPPORT_DEFAULT_N_QUERY - 1, 3)) - 0.5))).expand(perturbed.shape)
-        #import pdb
-        #pdb.set_trace()
-        #R_CA = rotation_matrix_from_one_vector(directions, 2).transpose(-1,-2)
-        #perturbed += 0.7 * pbmm(torch.tensor([[0., 0, 0],[-1, 0, 0],[1, 0, 0],[0, -1, 0],[0, 1, 0]]), R_CA).expand(perturbed.shape)
+            (1, 3)), 1.99 * (torch.rand((n_to_add - 1, 3)) - 0.5))).expand(perturbed.shape)
         perturbed /= perturbed.norm(dim=-1, keepdim=True)
+
         return self.network(perturbed)
 
     def train(self, mode: bool = True) -> DeepSupportConvex:
@@ -511,7 +513,7 @@ class PydrakeToCollisionGeometryFactory:
 
     @staticmethod
     def convert_mesh(drake_mesh: DrakeMesh) -> DeepSupportConvex:
-        """Converts ``pydrake.geometry.Mesh`` to ``Polygon``."""
+        """Converts ``pydrake.geometry.Mesh`` to ``DeepSupportConvex``."""
         filename = drake_mesh.filename()
         mesh = pywavefront.Wavefront(filename)
         vertices = Tensor(mesh.vertices)
