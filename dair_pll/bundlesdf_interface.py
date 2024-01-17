@@ -272,7 +272,7 @@ def filter_pts_and_dirs(contact_points, directions, normal_forces):
     return filtered_directions.detach(), filtered_points.detach()
 
 
-run_name = 'test-002'
+run_name = 'test_002'
 system = 'bundlesdf_cube'
 data_asset = DATA_ASSETS[system]
 storage_name = file_utils.assure_created(
@@ -296,7 +296,7 @@ print(f'{ps.shape=},{sdfs.shape=},{vs.shape=},{sdf_bounds.shape=}')
 #                sdf_bounds=sdf_bounds)
 
 
-torch.save(ps, 'support_pts.pt')
-torch.save(sdfs, 'sdfs_from_cnets.pt')
-torch.save(vs, 'sampled_pts.pt')
-torch.save(sdf_bounds, 'sdf_bounds_from_cnets.pt')
+torch.save(ps, os.path.join(output_dir, 'support_pts.pt'))
+torch.save(sdfs, os.path.join(output_dir, 'sdfs_from_cnets.pt'))
+torch.save(vs, os.path.join(output_dir, 'sampled_pts.pt'))
+torch.save(sdf_bounds, os.path.join(output_dir, 'sdf_bounds_from_cnets.pt'))
