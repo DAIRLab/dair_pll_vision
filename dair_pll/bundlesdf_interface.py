@@ -1,13 +1,18 @@
 """Functionality related to connecting ContactNets to BundleSDF."""
 
+import os
 from typing import Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+from dair_pll import file_utils
+from dair_pll.file_utils import geom_for_bsdf_dir
+from examples.contactnets_simple import DATA_ASSETS
 import torch
 from torch import Tensor
 
 import pdb
+import click
 
 
 # Hyperparameters for querying into and outside of the object at an SDF=0 point.
@@ -266,15 +271,19 @@ def filter_pts_and_dirs(contact_points, directions, normal_forces):
     filtered_directions = directions[mask]
     return filtered_directions.detach(), filtered_points.detach()
 
-normal_forces = torch.load('./normal_forces_new.pt')
-points = torch.load('./points_new.pt')
-directions = torch.load('./directions_new.pt')
-filterted_dirs, filterted_pts = filter_pts_and_dirs(points, directions, normal_forces)
-# points = torch.Tensor([[1.2, 0.8, 1.0],
-#                        [0.7, 1.1, 0.2]])
-# directions = torch.Tensor([[1., 0., 0.],
-#                            [0.707, 0., 0.707]])
 
+run_name = 'test_002'
+system = 'bundlesdf_cube'
+data_asset = DATA_ASSETS[system]
+storage_name = file_utils.assure_created(
+        os.path.join(file_utils.RESULTS_DIR, data_asset)
+    )
+output_dir = geom_for_bsdf_dir(storage_name, run_name)
+normal_forces = torch.load(os.path.join(output_dir, 'normal_forces.pt'))
+points = torch.load(os.path.join(output_dir, 'points.pt'))
+directions = torch.load(os.path.join(output_dir, 'directions.pt'))
+
+filterted_dirs, filterted_pts = filter_pts_and_dirs(points, directions, normal_forces)
 print(f'{filterted_pts.shape=}, {filterted_dirs.shape=}')
 
 # Generate training data.
@@ -287,7 +296,7 @@ print(f'{ps.shape=},{sdfs.shape=},{vs.shape=},{sdf_bounds.shape=}')
 #                sdf_bounds=sdf_bounds)
 
 
-torch.save(ps, 'support_pts.pt')
-torch.save(sdfs, 'sdfs_from_cnets.pt')
-torch.save(vs, 'sampled_pts.pt')
-torch.save(sdf_bounds, 'sdf_bounds_from_cnets.pt')
+torch.save(ps, os.path.join(output_dir, 'support_pts.pt'))
+torch.save(sdfs, os.path.join(output_dir, 'sdfs_from_cnets.pt'))
+torch.save(vs, os.path.join(output_dir, 'sampled_pts.pt'))
+torch.save(sdf_bounds, os.path.join(output_dir, 'sdf_bounds_from_cnets.pt'))
