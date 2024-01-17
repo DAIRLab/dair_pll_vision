@@ -53,7 +53,7 @@ def build(regenerate_deps: bool = False):
 
     with open(DEP_JSON_FILE, 'r', encoding='utf-8') as dep_file:
         dep_graph = json.load(dep_file)
-    print(dep_graph)
+    # print(dep_graph)
     graph = nx.DiGraph()
     edges = []
     excludes = ['dair_pll']
@@ -70,6 +70,8 @@ def build(regenerate_deps: bool = False):
     graph.add_edges_from(edges)
 
     if not nx.is_directed_acyclic_graph(graph):
+        print('import cycle found:')
+        print(nx.find_cycle(graph, orientation="original"))
         raise ValueError('import cycle detected in package!')
 
     mod_list = []

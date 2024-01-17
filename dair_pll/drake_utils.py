@@ -25,6 +25,7 @@ try:
 except ImportError:
     from typing import TypeVar
     TypeAlias = TypeVar('TypeAlias')
+    
 import numpy as np
 from pydrake.autodiffutils import AutoDiffXd  # type: ignore
 # pylint: disable-next=import-error

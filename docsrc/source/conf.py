@@ -29,7 +29,7 @@ release = 'v0.0.1'
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['sphinxcontrib.napoleon',
+extensions = ['sphinx.ext.napoleon',
               'sphinx_toolbox.more_autodoc.typehints',
               'sphinx.ext.viewcode',
               'sphinx.ext.mathjax',
@@ -78,6 +78,7 @@ html_theme_options = {
 }
 
 autodoc_member_order = 'bysource'
+autodoc_mock_imports = ['torch']
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
