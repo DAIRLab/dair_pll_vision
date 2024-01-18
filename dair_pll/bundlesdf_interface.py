@@ -271,6 +271,19 @@ def filter_pts_and_dirs(contact_points, directions, normal_forces):
     filtered_directions = directions[mask]
     return filtered_directions.detach(), filtered_points.detach()
 
+def visualize(ps,sdfs):
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    colored_sdfs = ax.scatter(ps[:, 0], ps[:, 1], ps[:, 2], c=sdfs,
+                              cmap='viridis', marker='o',
+                              label='Points with assigned SDF')
+    cbar = fig.colorbar(colored_sdfs)
+    cbar.set_label('SDF')
+    ax.set_xlabel('X-axis')
+    ax.set_ylabel('Y-axis')
+    ax.set_zlabel('Z-axis')
+    ax.legend()
+    plt.show()
 
 run_name = 'test_003'
 system = 'bundlesdf_cube'
@@ -292,11 +305,12 @@ print(f'{ps.shape=},{sdfs.shape=},{vs.shape=},{sdf_bounds.shape=}')
 
 # Visualize it.  Note:  can call this visualization function without providing
 # the training data, and it will generate some for visualization purposes.
-visualize_sdfs(filterted_pts, filterted_dirs, ps=ps, sdfs=sdfs, vs=vs,
-               sdf_bounds=sdf_bounds)
+# visualize_sdfs(filterted_pts, filterted_dirs, ps=ps, sdfs=sdfs, vs=vs,
+#                sdf_bounds=sdf_bounds)
+# visualize(ps,sdfs)
+# visualize(vs,sdf_bounds)
 
-
-torch.save(ps, os.path.join(output_dir, 'support_pts.pt'))
-torch.save(sdfs, os.path.join(output_dir, 'sdfs_from_cnets.pt'))
-torch.save(vs, os.path.join(output_dir, 'sampled_pts.pt'))
-torch.save(sdf_bounds, os.path.join(output_dir, 'sdf_bounds_from_cnets.pt'))
+# torch.save(ps, os.path.join(output_dir, 'support_pts.pt'))
+# torch.save(sdfs, os.path.join(output_dir, 'sdfs_from_cnets.pt'))
+# torch.save(vs, os.path.join(output_dir, 'sampled_pts.pt'))
+# torch.save(sdf_bounds, os.path.join(output_dir, 'sdf_bounds_from_cnets.pt'))
