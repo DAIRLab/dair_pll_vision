@@ -18,16 +18,20 @@ import click
 # Hyperparameters for querying into and outside of the object at an SDF=0 point.
 AXIS_NEARBY_DEPTH = 0.005
 AXIS_OUTSIDE_DEPTH = 0.1
-AXIS_NEARBY_N_QUERY = 50     # will do twice this:  once inside, once outside
 AXIS_OUTSIDE_N_QUERY = 50
+AXIS_NEARBY_OUTSIDE_N_QUERY = 50
+# Make the inside queried points equal to all queried outside.
+AXIS_NEARBY_INSIDE_N_QUERY = AXIS_OUTSIDE_N_QUERY + AXIS_NEARBY_OUTSIDE_N_QUERY
 
 # Hyperparameters for querying around an object with SDF minimum bounds.
 BOUNDED_NEARBY_DEPTH = 0.005
 BOUNDED_NEARBY_RADIUS = 0.05
 BOUNDED_FAR_DEPTH = 0.1
 BOUNDED_FAR_RADIUS = 0.1
-BOUNDED_NEARBY_N_QUERY = 100
 BOUNDED_FAR_N_QUERY = 100
+BOUNDED_NEARBY_OUTSIDE_N_QUERY = 100
+# Make the inside queried points equal to all queried outside.
+BOUNDED_NEARBY_INSIDE_N_QUERY = BOUNDED_FAR_N_QUERY + BOUNDED_NEARBY_OUTSIDE_N_QUERY
 
 # Hyperparameters for filtering support points
 FORCE_THRES = 0.3676 #N
@@ -62,13 +66,14 @@ def generate_point_sdf_pairs(points: Tensor, directions: Tensor
     # The signed distances will be tiled such that the first N correspond to
     # point 1, the next N correspond to point 2, etc.
     distance_scalings = torch.cat((
-        -AXIS_NEARBY_DEPTH*torch.ones(AXIS_NEARBY_N_QUERY),
-        AXIS_NEARBY_DEPTH*torch.ones(AXIS_NEARBY_N_QUERY),
+        -AXIS_NEARBY_DEPTH*torch.ones(AXIS_NEARBY_INSIDE_N_QUERY),
+        AXIS_NEARBY_DEPTH*torch.ones(AXIS_NEARBY_OUTSIDE_N_QUERY),
         AXIS_OUTSIDE_DEPTH*torch.ones(AXIS_OUTSIDE_N_QUERY)
     )).repeat(n_points)
     signed_distances = distance_scalings * torch.rand_like(distance_scalings)
 
-    n_per_point = 2*AXIS_NEARBY_N_QUERY + AXIS_OUTSIDE_N_QUERY
+    n_per_point = AXIS_NEARBY_INSIDE_N_QUERY + AXIS_NEARBY_OUTSIDE_N_QUERY + \
+        AXIS_OUTSIDE_N_QUERY
 
     # Get N repeated for first point, then N repeated for second point, etc.
     repeated_points = points.unsqueeze(1).repeat(1, n_per_point, 1
@@ -126,14 +131,16 @@ def generate_point_sdf_bound_pairs(points: Tensor, directions: Tensor
     # Randomly sample radii, heights, and angles.  Everything will be tiled such
     # that the first N correspond to point 1, the next N correspond to point 2,
     # etc.
-    n_per_point = 2*BOUNDED_NEARBY_N_QUERY + BOUNDED_FAR_N_QUERY
+    n_per_point = BOUNDED_NEARBY_INSIDE_N_QUERY + \
+        BOUNDED_NEARBY_OUTSIDE_N_QUERY + BOUNDED_FAR_N_QUERY
     radius_scalings = torch.cat((
-        BOUNDED_NEARBY_RADIUS*torch.ones(2*BOUNDED_NEARBY_N_QUERY),
+        BOUNDED_NEARBY_RADIUS*torch.ones(BOUNDED_NEARBY_INSIDE_N_QUERY),
+        BOUNDED_NEARBY_RADIUS*torch.ones(BOUNDED_NEARBY_OUTSIDE_N_QUERY),
         BOUNDED_FAR_RADIUS*torch.ones(BOUNDED_FAR_N_QUERY)
     )).repeat(n_points)
     height_scalings = torch.cat((
-        -BOUNDED_NEARBY_DEPTH*torch.ones(BOUNDED_NEARBY_N_QUERY),
-        BOUNDED_NEARBY_DEPTH*torch.ones(BOUNDED_NEARBY_N_QUERY),
+        -BOUNDED_NEARBY_DEPTH*torch.ones(BOUNDED_NEARBY_INSIDE_N_QUERY),
+        BOUNDED_NEARBY_DEPTH*torch.ones(BOUNDED_NEARBY_OUTSIDE_N_QUERY),
         BOUNDED_FAR_DEPTH*torch.ones(BOUNDED_FAR_N_QUERY)
     )).repeat(n_points)
     angle_scalings = 2*torch.pi*torch.ones(n_points).repeat(n_per_point)
