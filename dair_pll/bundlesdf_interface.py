@@ -219,8 +219,8 @@ def visualize_sdfs(points: Tensor, directions: Tensor, ps: Tensor = None,
     colored_sdfs = ax.scatter(ps[:, 0], ps[:, 1], ps[:, 2], c=sdfs,
                               cmap='viridis', marker='o',
                               label='Points with assigned SDF')
-    ax.scatter(vs[:, 0], vs[:, 1], vs[:, 2], c=sdf_bounds, cmap='viridis',
-               marker='.', label='Points with SDF bound')
+    # ax.scatter(vs[:, 0], vs[:, 1], vs[:, 2], c=sdf_bounds, cmap='viridis',
+    #            marker='.', label='Points with SDF bound')
 
     # Because both scatter series are using the 'viridis' color map, the
     # colorbar will share a mapping for both series.
@@ -292,7 +292,7 @@ def visualize(ps,sdfs):
     ax.legend()
     plt.show()
 
-run_name = 'test_003'
+run_name = 'test_004'
 system = 'bundlesdf_cube'
 data_asset = DATA_ASSETS[system]
 storage_name = file_utils.assure_created(
@@ -312,8 +312,8 @@ print(f'{ps.shape=},{sdfs.shape=},{vs.shape=},{sdf_bounds.shape=}')
 
 # Visualize it.  Note:  can call this visualization function without providing
 # the training data, and it will generate some for visualization purposes.
-# visualize_sdfs(filterted_pts, filterted_dirs, ps=ps, sdfs=sdfs, vs=vs,
-#                sdf_bounds=sdf_bounds)
+visualize_sdfs(points.detach().numpy(), directions.detach().numpy(), ps=ps, sdfs=sdfs, vs=vs,
+               sdf_bounds=sdf_bounds)
 # visualize(ps,sdfs)
 # visualize(vs,sdf_bounds)
 
