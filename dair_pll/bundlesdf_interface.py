@@ -292,7 +292,7 @@ def visualize(ps,sdfs):
     ax.legend()
     plt.show()
 
-run_name = 'test_003'
+run_name = 'test_004'
 system = 'bundlesdf_cube'
 data_asset = DATA_ASSETS[system]
 storage_name = file_utils.assure_created(
