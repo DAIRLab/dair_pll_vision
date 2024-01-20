@@ -219,8 +219,8 @@ def visualize_sdfs(points: Tensor, directions: Tensor, ps: Tensor = None,
     colored_sdfs = ax.scatter(ps[:, 0], ps[:, 1], ps[:, 2], c=sdfs,
                               cmap='viridis', marker='o',
                               label='Points with assigned SDF')
-    ax.scatter(vs[:, 0], vs[:, 1], vs[:, 2], c=sdf_bounds, cmap='viridis',
-               marker='.', label='Points with SDF bound')
+    # ax.scatter(vs[:, 0], vs[:, 1], vs[:, 2], c=sdf_bounds, cmap='viridis',
+    #            marker='.', label='Points with SDF bound')
 
     # Because both scatter series are using the 'viridis' color map, the
     # colorbar will share a mapping for both series.
@@ -278,8 +278,21 @@ def filter_pts_and_dirs(contact_points, directions, normal_forces):
     filtered_directions = directions[mask]
     return filtered_directions.detach(), filtered_points.detach()
 
+def visualize(ps,sdfs):
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    colored_sdfs = ax.scatter(ps[:, 0], ps[:, 1], ps[:, 2], c=sdfs,
+                              cmap='viridis', marker='o',
+                              label='Points with assigned SDF')
+    cbar = fig.colorbar(colored_sdfs)
+    cbar.set_label('SDF')
+    ax.set_xlabel('X-axis')
+    ax.set_ylabel('Y-axis')
+    ax.set_zlabel('Z-axis')
+    ax.legend()
+    plt.show()
 
-run_name = 'test_003'
+run_name = 'test_004'
 system = 'bundlesdf_cube'
 data_asset = DATA_ASSETS[system]
 storage_name = file_utils.assure_created(
@@ -299,11 +312,12 @@ print(f'{ps.shape=},{sdfs.shape=},{vs.shape=},{sdf_bounds.shape=}')
 
 # Visualize it.  Note:  can call this visualization function without providing
 # the training data, and it will generate some for visualization purposes.
-visualize_sdfs(filterted_pts, filterted_dirs, ps=ps, sdfs=sdfs, vs=vs,
+visualize_sdfs(points.detach().numpy(), directions.detach().numpy(), ps=ps, sdfs=sdfs, vs=vs,
                sdf_bounds=sdf_bounds)
+# visualize(ps,sdfs)
+# visualize(vs,sdf_bounds)
 
-
-torch.save(ps, os.path.join(output_dir, 'support_pts.pt'))
-torch.save(sdfs, os.path.join(output_dir, 'sdfs_from_cnets.pt'))
-torch.save(vs, os.path.join(output_dir, 'sampled_pts.pt'))
-torch.save(sdf_bounds, os.path.join(output_dir, 'sdf_bounds_from_cnets.pt'))
+# torch.save(ps, os.path.join(output_dir, 'support_pts.pt'))
+# torch.save(sdfs, os.path.join(output_dir, 'sdfs_from_cnets.pt'))
+# torch.save(vs, os.path.join(output_dir, 'sampled_pts.pt'))
+# torch.save(sdf_bounds, os.path.join(output_dir, 'sdf_bounds_from_cnets.pt'))
