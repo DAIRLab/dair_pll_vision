@@ -1,18 +1,21 @@
 """Functionality related to connecting ContactNets to BundleSDF."""
 
 import os
+import os.path as op
+import pdb
 from typing import Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-from dair_pll import file_utils
-from dair_pll.file_utils import geom_for_bsdf_dir
-from examples.contactnets_simple import DATA_ASSETS
+from dair_pll.system import MeshSummary
 import torch
 from torch import Tensor
+from scipy.spatial import ConvexHull  # type: ignore
 
-import pdb
-import click
+from dair_pll import deep_support_function, file_utils
+from dair_pll.geometry import _DEEP_SUPPORT_DEFAULT_DEPTH, \
+    _DEEP_SUPPORT_DEFAULT_WIDTH
+from dair_pll.deep_support_function import HomogeneousICNN
 
 
 # Hyperparameters for querying into and outside of the object at an SDF=0 point.
@@ -35,6 +38,7 @@ BOUNDED_NEARBY_INSIDE_N_QUERY = BOUNDED_FAR_N_QUERY + BOUNDED_NEARBY_OUTSIDE_N_Q
 
 # Hyperparameters for filtering support points
 FORCE_THRES = 0.3676 #N
+
 
 def generate_point_sdf_pairs(points: Tensor, directions: Tensor
                              ) -> Tuple[Tensor, Tensor]:
@@ -266,17 +270,35 @@ def generate_training_data(points: Tensor, directions: Tensor) -> None:
 
     return ps, sdfs, vs, sdf_bounds
 
-def filter_pts_and_dirs(contact_points, directions, normal_forces):
-    """Filter out points that are not exactly in contact with the ground.
+
+def filter_pts_and_dirs(contact_points: Tensor, directions: Tensor,
+                        normal_forces: Tensor) -> Tuple[Tensor, Tensor]:
+    """Filter out points that are likely not in contact with the ground during
+    the data captured by the normal_forces tensor.
+
+    Args:
+        contact_points (M, 3):  M support points of the object geometry for the
+            given support directions.
+        directions (M, 3):  associated support directions.
+        normal_forces (M,):  normal forces associated with the contact points
+            during one timestep of PLL training.
+
+    Outputs:
+        filtered_points (N, 3):  N support points that experienced a normal
+            force greater than FORCE_THRES.
+        filtered_directions (N, 3):  the corresponding normal directions.
     """
     assert normal_forces.ndim == 1
     assert contact_points.ndim == directions.ndim == 2
-    assert normal_forces.shape[0] == contact_points.shape[0] == directions.shape[0]
+    assert normal_forces.shape[0]==contact_points.shape[0]==directions.shape[0]
     assert contact_points.shape[1] == directions.shape[1] == 3
+
     mask = normal_forces > FORCE_THRES
     filtered_points = contact_points[mask]
     filtered_directions = directions[mask]
-    return filtered_directions.detach(), filtered_points.detach()
+
+    return filtered_points.detach(), filtered_directions.detach()
+
 
 def visualize(ps,sdfs):
     fig = plt.figure(figsize=(8, 8))
@@ -292,27 +314,217 @@ def visualize(ps,sdfs):
     ax.legend()
     plt.show()
 
+
+def load_deep_support_convex_network(storage_name: str, run_name: str
+                                     ) -> HomogeneousICNN:
+    """Load a deep support convex network stored from a previous experiment run,
+    corresponding to that run's best learned system state.
+
+    Args:
+        storage_name:  name of the storage directory.
+        run_name:  name of the run whose results are to be loaded.
+
+    Outputs:
+        A deep support convex network in the form of a HomogemeousICNN.
+    """
+    checkpoint_filename = file_utils.get_model_filename(storage_name, run_name)
+    checkpoint_dict = torch.load(checkpoint_filename)
+
+    geom_model_dict = {}
+    for key, val in checkpoint_dict['best_learned_system_state'].items():
+        if 'geometries.0.network.' in key:
+            geom_model_dict[key.split('geometries.0.network.')[-1]] = val
+
+    deep_support = HomogeneousICNN(depth = _DEEP_SUPPORT_DEFAULT_DEPTH,
+                                   width = _DEEP_SUPPORT_DEFAULT_WIDTH)
+    deep_support.load_state_dict(geom_model_dict)
+
+    return deep_support
+
+
+def create_mesh_from_deep_support(deep_support: HomogeneousICNN) -> MeshSummary:
+    """Create a mesh from a deep support convex network.
+
+    Args:
+        deep_support:  a deep support convex network.
+
+    Outputs:
+        A MeshSummary with vertices and faces attributes.  The vertices are
+            already listed in counter-clockwise order.
+    """
+    return deep_support_function.extract_mesh(deep_support)
+
+
+def create_mesh_from_set_of_points(points: Tensor) -> MeshSummary:
+    """Given a set of points, extracts a vertex/face mesh.
+
+    Args:
+        points (N, 3):  set of 3D points.
+
+    Returns:
+        A mesh summary.
+    """
+    support_points = points
+    support_point_hashes = set()
+    unique_support_points = []
+
+    # remove duplicate vertices
+    for vertex in support_points:
+        vertex_hash = hash(vertex.numpy().tobytes())
+        if vertex_hash in support_point_hashes:
+            continue
+        support_point_hashes.add(vertex_hash)
+        unique_support_points.append(vertex)
+
+    vertices = torch.stack(unique_support_points)
+    hull = ConvexHull(vertices.numpy())
+    faces = Tensor(hull.simplices).to(torch.long)  # type: ignore
+
+    _, backwards, _ = deep_support_function.extract_outward_normal_hyperplanes(
+        vertices.unsqueeze(0), faces.unsqueeze(0))
+    backwards = backwards.squeeze(0)
+    faces[backwards] = faces[backwards].flip(-1)
+
+    return MeshSummary(vertices=vertices, faces=faces)
+
+
+def sample_on_mesh(mesh: MeshSummary, n_sample: int,
+                   weighted_by_area: bool = True) -> Tuple[Tensor, Tensor]:
+    """Sample points that are on the mesh and store their corresponding outward
+    normal.
+
+    Args:
+        mesh:  a MeshSummary.
+        n_sample:  number of points to sample.
+        weighted_by_area:  whether to select a mesh triangle with probability
+            proportional to its area or to give every mesh triangle the same
+            likelihood of selection.
+
+    Outputs:
+        surface_points (N, 3):  points strictly on mesh surface.
+        surface_normals (N, 3):  outward surface normals.
+    """
+    # Get a probability distribution.
+    n_faces = mesh.faces.shape[0]
+    probabilities = np.ones(n_faces) / n_faces
+    if weighted_by_area:
+        face_verts = mesh.vertices[mesh.faces]
+        vecs_1 = face_verts[:, 1] - face_verts[:, 0]
+        vecs_2 = face_verts[:, 2] - face_verts[:, 1]
+        face_areas = torch.linalg.norm(torch.cross(vecs_1, vecs_2), dim=1) / 2
+        probabilities = face_areas / torch.sum(face_areas)
+
+    # Randomly select faces.  Index into vertices via [face_i, vertex_i, x/y/z].
+    indices = torch.multinomial(probabilities, n_sample, replacement=True)
+                                                            # (n_sample,)
+    faces = mesh.faces[indices]                             # (n_sample, 3)
+    vertices = mesh.vertices[faces]                         # (n_sample, 3, 3)
+
+    # Store the faces' outward normals.
+    all_surface_normals, _, _ = \
+        deep_support_function.extract_outward_normal_hyperplanes(
+            mesh.vertices, mesh.faces
+        )
+    surface_normals = all_surface_normals.squeeze(0)[indices]
+
+    # Generate points randomly interpolated inside selected vertices.
+    abcs = torch.rand((n_sample, 3))
+    abcs /= torch.sum(abcs, dim=1).unsqueeze(1).tile(1,3)   # (n_sample, 3)
+    abcs = abcs.unsqueeze(2).tile(1,1,3)                    # (n_sample, 3, 3)
+    vert_pieces = vertices * abcs
+    surface_points = torch.sum(vert_pieces, dim=1)          # (n_sample, 3)
+
+    return surface_points, surface_normals
+    
+
+def visualize_sampled_points(mesh: MeshSummary, sampled_points: Tensor,
+                             sampled_normals: Tensor) -> None:
+    """Visualize the sample points generated on the provided mesh.  Can help
+    visually verify the points are strictly on the mesh surface with normals
+    facing outwards.
+
+    Args:
+        mesh:  a MeshSummary of the object geometry.
+        sampled_points (N, 3):  points sampled on the mesh surface.
+        sampled_normals (N, 3):  outward normals associated with the points.
+    """
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Plot the mesh wireframe.
+    # prefix = [''] + ['_']*(len(mesh.faces)-1)
+    # for i in range(len(mesh.faces)):
+    #     face = mesh.faces[i]
+    #     vertices = mesh.vertices[face]
+    #     vertices = torch.cat((vertices, vertices[0].unsqueeze(0)), dim=0).numpy()
+    #     ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2], color='b',
+    #             label=prefix[i]+'Mesh edges')
+
+    # Plot the sampled points and outward normals.
+    ax.scatter(sampled_points[:, 0], sampled_points[:, 1], sampled_points[:, 2],
+               marker='*', s=20, color='r', label='Sample points')
+    prefix = [''] + ['_']*(len(sampled_normals)-1)
+    for i in range(len(sampled_normals)):
+        ax.quiver(*sampled_points[i], *sampled_normals[i]/25, color='r',
+                  label=prefix[i]+'Outward normals', zorder=1.5)
+
+    ax.set_xlabel('X-axis')
+    ax.set_ylabel('Y-axis')
+    ax.set_zlabel('Z-axis')
+    ax.legend()
+
+    # Set equal aspect ratio.
+    ax.set_box_aspect([np.ptp(arr) for arr in \
+                       [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
+    plt.show()
+
+
+
+# Prepare to load pre-saved data from a finished run.
 run_name = 'test_004'
 system = 'bundlesdf_cube'
-data_asset = DATA_ASSETS[system]
-storage_name = file_utils.assure_created(
-        os.path.join(file_utils.RESULTS_DIR, data_asset)
-    )
-output_dir = geom_for_bsdf_dir(storage_name, run_name)
-normal_forces = torch.load(os.path.join(output_dir, 'normal_forces.pt'))
-points = torch.load(os.path.join(output_dir, 'points.pt'))
-directions = torch.load(os.path.join(output_dir, 'directions.pt'))
+storage_name = file_utils.assure_created(op.join(file_utils.RESULTS_DIR, system))
+
+# Load the exported outputs from the experiment run.
+output_dir = file_utils.geom_for_bsdf_dir(storage_name, run_name)
+normal_forces = torch.load(op.join(output_dir, 'normal_forces.pt')).detach()
+points = torch.load(op.join(output_dir, 'points.pt')).detach()
+directions = torch.load(op.join(output_dir, 'directions.pt')).detach()
+
+# Perform filtering via simple thresholding of normal forces.
+filtered_pts, filtered_dirs = filter_pts_and_dirs(points, directions, normal_forces)
+
 print(f'{points.shape=}, {directions.shape=}')
-filterted_dirs, filterted_pts = filter_pts_and_dirs(points, directions, normal_forces)
-print(f'{filterted_pts.shape=}, {filterted_dirs.shape=}')
+print(f'{filtered_pts.shape=}, {filtered_dirs.shape=}')
+pdb.set_trace()
+
+###
+# # Test 1:  Can build set of points manually.
+# point_set = Tensor([[0.2, 0, 0], [0.2, 1, 0], [0, 1, 0], [0, 0, 0],
+#                     [0.2, 0, 1], [0.2, 1, 1], [0, 1, 1], [0, 0, 1]])
+# mesh = create_mesh_from_set_of_points(point_set)
+    
+# # Test 2:  Can load a pre-trained deep support convex network.
+# network = load_deep_support_convex_network(storage_name, run_name)
+# mesh = create_mesh_from_deep_support(network)
+
+# Test 3:  Can build set of points from the saved support points.
+mesh = create_mesh_from_set_of_points(filtered_pts)
+###
+
+# Sample points and visualize them.
+sample_points, sample_normals = sample_on_mesh(mesh, 50)
+visualize_sampled_points(mesh, sample_points, sample_normals)
+# visualize_sampled_points(None, filtered_pts, filtered_dirs)
+
 
 # Generate training data.
-ps, sdfs, vs, sdf_bounds = generate_training_data(filterted_pts, filterted_dirs)
+ps, sdfs, vs, sdf_bounds = generate_training_data(filtered_pts, filtered_dirs)
 print(f'{ps.shape=},{sdfs.shape=},{vs.shape=},{sdf_bounds.shape=}')
 
 # Visualize it.  Note:  can call this visualization function without providing
 # the training data, and it will generate some for visualization purposes.
-visualize_sdfs(points.detach().numpy(), directions.detach().numpy(), ps=ps, sdfs=sdfs, vs=vs,
+visualize_sdfs(filtered_pts, filtered_dirs, ps=ps, sdfs=sdfs, vs=vs,
                sdf_bounds=sdf_bounds)
 # visualize(ps,sdfs)
 # visualize(vs,sdf_bounds)
