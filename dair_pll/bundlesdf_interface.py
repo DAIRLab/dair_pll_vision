@@ -496,7 +496,7 @@ filtered_pts, filtered_dirs = filter_pts_and_dirs(points, directions, normal_for
 
 print(f'{points.shape=}, {directions.shape=}')
 print(f'{filtered_pts.shape=}, {filtered_dirs.shape=}')
-pdb.set_trace()
+# pdb.set_trace()
 
 ###
 # # Test 1:  Can build set of points manually.
@@ -513,13 +513,20 @@ mesh = create_mesh_from_set_of_points(filtered_pts)
 ###
 
 # Sample points and visualize them.
-sample_points, sample_normals = sample_on_mesh(mesh, 50)
-visualize_sampled_points(mesh, sample_points, sample_normals)
+sample_points, sample_normals = sample_on_mesh(mesh, 100)
+print(f'{sample_points.shape=}, {sample_normals.shape=}')
+# visualize_sampled_points(mesh, sample_points, sample_normals)
 # visualize_sampled_points(None, filtered_pts, filtered_dirs)
 
 
 # Generate training data.
-ps, sdfs, vs, sdf_bounds = generate_training_data(filtered_pts, filtered_dirs)
+ps, sdfs, vs, sdf_bounds = generate_training_data(sample_points, sample_normals)
+ps_, sdfs_, vs_, sdf_bounds_ = generate_training_data(filtered_pts, filtered_dirs)
+ps = torch.cat((ps, ps_), dim=0)
+sdfs = torch.cat((sdfs, sdfs_), dim=0)
+vs = torch.cat((vs, vs_), dim=0)
+sdf_bounds = torch.cat((sdf_bounds, sdf_bounds_), dim=0)
+
 print(f'{ps.shape=},{sdfs.shape=},{vs.shape=},{sdf_bounds.shape=}')
 
 # Visualize it.  Note:  can call this visualization function without providing
