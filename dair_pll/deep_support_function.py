@@ -14,6 +14,7 @@ _LINEAR_SPACE = torch.linspace(-1, 1, steps=8)
 _GRID = torch.cartesian_prod(_LINEAR_SPACE, _LINEAR_SPACE, _LINEAR_SPACE)
 _SURFACE = _GRID[_GRID.abs().max(dim=-1).values >= 1.0]
 _SURFACE = _SURFACE / _SURFACE.norm(dim=-1, keepdim=True)
+_SURFACE = _SURFACE.to(torch.float64)
 _SURFACE_ROTATIONS = rotation_matrix_from_one_vector(_SURFACE, 2)
 
 def extract_obj(support_function: Callable[[Tensor], Tensor]) -> str:
@@ -75,6 +76,10 @@ def extract_outward_normal_hyperplanes(vertices: Tensor, faces: Tensor):
         ``(*, M)`` whether each face is in counter-clockwise order.
         ``(*, M)`` face hyperplane intercepts.
     """
+    if vertices.ndim == 2:
+        vertices = vertices.unsqueeze(0)
+        faces = faces.unsqueeze(0)
+
     batch_range = torch.arange(vertices.shape[0]).unsqueeze(1).repeat(
         (1, faces.shape[-2]))
     centroids = vertices.mean(dim=-2, keepdim=True)
@@ -119,7 +124,7 @@ def extract_mesh(support_function: Callable[[Tensor], Tensor]) -> MeshSummary:
     backwards = backwards.squeeze(0)
     faces[backwards] = faces[backwards].flip(-1)
 
-    return MeshSummary(vertices=support_points, faces=faces)
+    return MeshSummary(vertices=vertices, faces=faces)
 
 
 class HomogeneousICNN(Module):
