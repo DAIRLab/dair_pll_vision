@@ -18,13 +18,23 @@ from dair_pll.geometry import _DEEP_SUPPORT_DEFAULT_DEPTH, \
 from dair_pll.deep_support_function import HomogeneousICNN
 
 
-# Hyperparameters for querying into and outside of the object at an SDF=0 point.
-AXIS_NEARBY_DEPTH = 0.005
-AXIS_OUTSIDE_DEPTH = 0.1
-AXIS_OUTSIDE_N_QUERY = 50
-AXIS_NEARBY_OUTSIDE_N_QUERY = 50
-# Make the inside queried points equal to all queried outside.
-AXIS_NEARBY_INSIDE_N_QUERY = AXIS_OUTSIDE_N_QUERY + AXIS_NEARBY_OUTSIDE_N_QUERY
+# Hyperparameters for querying into and out of the object at an SDF=0 point.
+N_QUERY_INSIDE = 100
+N_QUERY_OUTSIDE = 50
+N_QUERY_OUTSIDE_FAR = 50
+DEPTH_INSIDE = 0.005
+DEPTH_OUTSIDE = 0.005
+DEPTH_FAR_OUTSIDE = 0.1
+
+# Amended values for the above hyperparameters for when sampling from mesh.  The
+# total number of queries per point is lower since more points are expected to
+# be sampled, and sticking closer to the surface of the mesh.
+MESH_N_QUERY_INSIDE = 10
+MESH_N_QUERY_OUTSIDE = 10
+MESH_N_QUERY_OUTSIDE_FAR = 0
+MESH_DEPTH_INSIDE = 0.02
+MESH_DEPTH_OUTSIDE = 0.02
+MESH_DEPTH_FAR_OUTSIDE = 0.1
 
 # Hyperparameters for querying around an object with SDF minimum bounds.
 BOUNDED_NEARBY_DEPTH = 0.005
@@ -42,10 +52,18 @@ HULL_PROXIMITY_THRESH = 0.001       # meters
 
 # Flags for running some unit tests.
 DO_SMALL_FILTERING_AND_VISUALIZATION_TEST = False
+DO_SDFS_FROM_MESH_SAMPLING_WITH_CONTACT_FILTERING = True
 
 
-def generate_point_sdf_pairs(points: Tensor, directions: Tensor
-                             ) -> Tuple[Tensor, Tensor]:
+def generate_point_sdf_pairs(
+        points: Tensor, directions: Tensor,
+        n_nearby_inside: int = N_QUERY_INSIDE,
+        n_nearby_outside: int = N_QUERY_OUTSIDE,
+        n_far_outside: int = N_QUERY_OUTSIDE_FAR,
+        depth_inside: float = DEPTH_INSIDE,
+        depth_outside: float = DEPTH_OUTSIDE,
+        depth_far_outside: float = DEPTH_FAR_OUTSIDE
+    ) -> Tuple[Tensor, Tensor]:
     """Generate pairs of 3D points and their associated signed distance, given
     a list of points with known signed distance of zero and directions
     associated with those points' contact directions.
@@ -54,6 +72,18 @@ def generate_point_sdf_pairs(points: Tensor, directions: Tensor
         point (M, 3):  M support points of the object geometry for the given
             support directions.
         direction (M, 3):  associated support directions.
+        n_nearby_inside (optional):  number of points to query inside geometry
+            at a nearby range.
+        n_nearby_outside (optional):  number of points to query outside
+            geometry at a nearby range.
+        n_far_outside (optional):  number of points to query outside geometry at
+            a far range.
+        depth_inside (optional):  depth in meters for range of sampling interior
+            points with n_nearby_inside.
+        depth_outside (optional):  depth in meters for range of sampling
+            exterior points with n_nearby_outside.
+        depth_far_outside (optional):  depth in meters for range of sampling
+            exterior points with n_far_outside.
 
     Outputs:
         points_on_axis (M*N, 3):  N 3D points generated along the ray passing
@@ -74,14 +104,13 @@ def generate_point_sdf_pairs(points: Tensor, directions: Tensor
     # The signed distances will be tiled such that the first N correspond to
     # point 1, the next N correspond to point 2, etc.
     distance_scalings = torch.cat((
-        -AXIS_NEARBY_DEPTH*torch.ones(AXIS_NEARBY_INSIDE_N_QUERY),
-        AXIS_NEARBY_DEPTH*torch.ones(AXIS_NEARBY_OUTSIDE_N_QUERY),
-        AXIS_OUTSIDE_DEPTH*torch.ones(AXIS_OUTSIDE_N_QUERY)
+        -depth_inside*torch.ones(n_nearby_inside),
+        depth_outside*torch.ones(n_nearby_outside),
+        depth_far_outside*torch.ones(n_far_outside)
     )).repeat(n_points)
     signed_distances = distance_scalings * torch.rand_like(distance_scalings)
 
-    n_per_point = AXIS_NEARBY_INSIDE_N_QUERY + AXIS_NEARBY_OUTSIDE_N_QUERY + \
-        AXIS_OUTSIDE_N_QUERY
+    n_per_point = n_nearby_inside + n_nearby_outside + n_far_outside
 
     # Get N repeated for first point, then N repeated for second point, etc.
     repeated_points = points.unsqueeze(1).repeat(1, n_per_point, 1
@@ -593,8 +622,50 @@ if DO_SMALL_FILTERING_AND_VISUALIZATION_TEST:
         support_dirs, sample_points_cf, sample_normals_cf
     print('Done with small filtering and visualization test.')
     
-pdb.set_trace()
+if DO_SDFS_FROM_MESH_SAMPLING_WITH_CONTACT_FILTERING:
+    print('Performing SDF generation from mesh sampling with contact ' + \
+          'filtering test.')
+    point_set = Tensor([[0.6, 0, 0], [0.6, 1, 0], [0, 1, 0], [0, 0, 0],
+                        [0.6, 0, 1], [0.6, 1, 1], [0, 1, 1], [0, 0, 1]])
+    mesh = create_mesh_from_set_of_points(point_set)
 
+    sample_points, sample_normals = sample_on_mesh(mesh, 50)
+    print(f'\tVisualizing points sampled on mesh.')
+    visualize_sampled_points(mesh, sample_points, sample_normals)
+
+    support_points = Tensor([[0, 0, 0], [0, 0, 0], [0, 0, 0]])
+    support_dirs = Tensor([[-1, 0, 0], [0, -1, 0], [0, 0, -1]])
+    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_contact(
+        sample_points, sample_normals, support_points, support_dirs
+    )
+    print('\tVisualizing points sampled with filtering via support points.')
+    visualize_sampled_points(
+        mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
+        filtered_normals=sample_normals_cf, support_points=support_points,
+        support_directions=support_dirs
+    )
+
+    print('\tGenerating (point, SDF) pairs from mesh samples.')
+    ps, sdfs = generate_point_sdf_pairs(
+        sample_points_cf, sample_normals_cf,
+        n_nearby_inside=MESH_N_QUERY_INSIDE,
+        n_nearby_outside=MESH_N_QUERY_OUTSIDE,
+        n_far_outside=MESH_N_QUERY_OUTSIDE_FAR,
+        depth_inside=MESH_DEPTH_INSIDE,
+        depth_outside=MESH_DEPTH_OUTSIDE,
+        depth_far_outside=MESH_DEPTH_FAR_OUTSIDE
+    )
+
+    print('\tVisualizing the samples.')
+    visualize_sdfs(sample_points_cf, sample_normals_cf, ps=ps, sdfs=sdfs)
+
+    print('\tDeleting test variables so can\'t accidentally be reused.')
+    del point_set, mesh, sample_points, sample_normals, support_points, \
+        support_dirs, sample_points_cf, sample_normals_cf, ps, sdfs
+    print('Done with SDF generation from mesh and contact filtering test.')
+
+
+pdb.set_trace()
 
 # Prepare to load pre-saved data from a finished run.
 run_name = 'test_004'
