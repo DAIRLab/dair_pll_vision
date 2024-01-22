@@ -52,7 +52,7 @@ HULL_PROXIMITY_THRESH = 0.001       # meters
 
 # Flags for running some unit tests.
 DO_SMALL_FILTERING_AND_VISUALIZATION_TEST = False
-DO_SDFS_FROM_MESH_SAMPLING_WITH_CONTACT_FILTERING = True
+DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING = True
 
 
 def generate_point_sdf_pairs(
@@ -622,7 +622,7 @@ if DO_SMALL_FILTERING_AND_VISUALIZATION_TEST:
         support_dirs, sample_points_cf, sample_normals_cf
     print('Done with small filtering and visualization test.')
     
-if DO_SDFS_FROM_MESH_SAMPLING_WITH_CONTACT_FILTERING:
+if DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING:
     print('Performing SDF generation from mesh sampling with contact ' + \
           'filtering test.')
     point_set = Tensor([[0.6, 0, 0], [0.6, 1, 0], [0, 1, 0], [0, 0, 0],
