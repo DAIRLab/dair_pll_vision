@@ -543,13 +543,13 @@ def visualize_sampled_points(
     plt.show()
 
 
-def filter_mesh_samples_based_on_contact(
+def filter_mesh_samples_based_on_supports(
         sample_points: Tensor, sample_normals: Tensor, contact_points: Tensor,
         support_directions: Tensor, threshold: float = HULL_PROXIMITY_THRESH
         ) -> Tuple[Tensor, Tensor]:
     """Given a set of points sampled on the convex hull mesh and their outward
     normal directions, filter out any that are located beyond a threshold away
-    from hyperplanes that saw contact.
+    from support point hyperplanes.
 
     Args:
         sample_points (N, 3)
@@ -608,7 +608,7 @@ if DO_SMALL_FILTERING_AND_VISUALIZATION_TEST:
 
     support_points = Tensor([[0, 0, 0], [0, 0, 0], [0, 0, 0]])
     support_dirs = Tensor([[-1, 0, 0], [0, -1, 0], [0, 0, -1]])
-    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_contact(
+    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
         sample_points, sample_normals, support_points, support_dirs
     )
     print('\tVisualizing points sampled with filtering via support points.')
@@ -635,7 +635,7 @@ if DO_SDFS_FROM_MESH_SAMPLING_WITH_CONTACT_FILTERING:
 
     support_points = Tensor([[0, 0, 0], [0, 0, 0], [0, 0, 0]])
     support_dirs = Tensor([[-1, 0, 0], [0, -1, 0], [0, 0, -1]])
-    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_contact(
+    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
         sample_points, sample_normals, support_points, support_dirs
     )
     print('\tVisualizing points sampled with filtering via support points.')
