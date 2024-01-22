@@ -52,7 +52,8 @@ HULL_PROXIMITY_THRESH = 0.001       # meters
 
 # Flags for running some unit tests.
 DO_SMALL_FILTERING_AND_VISUALIZATION_TEST = False
-DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING = True
+DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING = False
+DO_NETWORK_LOADING_TEST = False
 
 
 def generate_point_sdf_pairs(
@@ -484,7 +485,8 @@ def visualize_sampled_points(
     support points.
 
     Args:
-        mesh:  a MeshSummary of the object geometry.
+        mesh:  a MeshSummary of the object geometry.  Won't visualize the mesh
+            surfaces if mesh is None (which can be beneficial for large meshes).
         sampled_points (N, 3):  points sampled on the mesh surface.
         sampled_normals (N, 3):  outward normals associated with the points.
         filtered_points (M, 3):  (optional) a subset of sampled_points
@@ -496,13 +498,15 @@ def visualize_sampled_points(
     ax = fig.add_subplot(111, projection='3d')
 
     # Plot the mesh wireframe.
-    prefix = [''] + ['_']*(len(mesh.faces)-1)
-    for i in range(len(mesh.faces)):
-        face = mesh.faces[i]
-        vertices = mesh.vertices[face]
-        vertices = torch.cat((vertices, vertices[0].unsqueeze(0)), dim=0).numpy()
-        ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2], color='b',
-                label=prefix[i]+'Mesh edges')
+    if mesh is not None:
+        prefix = [''] + ['_']*(len(mesh.faces)-1)
+        for i in range(len(mesh.faces)):
+            face = mesh.faces[i]
+            vertices = mesh.vertices[face]
+            vertices = torch.cat((vertices, vertices[0].unsqueeze(0)), dim=0)
+            vertices = vertices.numpy()
+            ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2], color='b',
+                    label=prefix[i]+'Mesh edges')
 
     # Plot the sampled points and outward normals.
     color = '#00000044' if filtered_points is not None else 'r'
@@ -664,8 +668,24 @@ if DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING:
         support_dirs, sample_points_cf, sample_normals_cf, ps, sdfs
     print('Done with SDF generation from mesh and contact filtering test.')
 
+if DO_NETWORK_LOADING_TEST:
+    print('Performing loading deep support convex network test.')
+
+    run_name = 'test_004'
+    system = 'bundlesdf_cube'
+    storage_name = file_utils.assure_created(op.join(file_utils.RESULTS_DIR, system))
+
+    # Can load a pre-trained deep support convex network.
+    network = load_deep_support_convex_network(storage_name, run_name)
+    mesh = create_mesh_from_deep_support(network)
+
+    print('\tDeleting test variables so can\'t accidentally be reused.')
+    del run_name, system, storage_name, network, mesh
+    print('Done with loading deep support convex network test.')
+
 
 pdb.set_trace()
+
 
 # Prepare to load pre-saved data from a finished run.
 run_name = 'test_004'
@@ -675,35 +695,53 @@ storage_name = file_utils.assure_created(op.join(file_utils.RESULTS_DIR, system)
 # Load the exported outputs from the experiment run.
 output_dir = file_utils.geom_for_bsdf_dir(storage_name, run_name)
 normal_forces = torch.load(op.join(output_dir, 'normal_forces.pt')).detach()
-points = torch.load(op.join(output_dir, 'points.pt')).detach()
-directions = torch.load(op.join(output_dir, 'directions.pt')).detach()
+support_points = torch.load(op.join(output_dir, 'points.pt')).detach()
+support_directions = torch.load(op.join(output_dir, 'directions.pt')).detach()
 
 # Perform filtering via simple thresholding of normal forces.
-filtered_pts, filtered_dirs = filter_pts_and_dirs(points, directions, normal_forces)
+contact_points, contact_directions = filter_pts_and_dirs(
+    support_points, support_directions, normal_forces)
 
-print(f'{points.shape=}, {directions.shape=}')
-print(f'{filtered_pts.shape=}, {filtered_dirs.shape=}')
-# pdb.set_trace()
+print(f'PLL exported data: \n\t{support_points.shape=}, ' + \
+      f'\n\t{support_directions.shape=}')
+print(f'Filtered by contact: \n\t{contact_points.shape=}, ' + \
+      f'\n\t{contact_directions.shape=}')
 
-###
-# Test 1:  Can build set of points manually.
-# point_set = Tensor([[0.6, 0, 0], [0.6, 1, 0], [0, 1, 0], [0, 0, 0],
-#                     [0.6, 0, 1], [0.6, 1, 1], [0, 1, 1], [0, 0, 1]])
-# mesh = create_mesh_from_set_of_points(point_set)
-    
-# # Test 2:  Can load a pre-trained deep support convex network.
-# network = load_deep_support_convex_network(storage_name, run_name)
-# mesh = create_mesh_from_deep_support(network)
+# Build set of points from the saved support points.
+mesh = create_mesh_from_set_of_points(support_points)
 
-# Test 3:  Can build set of points from the saved support points.
-mesh = create_mesh_from_set_of_points(filtered_pts)
-###
 
 # Sample points and visualize them.
-sample_points, sample_normals = sample_on_mesh(mesh, 100)
-print(f'{sample_points.shape=}, {sample_normals.shape=}')
+sample_points, sample_normals = sample_on_mesh(mesh, 50000)
+print(f'{sample_points.shape=}, \n{sample_normals.shape=}')
 # visualize_sampled_points(mesh, sample_points, sample_normals)
-# visualize_sampled_points(None, filtered_pts, filtered_dirs)
+
+# Filter the sample points based on contact.
+sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
+    sample_points, sample_normals, contact_points, contact_directions
+)
+print(f'{sample_points_cf.shape=}, \n{sample_normals_cf.shape=}')
+# visualize_sampled_points(
+#     mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
+#     filtered_normals=sample_normals_cf, support_points=contact_points,
+#     support_directions=contact_directions
+# )
+
+# Generate training data.
+ps, sdfs = generate_point_sdf_pairs(
+    sample_points_cf, sample_normals_cf,
+    n_nearby_inside=MESH_N_QUERY_INSIDE,
+    n_nearby_outside=MESH_N_QUERY_OUTSIDE,
+    n_far_outside=MESH_N_QUERY_OUTSIDE_FAR,
+    depth_inside=MESH_DEPTH_INSIDE,
+    depth_outside=MESH_DEPTH_OUTSIDE,
+    depth_far_outside=MESH_DEPTH_FAR_OUTSIDE
+)
+
+# Export the training data.
+torch.save(ps, os.path.join(output_dir, 'mesh_sampled_contact_filtered_pts.pt'))
+torch.save(sdfs, os.path.join(output_dir, 'mesh_sampled_contact_filtered_sdfs.pt'))
+exit()
 
 
 
