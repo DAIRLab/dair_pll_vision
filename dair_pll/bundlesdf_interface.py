@@ -36,8 +36,12 @@ BOUNDED_NEARBY_OUTSIDE_N_QUERY = 100
 # Make the inside queried points equal to all queried outside.
 BOUNDED_NEARBY_INSIDE_N_QUERY = BOUNDED_FAR_N_QUERY + BOUNDED_NEARBY_OUTSIDE_N_QUERY
 
-# Hyperparameters for filtering support points
-FORCE_THRES = 0.3676 #N
+# Hyperparameters for filtering support points or hull sample points
+FORCE_THRESH = 0.3676               # Newtons
+HULL_PROXIMITY_THRESH = 0.001       # meters
+
+# Flags for running some unit tests.
+DO_SMALL_FILTERING_AND_VISUALIZATION_TEST = False
 
 
 def generate_point_sdf_pairs(points: Tensor, directions: Tensor
@@ -271,8 +275,9 @@ def generate_training_data(points: Tensor, directions: Tensor) -> None:
     return ps, sdfs, vs, sdf_bounds
 
 
-def filter_pts_and_dirs(contact_points: Tensor, directions: Tensor,
-                        normal_forces: Tensor) -> Tuple[Tensor, Tensor]:
+def filter_pts_and_dirs(
+        contact_points: Tensor, directions: Tensor, normal_forces: Tensor,
+        force_threshold: float = FORCE_THRESH) -> Tuple[Tensor, Tensor]:
     """Filter out points that are likely not in contact with the ground during
     the data captured by the normal_forces tensor.
 
@@ -282,10 +287,12 @@ def filter_pts_and_dirs(contact_points: Tensor, directions: Tensor,
         directions (M, 3):  associated support directions.
         normal_forces (M,):  normal forces associated with the contact points
             during one timestep of PLL training.
+        force_threshold:  force threshold below which contact is decided to not
+            have occurred at a support point.
 
     Outputs:
         filtered_points (N, 3):  N support points that experienced a normal
-            force greater than FORCE_THRES.
+            force greater than force_threshold.
         filtered_directions (N, 3):  the corresponding normal directions.
     """
     assert normal_forces.ndim == 1
@@ -293,7 +300,7 @@ def filter_pts_and_dirs(contact_points: Tensor, directions: Tensor,
     assert normal_forces.shape[0]==contact_points.shape[0]==directions.shape[0]
     assert contact_points.shape[1] == directions.shape[1] == 3
 
-    mask = normal_forces > FORCE_THRES
+    mask = normal_forces > force_threshold
     filtered_points = contact_points[mask]
     filtered_directions = directions[mask]
 
@@ -437,36 +444,64 @@ def sample_on_mesh(mesh: MeshSummary, n_sample: int,
     return surface_points, surface_normals
     
 
-def visualize_sampled_points(mesh: MeshSummary, sampled_points: Tensor,
-                             sampled_normals: Tensor) -> None:
+def visualize_sampled_points(
+        mesh: MeshSummary, sampled_points: Tensor, sampled_normals: Tensor,
+        filtered_points: Tensor = None, filtered_normals: Tensor = None,
+        support_points: Tensor = None, support_directions: Tensor = None
+        ) -> None:
     """Visualize the sample points generated on the provided mesh.  Can help
     visually verify the points are strictly on the mesh surface with normals
-    facing outwards.
+    facing outwards.  Optionally can show how the points are filtered based on
+    support points.
 
     Args:
         mesh:  a MeshSummary of the object geometry.
         sampled_points (N, 3):  points sampled on the mesh surface.
         sampled_normals (N, 3):  outward normals associated with the points.
+        filtered_points (M, 3):  (optional) a subset of sampled_points
+        filtered_normals (M, 3):  (optional) a subset of sampled_normals
+        support_points (K, 3):  (optional) support points.
+        support_directions (K, 3):  (optional) support directions.
     """
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
 
     # Plot the mesh wireframe.
-    # prefix = [''] + ['_']*(len(mesh.faces)-1)
-    # for i in range(len(mesh.faces)):
-    #     face = mesh.faces[i]
-    #     vertices = mesh.vertices[face]
-    #     vertices = torch.cat((vertices, vertices[0].unsqueeze(0)), dim=0).numpy()
-    #     ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2], color='b',
-    #             label=prefix[i]+'Mesh edges')
+    prefix = [''] + ['_']*(len(mesh.faces)-1)
+    for i in range(len(mesh.faces)):
+        face = mesh.faces[i]
+        vertices = mesh.vertices[face]
+        vertices = torch.cat((vertices, vertices[0].unsqueeze(0)), dim=0).numpy()
+        ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2], color='b',
+                label=prefix[i]+'Mesh edges')
 
     # Plot the sampled points and outward normals.
+    color = '#00000044' if filtered_points is not None else 'r'
     ax.scatter(sampled_points[:, 0], sampled_points[:, 1], sampled_points[:, 2],
-               marker='*', s=20, color='r', label='Sample points')
+               marker='*', s=20, color=color, label='Sample points')
     prefix = [''] + ['_']*(len(sampled_normals)-1)
     for i in range(len(sampled_normals)):
-        ax.quiver(*sampled_points[i], *sampled_normals[i]/25, color='r',
+        ax.quiver(*sampled_points[i], *sampled_normals[i]/25, color=color,
                   label=prefix[i]+'Outward normals', zorder=1.5)
+        
+    if filtered_points is not None:
+        ax.scatter(filtered_points[:, 0], filtered_points[:, 1],
+                   filtered_points[:, 2], marker='*', s=30, color='r',
+                   label='Filtered samples')
+        prefix = [''] + ['_']*(len(filtered_normals)-1)
+        for i in range(len(filtered_normals)):
+            ax.quiver(*filtered_points[i], *filtered_normals[i]/20, color='r',
+                    label=prefix[i]+'Outward filter normals', zorder=1.5)
+            
+    if support_points is not None:
+        ax.scatter(support_points[:, 0], support_points[:, 1],
+                   support_points[:, 2], marker='*', s=40, color='g',
+                   label='Support points')
+        prefix = [''] + ['_']*(len(support_directions)-1)
+        for i in range(len(support_directions)):
+            ax.quiver(*support_points[i], *support_directions[i]/10,
+                      color='g', label=prefix[i]+'Support directions',
+                      zorder=1.5)
 
     ax.set_xlabel('X-axis')
     ax.set_ylabel('Y-axis')
@@ -478,6 +513,87 @@ def visualize_sampled_points(mesh: MeshSummary, sampled_points: Tensor,
                        [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
     plt.show()
 
+
+def filter_mesh_samples_based_on_contact(
+        sample_points: Tensor, sample_normals: Tensor, contact_points: Tensor,
+        support_directions: Tensor, threshold: float = HULL_PROXIMITY_THRESH
+        ) -> Tuple[Tensor, Tensor]:
+    """Given a set of points sampled on the convex hull mesh and their outward
+    normal directions, filter out any that are located beyond a threshold away
+    from hyperplanes that saw contact.
+
+    Args:
+        sample_points (N, 3)
+        sample_normals (N, 3)
+        contact_points (M, 3)
+        support_directions (M, 3)
+        threshold:  maximum distance threshold in meters permissible between 
+            sample point and the nearest hyperplane defined by contact_points
+            and support_directions.
+
+    Outputs:
+        filtered_sample_points (K, 3)
+        filtered_sample_directions (K, 3)
+    """
+    # Do some input checking.
+    assert sample_points.shape == sample_normals.shape
+    assert contact_points.shape == support_directions.shape
+    assert sample_points.ndim == contact_points.ndim == 2
+    assert sample_points.shape[1] == contact_points.shape[1] == 3
+
+    # Use 3D arrays with indexing [sample_i, support_i, x/y/z].
+    n_samples = sample_points.shape[0]
+    n_supports = contact_points.shape[0]
+    sample_points_expanded = sample_points.unsqueeze(1).repeat(1, n_supports, 1)
+    support_points_expanded = contact_points.unsqueeze(0).repeat(n_samples, 1, 1)
+    support_dirs_expanded = support_directions.unsqueeze(0).repeat(n_samples, 1, 1)
+
+    # Get distances from hyperplanes by projecting sample points onto hyperplane
+    # normal axis.
+    support_to_sample_vec = sample_points_expanded - support_points_expanded
+    hyperplane_distances = torch.einsum('ijk,ijk->ij',
+                                        support_to_sample_vec,
+                                        support_dirs_expanded
+                                        )   # (n_samples, n_supports)
+    
+    # Samples should be kept if their minimum distance to the hyperplanes is
+    # less than the threshold.
+    within_threshold = torch.abs(hyperplane_distances) < threshold
+    sample_mask = torch.sum(within_threshold, dim=1) > 0
+
+    # Return the filtered sample points and directions.
+    return sample_points[sample_mask], sample_normals[sample_mask]
+
+
+
+# Tests.
+if DO_SMALL_FILTERING_AND_VISUALIZATION_TEST:
+    print('Performing small filtering and visualization test.')
+    point_set = Tensor([[0.6, 0, 0], [0.6, 1, 0], [0, 1, 0], [0, 0, 0],
+                        [0.6, 0, 1], [0.6, 1, 1], [0, 1, 1], [0, 0, 1]])
+    mesh = create_mesh_from_set_of_points(point_set)
+
+    sample_points, sample_normals = sample_on_mesh(mesh, 50)
+    print(f'\tVisualizing points sampled on mesh.')
+    visualize_sampled_points(mesh, sample_points, sample_normals)
+
+    support_points = Tensor([[0, 0, 0], [0, 0, 0], [0, 0, 0]])
+    support_dirs = Tensor([[-1, 0, 0], [0, -1, 0], [0, 0, -1]])
+    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_contact(
+        sample_points, sample_normals, support_points, support_dirs
+    )
+    print('\tVisualizing points sampled with filtering via support points.')
+    visualize_sampled_points(
+        mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
+        filtered_normals=sample_normals_cf, support_points=support_points,
+        support_directions=support_dirs
+    )
+    print('\tDeleting test variables so can\'t accidentally be reused.')
+    del point_set, mesh, sample_points, sample_normals, support_points, \
+        support_dirs, sample_points_cf, sample_normals_cf
+    print('Done with small filtering and visualization test.')
+    
+pdb.set_trace()
 
 
 # Prepare to load pre-saved data from a finished run.
@@ -499,9 +615,9 @@ print(f'{filtered_pts.shape=}, {filtered_dirs.shape=}')
 pdb.set_trace()
 
 ###
-# # Test 1:  Can build set of points manually.
-# point_set = Tensor([[0.2, 0, 0], [0.2, 1, 0], [0, 1, 0], [0, 0, 0],
-#                     [0.2, 0, 1], [0.2, 1, 1], [0, 1, 1], [0, 0, 1]])
+# Test 1:  Can build set of points manually.
+# point_set = Tensor([[0.6, 0, 0], [0.6, 1, 0], [0, 1, 0], [0, 0, 0],
+#                     [0.6, 0, 1], [0.6, 1, 1], [0, 1, 1], [0, 0, 1]])
 # mesh = create_mesh_from_set_of_points(point_set)
     
 # # Test 2:  Can load a pre-trained deep support convex network.
@@ -516,6 +632,7 @@ mesh = create_mesh_from_set_of_points(filtered_pts)
 sample_points, sample_normals = sample_on_mesh(mesh, 50)
 visualize_sampled_points(mesh, sample_points, sample_normals)
 # visualize_sampled_points(None, filtered_pts, filtered_dirs)
+
 
 
 # Generate training data.
