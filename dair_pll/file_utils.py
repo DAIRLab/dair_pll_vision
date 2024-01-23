@@ -39,6 +39,8 @@ EXPORT_POINTS_WITH_SDF_DEFAULT_NAME = 'ps.pt'
 EXPORT_SDFS_FOR_POINTS_DEFAULT_NAME = 'sdfs.pt'
 EXPORT_POINTS_WITH_SDF_BOUND_DEFAULT_NAME = 'vs.pt'
 EXPORT_SDF_BOUNDS_FOR_POINTS_DEFAULT_NAME = 'sdf_bounds.pt'
+EXPORT_POINTS_WITH_SDF_GRADIENT_DEFAULT_NAME = 'ws.pt'
+EXPORT_SDF_GRADIENTS_FOR_POINTS_DEFAULT_NAME = 'w_normals.pt'
 TRAJECTORY_GIF_DEFAULT_NAME = 'trajectory.gif'
 FINAL_EVALUATION_NAME = f'statistics{STATS_EXTENSION}'
 HYPERPARAMETERS_FILENAME = f'optimal_hyperparameters{HYPERPARAMETERS_EXTENSION}'
@@ -311,7 +313,8 @@ def store_geom_for_bsdf(storage_name: str, run_name: str, points: Tensor,
 
 def store_sdf_for_bsdf(storage_name: str, run_name: str,
                        from_support_not_mesh: bool, ps: Tensor, sdfs: Tensor,
-                       vs: Tensor, sdf_bounds: Tensor) -> None:
+                       vs: Tensor, sdf_bounds: Tensor, ws: Tensor = None,
+                       w_normals: Tensor = None) -> None:
     """Store SDF training data for BundleSDF."""
     bsdf_output_dir = geom_for_bsdf_dir(storage_name, run_name)
     subfolder = BSDF_FROM_SUPPORT_SUBSUBFOLDER_NAME if from_support_not_mesh \
@@ -324,6 +327,14 @@ def store_sdf_for_bsdf(storage_name: str, run_name: str,
                              EXPORT_POINTS_WITH_SDF_BOUND_DEFAULT_NAME))
     torch.save(sdf_bounds, path.join(output_dir,
                                      EXPORT_SDF_BOUNDS_FOR_POINTS_DEFAULT_NAME))
+    
+    if ws is not None and w_normals is not None:
+        torch.save(ws,
+                   path.join(output_dir,
+                             EXPORT_POINTS_WITH_SDF_GRADIENT_DEFAULT_NAME))
+        torch.save(w_normals,
+                   path.join(output_dir,
+                             EXPORT_SDF_GRADIENTS_FOR_POINTS_DEFAULT_NAME))
 
 
 def get_evaluation_filename(storage_name: str, run_name: str) -> str:

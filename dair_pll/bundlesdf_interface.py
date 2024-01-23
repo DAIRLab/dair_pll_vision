@@ -43,6 +43,15 @@ MESH_DEPTH_OUTSIDE = 0.02
 MESH_DEPTH_FAR_OUTSIDE = 0.1
 N_MESH_SAMPLE = 25000
 
+# Amended values for the above hyperparameters for when sampling from mesh to
+# obtain points for enforcing monotonic SDF increase away from object.
+GRADIENT_N_QUERY_INSIDE = 4
+GRADIENT_N_QUERY_OUTSIDE = 10
+GRADIENT_N_QUERY_OUTSIDE_FAR = 10
+GRADIENT_DEPTH_INSIDE = 0.005
+GRADIENT_DEPTH_OUTSIDE = 0.02
+GRADIENT_DEPTH_FAR_OUTSIDE = 0.1
+
 # Hyperparameters for querying around an object with SDF minimum bounds.
 BOUNDED_NEARBY_DEPTH = 0.005
 BOUNDED_NEARBY_RADIUS = 0.05
@@ -62,6 +71,7 @@ DO_SMALL_FILTERING_AND_VISUALIZATION_TEST = False
 DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING = False
 DO_COMBINE_SUPPORT_POINTS_AND_MESH_SAMPLING = False
 DO_NETWORK_LOADING_TEST = False
+DO_GRADIENT_DATA_TEST = False
 
 
 def generate_point_sdf_pairs(
@@ -78,9 +88,9 @@ def generate_point_sdf_pairs(
     associated with those points' contact directions.
 
     Args:
-        point (M, 3):  M support points of the object geometry for the given
+        point (N, 3):  N support points of the object geometry for the given
             support directions.
-        direction (M, 3):  associated support directions.
+        direction (N, 3):  associated support directions.
         n_nearby_inside (optional):  number of points to query inside geometry
             at a nearby range.
         n_nearby_outside (optional):  number of points to query outside
@@ -95,10 +105,11 @@ def generate_point_sdf_pairs(
             exterior points with n_far_outside.
 
     Outputs:
-        points_on_axis (M*N, 3):  N 3D points generated along the ray passing
+        points_on_axis (N*M, 3):  M 3D points generated along the ray passing
             through the first provided point in the first provided direction,
-            followed by N 3D points w.r.t. the second point and direction, etc.
-        signed_distances (M*N,):  signed distances associated with the points,
+            followed by M 3D points w.r.t. the second point and direction, etc.
+            Here M = n_nearby_inside + n_nearby_outside + n_far_outside.
+        signed_distances (N*M,):  signed distances associated with the points,
             in the same order as points_on_axis.
     """
     # Perform input checks.
@@ -217,73 +228,6 @@ def generate_point_sdf_bound_pairs(points: Tensor, directions: Tensor
     return points_in_space, min_signed_distances
 
 
-def visualize_sdfs(points: Tensor, directions: Tensor, ps: Tensor = None,
-                   sdfs: Tensor = None, vs: Tensor = None,
-                   sdf_bounds: Tensor = None) -> None:
-    """Visualize the generated data from provided points and associated
-    directions.  If the data is not already generated, this function will do so.
-
-    Args:
-        points (N, 3):  observed support points from ContactNets.
-        directions (N, 3):  directions associated with the provided points.
-        ps (M, 3):  new points generated along rays through support points along
-            the provided directions.
-        sdfs (M,):  signed distances associated with the generated ps.
-        vs (L, 3):  new points generated randomly in the neighborhood around
-            support points.
-        sdf_bounds (L,):  minimum signed distance bounds associated with the
-            generated vs.
-    """
-    # Check if any of the inputs weren't provided and need to be generated.
-    if ps is None or sdfs is None:
-        # Generate SDF points along axis.
-        ps, sdfs = generate_point_sdf_pairs(points, directions)
-    if vs is None or sdf_bounds is None:
-        # Generate more bounded SDFs.
-        vs, sdf_bounds = generate_point_sdf_bound_pairs(points, directions)
-
-    # Do some input checking.
-    assert points.shape == directions.shape
-    assert ps.shape[0] == sdfs.shape[0]
-    assert vs.shape[0] == sdf_bounds.shape[0]
-    assert points.ndim == ps.ndim == vs.ndim == 2
-    assert sdfs.ndim == sdf_bounds.ndim == 1
-    assert points.shape[1] == ps.shape[1] == vs.shape[1] == 3
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-
-    # Plot the original support point and direction.
-    ax.scatter(points[:, 0], points[:, 1], points[:, 2], marker='*', s=20,
-               color='r', label='Support points')
-    prefix = [''] + ['_']*(len(directions)-1)
-    for i in range(len(directions)):
-        ax.quiver(*points[i], *directions[i]/4, color='r',
-                  label=prefix[i]+'Support directions')
-
-    # Plot the generated data and their associated SDFs.
-    colored_sdfs = ax.scatter(ps[:, 0], ps[:, 1], ps[:, 2], c=sdfs,
-                              cmap='viridis', marker='o',
-                              label='Points with assigned SDF')
-    # ax.scatter(vs[:, 0], vs[:, 1], vs[:, 2], c=sdf_bounds, cmap='viridis',
-    #            marker='.', label='Points with SDF bound')
-
-    # Because both scatter series are using the 'viridis' color map, the
-    # colorbar will share a mapping for both series.
-    cbar = fig.colorbar(colored_sdfs)
-    cbar.set_label('SDF')
-
-    ax.set_xlabel('X-axis')
-    ax.set_ylabel('Y-axis')
-    ax.set_zlabel('Z-axis')
-    ax.legend()
-
-    # Set equal aspect ratio.
-    ax.set_box_aspect([np.ptp(arr) for arr in \
-                       [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
-    plt.show()
-
-
 def generate_training_data(points: Tensor, directions: Tensor) -> None:
     """Given points and directions, create points with SDF values or bounds for
     training BundleSDF.
@@ -343,21 +287,6 @@ def filter_pts_and_dirs(
     filtered_directions = directions[mask]
 
     return filtered_points.detach(), filtered_directions.detach()
-
-
-def visualize(ps,sdfs):
-    fig = plt.figure(figsize=(8, 8))
-    ax = fig.add_subplot(111, projection='3d')
-    colored_sdfs = ax.scatter(ps[:, 0], ps[:, 1], ps[:, 2], c=sdfs,
-                              cmap='viridis', marker='o',
-                              label='Points with assigned SDF')
-    cbar = fig.colorbar(colored_sdfs)
-    cbar.set_label('SDF')
-    ax.set_xlabel('X-axis')
-    ax.set_ylabel('Y-axis')
-    ax.set_zlabel('Z-axis')
-    ax.legend()
-    plt.show()
 
 
 def load_deep_support_convex_network(storage_name: str, run_name: str
@@ -482,6 +411,88 @@ def sample_on_mesh(mesh: MeshSummary, n_sample: int,
     return surface_points, surface_normals
     
 
+def visualize(ps,sdfs):
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    colored_sdfs = ax.scatter(ps[:, 0], ps[:, 1], ps[:, 2], c=sdfs,
+                              cmap='viridis', marker='o',
+                              label='Points with assigned SDF')
+    cbar = fig.colorbar(colored_sdfs)
+    cbar.set_label('SDF')
+    ax.set_xlabel('X-axis')
+    ax.set_ylabel('Y-axis')
+    ax.set_zlabel('Z-axis')
+    ax.legend()
+    plt.show()
+
+
+def visualize_sdfs(points: Tensor, directions: Tensor, ps: Tensor = None,
+                   sdfs: Tensor = None, vs: Tensor = None,
+                   sdf_bounds: Tensor = None) -> None:
+    """Visualize the generated data from provided points and associated
+    directions.  If the data is not already generated, this function will do so.
+
+    Args:
+        points (N, 3):  observed support points from ContactNets.
+        directions (N, 3):  directions associated with the provided points.
+        ps (M, 3):  new points generated along rays through support points along
+            the provided directions.
+        sdfs (M,):  signed distances associated with the generated ps.
+        vs (L, 3):  new points generated randomly in the neighborhood around
+            support points.
+        sdf_bounds (L,):  minimum signed distance bounds associated with the
+            generated vs.
+    """
+    # Check if any of the inputs weren't provided and need to be generated.
+    if ps is None or sdfs is None:
+        # Generate SDF points along axis.
+        ps, sdfs = generate_point_sdf_pairs(points, directions)
+    if vs is None or sdf_bounds is None:
+        # Generate more bounded SDFs.
+        vs, sdf_bounds = generate_point_sdf_bound_pairs(points, directions)
+
+    # Do some input checking.
+    assert points.shape == directions.shape
+    assert ps.shape[0] == sdfs.shape[0]
+    assert vs.shape[0] == sdf_bounds.shape[0]
+    assert points.ndim == ps.ndim == vs.ndim == 2
+    assert sdfs.ndim == sdf_bounds.ndim == 1
+    assert points.shape[1] == ps.shape[1] == vs.shape[1] == 3
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Plot the original support point and direction.
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2], marker='*', s=20,
+               color='r', label='Support points')
+    prefix = [''] + ['_']*(len(directions)-1)
+    for i in range(len(directions)):
+        ax.quiver(*points[i], *directions[i]/4, color='r',
+                  label=prefix[i]+'Support directions')
+
+    # Plot the generated data and their associated SDFs.
+    colored_sdfs = ax.scatter(ps[:, 0], ps[:, 1], ps[:, 2], c=sdfs,
+                              cmap='viridis', marker='o',
+                              label='Points with assigned SDF')
+    # ax.scatter(vs[:, 0], vs[:, 1], vs[:, 2], c=sdf_bounds, cmap='viridis',
+    #            marker='.', label='Points with SDF bound')
+
+    # Because both scatter series are using the 'viridis' color map, the
+    # colorbar will share a mapping for both series.
+    cbar = fig.colorbar(colored_sdfs)
+    cbar.set_label('SDF')
+
+    ax.set_xlabel('X-axis')
+    ax.set_ylabel('Y-axis')
+    ax.set_zlabel('Z-axis')
+    ax.legend()
+
+    # Set equal aspect ratio.
+    ax.set_box_aspect([np.ptp(arr) for arr in \
+                       [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
+    plt.show()
+
+
 def visualize_sampled_points(
         mesh: MeshSummary, sampled_points: Tensor, sampled_normals: Tensor,
         filtered_points: Tensor = None, filtered_normals: Tensor = None,
@@ -555,6 +566,54 @@ def visualize_sampled_points(
     plt.show()
 
 
+def visualize_gradients(mesh: MeshSummary, sample_points: Tensor,
+                        points_with_grad: Tensor, point_grads: Tensor) -> None:
+    """Visualize points generated for SDF gradient supervision.  Can show the
+    underlying PLL mesh, points sampled on the mesh, and sampled points along
+    the mesh normal with shared normal vectors, i.e. SDF gradients.
+    
+    Args:
+        mesh:  PLL's object geometry as a mesh.  This can be None and the mesh
+            wireframe will not be drawn.
+        sample_points (N, 3):  points sampled on the surface of the mesh.
+        points_with_grad (M*N, 3):  points sampled along axes passing through
+            the sample_points in the mesh normal direction.
+        point_grads (M*N, 3):  mesh normal directions i.e. SDF gradients at each
+            of the points_with_grad.
+    """
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Plot the mesh wireframe.
+    if mesh is not None:
+        prefix = [''] + ['_']*(len(mesh.faces)-1)
+        for i in range(len(mesh.faces)):
+            face = mesh.faces[i]
+            vertices = mesh.vertices[face]
+            vertices = torch.cat((vertices, vertices[0].unsqueeze(0)), dim=0)
+            vertices = vertices.numpy()
+            ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2], color='b',
+                    label=prefix[i]+'Mesh edges')
+
+    # Plot the sampled points and outward normals.
+    ax.scatter(sample_points[:, 0], sample_points[:, 1], sample_points[:, 2],
+               marker='*', s=20, color='r', label='Mesh sample points')
+    prefix = [''] + ['_']*(len(points_with_grad)-1)
+    for i in range(len(point_grads)):
+        ax.quiver(*points_with_grad[i], *point_grads[i]/25, color='g',
+                  label=prefix[i]+'SDF gradient', zorder=1.5)
+
+    ax.set_xlabel('X-axis')
+    ax.set_ylabel('Y-axis')
+    ax.set_zlabel('Z-axis')
+    ax.legend()
+
+    # Set equal aspect ratio.
+    ax.set_box_aspect([np.ptp(arr) for arr in \
+                       [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
+    plt.show()
+
+
 def filter_mesh_samples_based_on_supports(
         sample_points: Tensor, sample_normals: Tensor, contact_points: Tensor,
         support_directions: Tensor, threshold: float = HULL_PROXIMITY_THRESH
@@ -604,6 +663,51 @@ def filter_mesh_samples_based_on_supports(
 
     # Return the filtered sample points and directions.
     return sample_points[sample_mask], sample_normals[sample_mask]
+
+
+def generate_point_sdf_gradient_pairs(points: Tensor, normals: Tensor
+                                    ) -> Tuple[Tensor, Tensor]:
+    """Given a set of points and their associated outward normals, generate an
+    sampled set of points and their associated outward normals.  These (point,
+    normal) pairs are to be used in BundleSDF loss that enforces the SDF should
+    monotonically increase along a normal direction outside (and a little bit
+    inside) a geometry's convex hull.
+
+    Args:
+        points (N, 3):  points on the surface of the geometry's convex hull.
+        normals (N, 3):  outward normals associated with the points.
+
+    Outputs:
+        extended_points (N*M, 3):  a set of points obtained by walking along the
+            normal direction associated with each point.  Note that M =
+            n_nearby_inside + n_nearby_outside + n_far_outside values passed
+            into generate_point_sdf_pairs.
+        extended_normals (N*M, 3):  the normals associated with the
+            extended_points.
+    """
+    # Can generate points in the same way as generating the (point, SDF) pairs.
+    extended_points, _ = generate_point_sdf_pairs(
+        points, normals,
+        n_nearby_inside=GRADIENT_N_QUERY_INSIDE,
+        n_nearby_outside=GRADIENT_N_QUERY_OUTSIDE,
+        n_far_outside=GRADIENT_N_QUERY_OUTSIDE_FAR,
+        depth_inside=GRADIENT_DEPTH_INSIDE,
+        depth_outside=GRADIENT_DEPTH_OUTSIDE,
+        depth_far_outside=GRADIENT_DEPTH_FAR_OUTSIDE
+    )
+
+    # Repeat the normals according to the tesselation expected from the above
+    # output (which is the first M are for point 1, etc.).
+    n_points = points.shape[0]
+    n_samples_per_point = GRADIENT_N_QUERY_INSIDE + GRADIENT_N_QUERY_OUTSIDE + \
+        GRADIENT_N_QUERY_OUTSIDE_FAR
+    extended_normals = normals.repeat_interleave(n_samples_per_point, dim=0)
+
+    # Sanity check that these shapes match.
+    assert extended_points.shape == extended_normals.shape == \
+        (n_samples_per_point*n_points, 3)
+    
+    return extended_points, extended_normals
 
 
 def load_run_data(run_name: str, system: str) -> None:
@@ -658,6 +762,11 @@ def generate_training_data_for_run(run_name: str, storage_name: str):
         sample_points_cf, sample_normals_cf
     )
 
+    # Generate SDF gradient training data from the mesh sample points.
+    mesh_ws, mesh_w_normals = generate_point_sdf_gradient_pairs(
+        sample_points_cf, sample_normals_cf
+    )
+
     # Generate training data for the contact points themselves.
     contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
         generate_training_data(contact_points, contact_directions)
@@ -667,7 +776,8 @@ def generate_training_data_for_run(run_name: str, storage_name: str):
         storage_name, run_name,
         from_support_not_mesh=False,
         ps=mesh_ps, sdfs=mesh_sdfs,
-        vs=mesh_vs, sdf_bounds=mesh_sdf_bounds
+        vs=mesh_vs, sdf_bounds=mesh_sdf_bounds,
+        ws=mesh_ws, w_normals=mesh_w_normals
     )
     file_utils.store_sdf_for_bsdf(
         storage_name, run_name,
@@ -805,54 +915,44 @@ if DO_NETWORK_LOADING_TEST:
     del storage_name, network, mesh
     print('Done with loading deep support convex network test.')
 
+if DO_GRADIENT_DATA_TEST:
+    print('Performing gradient data generation test.')
+    support_points, support_directions, normal_forces, _ = \
+        load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
+
+    # Sample points on the support point mesh surface and visualize them.
+    mesh = create_mesh_from_set_of_points(support_points)
+    sample_points, sample_normals = sample_on_mesh(mesh, 100)
+
+    # Filter support points via simple thresholding of normal forces, then
+    # filter the sample points based on this contact knowledge.
+    contact_points, contact_directions = filter_pts_and_dirs(
+        support_points, support_directions, normal_forces)
+    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
+        sample_points, sample_normals, contact_points, contact_directions
+    )
+
+    # Generate SDF gradient training data from the mesh sample points.
+    mesh_ws, mesh_w_normals = generate_point_sdf_gradient_pairs(
+        sample_points_cf, sample_normals_cf
+    )
+
+    # Visualize.
+    visualize_gradients(mesh, sample_points_cf, mesh_ws, mesh_w_normals)
+
+    print('\tDeleting test variables so can\'t accidentally be reused.')
+    del support_points, support_directions, normal_forces, mesh, \
+        sample_points, sample_normals, contact_points, contact_directions, \
+        sample_points_cf, sample_normals_cf, mesh_ws, mesh_w_normals
+    print('Done with gradient data generation test.')
+
 
 if __name__ == '__main__':
     pdb.set_trace()
 
-    # Load the exported outputs from the experiment run.
-    support_points, support_directions, normal_forces, output_dir = \
-        load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
-
-    # Perform filtering via simple thresholding of normal forces.
-    contact_points, contact_directions = filter_pts_and_dirs(
-        support_points, support_directions, normal_forces)
-
-    print(f'PLL exported data: \n\t{support_points.shape=}, ' + \
-        f'\n\t{support_directions.shape=}')
-    print(f'Filtered by contact: \n\t{contact_points.shape=}, ' + \
-        f'\n\t{contact_directions.shape=}')
-
-    # Build set of points from the saved support points.
-    mesh = create_mesh_from_set_of_points(support_points)
-
-    # Sample points on the mesh surface and visualize them.
-    sample_points, sample_normals = sample_on_mesh(mesh, N_MESH_SAMPLE)
-    print(f'{sample_points.shape=}, \n{sample_normals.shape=}')
-    # visualize_sampled_points(mesh, sample_points, sample_normals)
-
-    # Filter the sample points based on contact.
-    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
-        sample_points, sample_normals, contact_points, contact_directions
-    )
-    print(f'{sample_points_cf.shape=}, \n{sample_normals_cf.shape=}')
-    # visualize_sampled_points(
-    #     mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
-    #     filtered_normals=sample_normals_cf, support_points=contact_points,
-    #     support_directions=contact_directions
-    # )
-
-    # Generate training data.
-    ps, sdfs = generate_point_sdf_pairs(
-        sample_points_cf, sample_normals_cf,
-        n_nearby_inside=MESH_N_QUERY_INSIDE,
-        n_nearby_outside=MESH_N_QUERY_OUTSIDE,
-        n_far_outside=MESH_N_QUERY_OUTSIDE_FAR,
-        depth_inside=MESH_DEPTH_INSIDE,
-        depth_outside=MESH_DEPTH_OUTSIDE,
-        depth_far_outside=MESH_DEPTH_FAR_OUTSIDE
-    )
-
-    # Export the training data.
-    torch.save(ps, os.path.join(output_dir, 'mesh_sampled_contact_filtered_pts.pt'))
-    torch.save(sdfs, os.path.join(output_dir, 'mesh_sampled_contact_filtered_sdfs.pt'))
+    # Generate training data for run.
+    storage_name = file_utils.assure_created(
+        op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
+    generate_training_data_for_run(TEST_RUN_NAME, storage_name)
+    
     exit()
