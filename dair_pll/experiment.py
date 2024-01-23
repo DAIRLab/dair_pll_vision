@@ -21,7 +21,7 @@ from torch import Tensor
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
-from dair_pll import file_utils
+from dair_pll import bundlesdf_interface, file_utils
 from dair_pll.dataset_management import ExperimentDataManager, \
     TrajectorySet
 from dair_pll.experiment_config import SupervisedLearningExperimentConfig
@@ -858,40 +858,64 @@ class SupervisedLearningExperiment(ABC):
     def generate_bundlesdf_data(self, learned_system: System) -> None:
         """Usually called after training, this method generates and saves to
         file data that can be processed later for training BundleSDF's object
-        reconstruction.  Namely this generates query points on the deep support
-        convex geometry's surface, those query points' associated query
-        directions, and the normal forces estimated via the ContactNets loss at
-        those points."""
-        assert isinstance(learned_system, MultibodyLearnableSystem)
+        reconstruction.  Namely this generates:
+            1) Query points on the deep support convex geometry's surface.
+            2) Those query points' associated query directions.
+            3) The normal forces estimated via the ContactNets loss at those
+                points.
 
-        training_set = self.learning_data_manager.get_updated_trajectory_sets()[0]
-        slices_loader = DataLoader(training_set.slices,
-                                    batch_size=128,
-                                    shuffle=False)
+        Additionally, from the above three results, this generates training data
+        for BundleSDF:
+            1) Points in 3D space.
+            2) The associated signed distances for the points in (1).
+            3) More points in 3D space.
+            4) The associated lower bound signed distance for the points in (3).
+        The above 4 items are generated and stored separately each from support
+        points and for points sampled on the convex mesh.  From the first list
+        of three outputs (points, directions, and normal forces), items from
+        this second list of four outputs can be easily regenerated with
+        different hyperparameters, e.g. force threshold, number of samples, etc.
+        """
+        assert isinstance(learned_system, MultibodyLearnableSystem)
         
         # Instantiate tensors that will hold all the points, directions, forces.
         # Points and directions are 3D while forces are 1D for a given point.
         points, directions = torch.zeros((0,3)), torch.zeros((0,3))
         normal_forces = torch.zeros((0))
 
-        # Iterate over all the training data.
-        for batch_x, batch_y in slices_loader:
-            x = batch_x[..., -1, :]
-            u = torch.zeros(x.shape[:-1] + (0,))
-            x_plus = batch_y[..., 0, :]
+        training_set, validation_set, _ = \
+            self.learning_data_manager.get_updated_trajectory_sets()
+        
+        for data_set in [training_set, validation_set]:
+            slices_loader = DataLoader(data_set.slices,
+                                        batch_size=128,
+                                        shuffle=False)
 
-            # The bulk of the computation is done in the like-named method of
-            # the associated learned system for a single batch of data.
-            points_i, directions_i, normal_forces_i = \
-                learned_system.bundlesdf_data_generation_from_cnets(x,u,x_plus)
-            
-            # Store the results in a growing tensor.
-            points = torch.cat((points, points_i), dim=0)
-            directions = torch.cat((directions,directions_i), dim=0)
-            normal_forces = torch.cat((normal_forces, normal_forces_i), dim=0)
+            # Iterate over all the training data.
+            for batch_x, batch_y in slices_loader:
+                x = batch_x[..., -1, :]
+                u = torch.zeros(x.shape[:-1] + (0,))
+                x_plus = batch_y[..., 0, :]
+
+                # The bulk of the computation is done in the like-named method
+                # of the associated learned system for a single batch of data.
+                points_i, directions_i, normal_forces_i = \
+                    learned_system.bundlesdf_data_generation_from_cnets(
+                        x, u, x_plus)
+                
+                # Store the results in a growing tensor.
+                points = torch.cat((points, points_i), dim=0)
+                directions = torch.cat((directions,directions_i), dim=0)
+                normal_forces = torch.cat((normal_forces,normal_forces_i),dim=0)
 
         # Store the results to file.
         file_utils.store_geom_for_bsdf(
             self.config.storage, self.config.run_name, points, directions,
             normal_forces
+        )
+
+        # Generate some BundleSDF training data based on the above results.
+        bundlesdf_interface.generate_training_data_for_run(
+            run_name=self.config.run_name,
+            storage_name=self.config.storage
         )
