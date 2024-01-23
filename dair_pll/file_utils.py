@@ -30,9 +30,15 @@ STUDIES_SUBFOLDER_NAME = 'studies'
 URDFS_SUBFOLDER_NAME = 'urdfs'
 WANDB_SUBFOLDER_NAME = 'wandb'
 BSDF_SUBFOLDER_NAME = 'geom_for_bsdf'
-EXPORT_POINTS_DEFAULT_NAME = 'points.pt'
-EXPORT_DIRECTIONS_DEFAULT_NAME = 'directions.pt'
-EXPORT_FORCES_DEFAULT_NAME = 'normal_forces.pt'
+BSDF_FROM_SUPPORT_SUBSUBFOLDER_NAME = 'from_support_points'
+BSDF_FROM_MESH_SUBSUBFOLDER_NAME = 'from_mesh_surface'
+EXPORT_POINTS_DEFAULT_NAME = 'support_points.pt'
+EXPORT_DIRECTIONS_DEFAULT_NAME = 'support_directions.pt'
+EXPORT_FORCES_DEFAULT_NAME = 'support_point_normal_forces.pt'
+EXPORT_POINTS_WITH_SDF_DEFAULT_NAME = 'ps.pt'
+EXPORT_SDFS_FOR_POINTS_DEFAULT_NAME = 'sdfs.pt'
+EXPORT_POINTS_WITH_SDF_BOUND_DEFAULT_NAME = 'vs.pt'
+EXPORT_SDF_BOUNDS_FOR_POINTS_DEFAULT_NAME = 'sdf_bounds.pt'
 TRAJECTORY_GIF_DEFAULT_NAME = 'trajectory.gif'
 FINAL_EVALUATION_NAME = f'statistics{STATS_EXTENSION}'
 HYPERPARAMETERS_FILENAME = f'optimal_hyperparameters{HYPERPARAMETERS_EXTENSION}'
@@ -301,6 +307,23 @@ def store_geom_for_bsdf(storage_name: str, run_name: str, points: Tensor,
     torch.save(points, path.join(output_dir, EXPORT_POINTS_DEFAULT_NAME))
     torch.save(directions, path.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME))
     torch.save(normal_forces, path.join(output_dir, EXPORT_FORCES_DEFAULT_NAME))
+
+
+def store_sdf_for_bsdf(storage_name: str, run_name: str,
+                       from_support_not_mesh: bool, ps: Tensor, sdfs: Tensor,
+                       vs: Tensor, sdf_bounds: Tensor) -> None:
+    """Store SDF training data for BundleSDF."""
+    bsdf_output_dir = geom_for_bsdf_dir(storage_name, run_name)
+    subfolder = BSDF_FROM_SUPPORT_SUBSUBFOLDER_NAME if from_support_not_mesh \
+        else BSDF_FROM_MESH_SUBSUBFOLDER_NAME
+    output_dir = assure_created(path.join(bsdf_output_dir, subfolder))
+
+    torch.save(ps, path.join(output_dir, EXPORT_POINTS_WITH_SDF_DEFAULT_NAME))
+    torch.save(sdfs, path.join(output_dir, EXPORT_SDFS_FOR_POINTS_DEFAULT_NAME))
+    torch.save(vs, path.join(output_dir,
+                             EXPORT_POINTS_WITH_SDF_BOUND_DEFAULT_NAME))
+    torch.save(sdf_bounds, path.join(output_dir,
+                                     EXPORT_SDF_BOUNDS_FOR_POINTS_DEFAULT_NAME))
 
 
 def get_evaluation_filename(storage_name: str, run_name: str) -> str:

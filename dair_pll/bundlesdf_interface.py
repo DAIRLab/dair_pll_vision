@@ -16,7 +16,13 @@ from dair_pll import deep_support_function, file_utils
 from dair_pll.geometry import _DEEP_SUPPORT_DEFAULT_DEPTH, \
     _DEEP_SUPPORT_DEFAULT_WIDTH
 from dair_pll.deep_support_function import HomogeneousICNN
+from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
+    EXPORT_DIRECTIONS_DEFAULT_NAME, \
+    EXPORT_FORCES_DEFAULT_NAME
 
+
+TEST_RUN_NAME = 'test_004'
+SYSTEM_NAME = 'bundlesdf_cube'
 
 # Hyperparameters for querying into and out of the object at an SDF=0 point.
 N_QUERY_INSIDE = 100
@@ -35,6 +41,7 @@ MESH_N_QUERY_OUTSIDE_FAR = 0
 MESH_DEPTH_INSIDE = 0.02
 MESH_DEPTH_OUTSIDE = 0.02
 MESH_DEPTH_FAR_OUTSIDE = 0.1
+N_MESH_SAMPLE = 25000
 
 # Hyperparameters for querying around an object with SDF minimum bounds.
 BOUNDED_NEARBY_DEPTH = 0.005
@@ -53,6 +60,7 @@ HULL_PROXIMITY_THRESH = 0.001       # meters
 # Flags for running some unit tests.
 DO_SMALL_FILTERING_AND_VISUALIZATION_TEST = False
 DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING = False
+DO_COMBINE_SUPPORT_POINTS_AND_MESH_SAMPLING = False
 DO_NETWORK_LOADING_TEST = False
 
 
@@ -598,6 +606,77 @@ def filter_mesh_samples_based_on_supports(
     return sample_points[sample_mask], sample_normals[sample_mask]
 
 
+def load_run_data(run_name: str, system: str) -> None:
+    storage_name = file_utils.assure_created(
+        op.join(file_utils.RESULTS_DIR, system))
+
+    # Load the exported outputs from the experiment run.
+    output_dir = file_utils.geom_for_bsdf_dir(storage_name, run_name)
+    normal_forces = torch.load(
+        op.join(output_dir, EXPORT_FORCES_DEFAULT_NAME)).detach()
+    support_points = torch.load(
+        op.join(output_dir, EXPORT_POINTS_DEFAULT_NAME)).detach()
+    support_directions = torch.load(
+        op.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME)).detach()
+    
+    return support_points, support_directions, normal_forces, output_dir
+
+
+def generate_training_data_for_run(run_name: str, storage_name: str):
+    # Load the exported outputs from the experiment run.
+    output_dir = file_utils.geom_for_bsdf_dir(storage_name, run_name)
+    normal_forces = torch.load(
+        op.join(output_dir, EXPORT_FORCES_DEFAULT_NAME)).detach()
+    support_points = torch.load(
+        op.join(output_dir, EXPORT_POINTS_DEFAULT_NAME)).detach()
+    support_directions = torch.load(
+        op.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME)).detach()
+
+    # Sample points on the support point mesh surface and visualize them.
+    mesh = create_mesh_from_set_of_points(support_points)
+    sample_points, sample_normals = sample_on_mesh(mesh, N_MESH_SAMPLE)
+
+    # Filter support points via simple thresholding of normal forces, then
+    # filter the sample points based on this contact knowledge.
+    contact_points, contact_directions = filter_pts_and_dirs(
+        support_points, support_directions, normal_forces)
+    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
+        sample_points, sample_normals, contact_points, contact_directions
+    )
+
+    # Generate training data for the mesh sample points.
+    mesh_ps, mesh_sdfs = generate_point_sdf_pairs(
+        sample_points_cf, sample_normals_cf,
+        n_nearby_inside=MESH_N_QUERY_INSIDE,
+        n_nearby_outside=MESH_N_QUERY_OUTSIDE,
+        n_far_outside=MESH_N_QUERY_OUTSIDE_FAR,
+        depth_inside=MESH_DEPTH_INSIDE,
+        depth_outside=MESH_DEPTH_OUTSIDE,
+        depth_far_outside=MESH_DEPTH_FAR_OUTSIDE
+    )
+    mesh_vs, mesh_sdf_bounds = generate_point_sdf_bound_pairs(
+        sample_points_cf, sample_normals_cf
+    )
+
+    # Generate training data for the contact points themselves.
+    contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
+        generate_training_data(contact_points, contact_directions)
+    
+    # Save the generated data.
+    file_utils.store_sdf_for_bsdf(
+        storage_name, run_name,
+        from_support_not_mesh=False,
+        ps=mesh_ps, sdfs=mesh_sdfs,
+        vs=mesh_vs, sdf_bounds=mesh_sdf_bounds
+    )
+    file_utils.store_sdf_for_bsdf(
+        storage_name, run_name,
+        from_support_not_mesh=True,
+        ps=contact_ps, sdfs=contact_sdfs,
+        vs=contact_vs, sdf_bounds=contact_sdf_bounds
+    )
+
+
 
 # Tests.
 if DO_SMALL_FILTERING_AND_VISUALIZATION_TEST:
@@ -668,101 +747,112 @@ if DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING:
         support_dirs, sample_points_cf, sample_normals_cf, ps, sdfs
     print('Done with SDF generation from mesh and contact filtering test.')
 
+if DO_COMBINE_SUPPORT_POINTS_AND_MESH_SAMPLING:
+    print('Performing combining support points and mesh samples test.')
+
+    print(f'\tLoading results from {TEST_RUN_NAME} in {SYSTEM_NAME}.')
+    support_points, support_directions, normal_forces, output_dir = \
+        load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
+    
+    # Sample points on the mesh surface and visualize them.
+    print('\tSampling points on the mesh surface.')
+    mesh = create_mesh_from_set_of_points(support_points)
+    sample_points, sample_normals = sample_on_mesh(mesh, 100)
+    
+    # Perform filtering via simple thresholding of normal forces.
+    print('\tFiltering based on inferred contact.')
+    contact_points, contact_directions = filter_pts_and_dirs(
+        support_points, support_directions, normal_forces)
+
+    # Generate training data.
+    mesh_ps, mesh_sdfs, mesh_vs, mesh_sdf_bounds = \
+        generate_training_data(sample_points, sample_normals)
+    contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
+        generate_training_data(contact_points, contact_directions)
+    ps = torch.cat((mesh_ps, contact_ps), dim=0)
+    sdfs = torch.cat((mesh_sdfs, contact_sdfs), dim=0)
+    vs = torch.cat((mesh_vs, contact_vs), dim=0)
+    sdf_bounds = torch.cat((mesh_sdf_bounds, contact_sdf_bounds), dim=0)
+
+    print(f'\tGenerated training data: \n\t\t{mesh_ps.shape=}')
+    print(f'\t\t{mesh_vs.shape=} \n\t\t{contact_ps.shape=}')
+    print(f'\t\t{contact_vs.shape=}')
+
+    # Visualize it.  Note:  can call this visualization function without
+    # providing the training data, and it will generate some for visualization
+    # purposes.
+    visualize_sdfs(contact_points, contact_directions, ps=ps, sdfs=sdfs, vs=vs,
+                   sdf_bounds=sdf_bounds)
+
+    print('\tDeleting test variables so can\'t accidentally be reused.')
+    del support_points, support_directions, mesh, sample_points, \
+        sample_normals, contact_points, contact_directions, mesh_ps, \
+        mesh_sdfs, mesh_vs, mesh_sdf_bounds, contact_ps, contact_sdfs, \
+        contact_vs, contact_sdf_bounds, ps, sdfs, vs, sdf_bounds
+    print('Done with combining support points and mesh samples test.')
+
 if DO_NETWORK_LOADING_TEST:
     print('Performing loading deep support convex network test.')
 
-    run_name = 'test_004'
-    system = 'bundlesdf_cube'
-    storage_name = file_utils.assure_created(op.join(file_utils.RESULTS_DIR, system))
+    storage_name = file_utils.assure_created(
+        op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
 
     # Can load a pre-trained deep support convex network.
-    network = load_deep_support_convex_network(storage_name, run_name)
+    network = load_deep_support_convex_network(storage_name, TEST_RUN_NAME)
     mesh = create_mesh_from_deep_support(network)
 
     print('\tDeleting test variables so can\'t accidentally be reused.')
-    del run_name, system, storage_name, network, mesh
+    del storage_name, network, mesh
     print('Done with loading deep support convex network test.')
 
 
-pdb.set_trace()
+if __name__ == '__main__':
+    pdb.set_trace()
 
+    # Load the exported outputs from the experiment run.
+    support_points, support_directions, normal_forces, output_dir = \
+        load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
 
-# Prepare to load pre-saved data from a finished run.
-run_name = 'test_004'
-system = 'bundlesdf_cube'
-storage_name = file_utils.assure_created(op.join(file_utils.RESULTS_DIR, system))
+    # Perform filtering via simple thresholding of normal forces.
+    contact_points, contact_directions = filter_pts_and_dirs(
+        support_points, support_directions, normal_forces)
 
-# Load the exported outputs from the experiment run.
-output_dir = file_utils.geom_for_bsdf_dir(storage_name, run_name)
-normal_forces = torch.load(op.join(output_dir, 'normal_forces.pt')).detach()
-support_points = torch.load(op.join(output_dir, 'points.pt')).detach()
-support_directions = torch.load(op.join(output_dir, 'directions.pt')).detach()
+    print(f'PLL exported data: \n\t{support_points.shape=}, ' + \
+        f'\n\t{support_directions.shape=}')
+    print(f'Filtered by contact: \n\t{contact_points.shape=}, ' + \
+        f'\n\t{contact_directions.shape=}')
 
-# Perform filtering via simple thresholding of normal forces.
-contact_points, contact_directions = filter_pts_and_dirs(
-    support_points, support_directions, normal_forces)
+    # Build set of points from the saved support points.
+    mesh = create_mesh_from_set_of_points(support_points)
 
-print(f'PLL exported data: \n\t{support_points.shape=}, ' + \
-      f'\n\t{support_directions.shape=}')
-print(f'Filtered by contact: \n\t{contact_points.shape=}, ' + \
-      f'\n\t{contact_directions.shape=}')
+    # Sample points on the mesh surface and visualize them.
+    sample_points, sample_normals = sample_on_mesh(mesh, N_MESH_SAMPLE)
+    print(f'{sample_points.shape=}, \n{sample_normals.shape=}')
+    # visualize_sampled_points(mesh, sample_points, sample_normals)
 
-# Build set of points from the saved support points.
-mesh = create_mesh_from_set_of_points(support_points)
+    # Filter the sample points based on contact.
+    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
+        sample_points, sample_normals, contact_points, contact_directions
+    )
+    print(f'{sample_points_cf.shape=}, \n{sample_normals_cf.shape=}')
+    # visualize_sampled_points(
+    #     mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
+    #     filtered_normals=sample_normals_cf, support_points=contact_points,
+    #     support_directions=contact_directions
+    # )
 
+    # Generate training data.
+    ps, sdfs = generate_point_sdf_pairs(
+        sample_points_cf, sample_normals_cf,
+        n_nearby_inside=MESH_N_QUERY_INSIDE,
+        n_nearby_outside=MESH_N_QUERY_OUTSIDE,
+        n_far_outside=MESH_N_QUERY_OUTSIDE_FAR,
+        depth_inside=MESH_DEPTH_INSIDE,
+        depth_outside=MESH_DEPTH_OUTSIDE,
+        depth_far_outside=MESH_DEPTH_FAR_OUTSIDE
+    )
 
-# Sample points and visualize them.
-sample_points, sample_normals = sample_on_mesh(mesh, 50000)
-print(f'{sample_points.shape=}, \n{sample_normals.shape=}')
-# visualize_sampled_points(mesh, sample_points, sample_normals)
-
-# Filter the sample points based on contact.
-sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
-    sample_points, sample_normals, contact_points, contact_directions
-)
-print(f'{sample_points_cf.shape=}, \n{sample_normals_cf.shape=}')
-# visualize_sampled_points(
-#     mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
-#     filtered_normals=sample_normals_cf, support_points=contact_points,
-#     support_directions=contact_directions
-# )
-
-# Generate training data.
-ps, sdfs = generate_point_sdf_pairs(
-    sample_points_cf, sample_normals_cf,
-    n_nearby_inside=MESH_N_QUERY_INSIDE,
-    n_nearby_outside=MESH_N_QUERY_OUTSIDE,
-    n_far_outside=MESH_N_QUERY_OUTSIDE_FAR,
-    depth_inside=MESH_DEPTH_INSIDE,
-    depth_outside=MESH_DEPTH_OUTSIDE,
-    depth_far_outside=MESH_DEPTH_FAR_OUTSIDE
-)
-
-# Export the training data.
-torch.save(ps, os.path.join(output_dir, 'mesh_sampled_contact_filtered_pts.pt'))
-torch.save(sdfs, os.path.join(output_dir, 'mesh_sampled_contact_filtered_sdfs.pt'))
-exit()
-
-
-
-# Generate training data.
-ps, sdfs, vs, sdf_bounds = generate_training_data(sample_points, sample_normals)
-ps_, sdfs_, vs_, sdf_bounds_ = generate_training_data(filtered_pts, filtered_dirs)
-ps = torch.cat((ps, ps_), dim=0)
-sdfs = torch.cat((sdfs, sdfs_), dim=0)
-vs = torch.cat((vs, vs_), dim=0)
-sdf_bounds = torch.cat((sdf_bounds, sdf_bounds_), dim=0)
-
-print(f'{ps.shape=},{sdfs.shape=},{vs.shape=},{sdf_bounds.shape=}')
-
-# Visualize it.  Note:  can call this visualization function without providing
-# the training data, and it will generate some for visualization purposes.
-visualize_sdfs(filtered_pts, filtered_dirs, ps=ps, sdfs=sdfs, vs=vs,
-               sdf_bounds=sdf_bounds)
-# visualize(ps,sdfs)
-# visualize(vs,sdf_bounds)
-
-# torch.save(ps, os.path.join(output_dir, 'support_pts.pt'))
-# torch.save(sdfs, os.path.join(output_dir, 'sdfs_from_cnets.pt'))
-# torch.save(vs, os.path.join(output_dir, 'sampled_pts.pt'))
-# torch.save(sdf_bounds, os.path.join(output_dir, 'sdf_bounds_from_cnets.pt'))
+    # Export the training data.
+    torch.save(ps, os.path.join(output_dir, 'mesh_sampled_contact_filtered_pts.pt'))
+    torch.save(sdfs, os.path.join(output_dir, 'mesh_sampled_contact_filtered_sdfs.pt'))
+    exit()
