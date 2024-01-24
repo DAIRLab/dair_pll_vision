@@ -72,6 +72,7 @@ DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING = False
 DO_COMBINE_SUPPORT_POINTS_AND_MESH_SAMPLING = False
 DO_NETWORK_LOADING_TEST = False
 DO_GRADIENT_DATA_TEST = False
+DO_UNIQUENESS_SCORE_TEST = False
 
 
 # ========================= Data Generation Helpers ========================== #
@@ -252,6 +253,61 @@ def sample_on_mesh(mesh: MeshSummary, n_sample: int,
 
     return surface_points, surface_normals
     
+
+def compute_position_and_direction_uniquenesses(
+        points: Tensor, directions: Tensor) -> Tuple[Tensor, Tensor]:
+    """Compute scores for how "uniquely" each position and direction is
+    represented in the provided points and directions arrays.  The higher the
+    score, the more underrepresented the point's position or direction.  The
+    scores physically mean:
+
+        Position uniqueness is the average distance away a point is from all the
+            other points.  This score is in [0, \infty) where 0 means the point
+            is centered among all other points, and anything larger represents
+            the distance in meters to the centroid of its neighbors.
+
+        Direction uniqueness is the average distance away the tip of an origin-
+            centered direction vector is from all the other direction vector
+            ends.  This score is in [0, \infty) where 0 means the direction is
+            centered among all other centers, and anything larger represents
+            the distance away to the centroid of other direction vectors.
+
+    Args:
+        points (N, 3)
+        directions (N, 3)
+
+    Outputs:
+        position_uniqueness (N,)
+        direction_uniqueness (N,)
+    """
+    # Use 3D arrays with indexing [point_i, neighbor_i, x/y/z].
+    n_points = points.shape[0]
+    n_neighbors = n_points - 1
+    points_expanded = points.unsqueeze(1).repeat(1, n_neighbors, 1)
+    neighbors = points.unsqueeze(0).repeat(n_points, 1, 1)
+    neighbors = neighbors[torch.eye(n_points) == 0]     # don't compare to self.
+    neighbors = neighbors.reshape(n_points, n_neighbors, 3)
+    
+    # Get vector to centroid of other points; take length as "position
+    # uniqueness" score.
+    point_to_neighbor = neighbors - points_expanded
+    point_to_neighbor_centroid = torch.sum(point_to_neighbor, axis=1)
+    position_uniqueness = torch.linalg.norm(point_to_neighbor_centroid, axis=1)
+    position_uniqueness /= n_neighbors
+    
+    # Use same logic to get a score for how different the direction is from the
+    # average of other points' directions.
+    directions_expanded = directions.unsqueeze(1).repeat(1, n_neighbors, 1)
+    neighbor_dirs = directions.unsqueeze(0).repeat(n_points, 1, 1)
+    neighbor_dirs = neighbor_dirs[torch.eye(n_points) == 0]
+    neighbor_dirs = neighbor_dirs.reshape(n_points, n_neighbors, 3)
+    dir_to_neighbor = neighbor_dirs - directions_expanded
+    dir_to_neighbor_centroid = torch.sum(dir_to_neighbor, axis=1)
+    direction_uniqueness = torch.linalg.norm(dir_to_neighbor_centroid, axis=1)
+    direction_uniqueness /= n_neighbors
+
+    return position_uniqueness, direction_uniqueness
+
 
 # ============================= Data Generation ============================== #
 def generate_point_sdf_pairs(
@@ -747,6 +803,61 @@ def visualize_gradients(mesh: MeshSummary, sample_points: Tensor,
     plt.show()
 
 
+def visualize_point_uniquenesses(
+        points: Tensor, directions: Tensor, position_uniqueness: Tensor,
+        direction_uniqueness: Tensor) -> None:
+    """Visualize a colorized mapping of point locations/directions and their
+    position/direction uniqueness scores.
+
+    Args:
+        points (N, 3)
+        directions (N, 3)
+        position_uniqueness (N,)
+        direction_uniqueness (N,)
+    """
+    # Do some input checking.
+    assert points.shape == directions.shape
+    assert position_uniqueness.shape == direction_uniqueness.shape
+    assert points.shape[0] == position_uniqueness.shape[0]
+    assert position_uniqueness.shape[0] == direction_uniqueness.shape[0]
+    assert points.ndim == 2
+    assert position_uniqueness.ndim == 1
+    assert points.shape[1] == 3
+
+    # Do position uniqueness plot first.
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    color_scale = ax.scatter(points[:, 0], points[:, 1], points[:, 2], 
+                             c=position_uniqueness, cmap='viridis', marker='o')
+    cbar = fig.colorbar(color_scale)
+    cbar.set_label('Position uniqueness')
+    ax.set_xlabel('X-axis')
+    ax.set_ylabel('Y-axis')
+    ax.set_zlabel('Z-axis')
+    # Set equal aspect ratio.
+    ax.set_box_aspect([np.ptp(arr) for arr in \
+                       [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
+    plt.show()
+
+    # Do direction uniqueness plot next.
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    color_scale = ax.scatter(points[:, 0], points[:, 1], points[:, 2],
+                             c=direction_uniqueness, cmap='viridis', marker='o')
+    for i in range(len(directions)):
+        color = color_scale.to_rgba(direction_uniqueness[i])
+        ax.quiver(*points[i], *directions[i]/100, color=color, zorder=1.5)
+    cbar = fig.colorbar(color_scale)
+    cbar.set_label('Direction uniqueness')
+    ax.set_xlabel('X-axis')
+    ax.set_ylabel('Y-axis')
+    ax.set_zlabel('Z-axis')
+    # Set equal aspect ratio.
+    ax.set_box_aspect([np.ptp(arr) for arr in \
+                       [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
+    plt.show()
+
+
 # ============================ Loading Management ============================ #
 def load_run_data(run_name: str, system: str) -> None:
     storage_name = file_utils.assure_created(
@@ -951,6 +1062,24 @@ if DO_GRADIENT_DATA_TEST:
         sample_points, sample_normals, contact_points, contact_directions, \
         sample_points_cf, sample_normals_cf, mesh_ws, mesh_w_normals
     print('Done with gradient data generation test.')
+
+if DO_UNIQUENESS_SCORE_TEST:
+    print('Performing uniqueness score test.')
+    support_points, support_directions, normal_forces, _ = \
+        load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
+    
+    print('\tComputing uniqueness scores.')
+    pos_uniq, dir_uniq = compute_position_and_direction_uniquenesses(
+        support_points, support_directions
+    )
+
+    print('\tVisualizing position then direction uniqueness.')
+    visualize_point_uniquenesses(support_points, support_directions, pos_uniq,
+                                 dir_uniq)
+
+    print('\tDeleting test variables so can\'t accidentally be reused.')
+    del support_points, support_directions, normal_forces, pos_uniq, dir_uniq
+    print('Done with uniqueness score test.')
 
 
 if __name__ == '__main__':
