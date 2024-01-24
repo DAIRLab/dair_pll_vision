@@ -306,7 +306,7 @@ def simulate_cube_toss_with_traj(params, trajectory_dir):
     playback_speed = 1.0
     while True:
         for i in range(1, trajectory_length):
-            # print(f'z position: {p_t[i, -1]}')
+            print(f'z position: {p_t[i, -1]}')
             target_time = i * time_step
             if simulator_time < target_time:
                 simulator.AdvanceTo(target_time)
