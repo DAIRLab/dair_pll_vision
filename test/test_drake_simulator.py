@@ -550,7 +550,8 @@ if __name__ == '__main__':
     toss_id = args.toss_id
     toss_type = args.type
     if toss_type == 'napkin':
-        napkin_traj_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_napkin/{toss_id-1}.pt'
+        # napkin_traj_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_napkin/{toss_id-1}.pt'
+        napkin_traj_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_napkin/{toss_id-1}.pt'
         napkin_urdf_dir = "drake/../../../../../../../../../../home/cnets-vision/mengti_ws/BundleSDF/assets/gt_napkin.urdf"
         simulate_toss_with_traj(napkin_traj_dir, napkin_urdf_dir)
         # napkin_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_napkin'
@@ -568,32 +569,25 @@ if __name__ == '__main__':
         cube_traj_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_cube/{toss_id-1}.pt'
         simulate_cube_toss_with_traj(None, cube_traj_dir)
     elif toss_type == 'milk':
-        # milk_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_milk'
-        # milk_traj_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_milk/{toss_id-1}.pt'
         milk_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_milk'
         milk_traj_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_milk/{toss_id-1}.pt'
         milk_urdf_dir = "drake/../../../../../../../../../../home/cnets-vision/mengti_ws/BundleSDF/assets/gt_bottle.urdf"
         simulate_toss_with_traj(milk_traj_dir, milk_urdf_dir)
     elif toss_type == 'prism':
-        # prism_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_prism'
-        # prism_traj_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_prism/{toss_id-1}.pt'
         prism_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_prism'
         prism_traj_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_prism/{toss_id-1}.pt'
         prism_urdf_dir = "drake/../../../../../../../../../../home/cnets-vision/mengti_ws/BundleSDF/assets/gt_prism.urdf"
         simulate_toss_with_traj(prism_traj_dir, prism_urdf_dir)
     elif toss_type == 'toblerone':
-        # toblerone_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_toblerone'
-        # toblerone_traj_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_toblerone/{toss_id-1}.pt'
         toblerone_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_toblerone'
         toblerone_traj_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_toblerone/{toss_id-1}.pt'
         toblerone_urdf_dir = "drake/../../../../../../../../../../home/cnets-vision/mengti_ws/BundleSDF/assets/gt_toblerone.urdf"
         simulate_toss_with_traj(toblerone_traj_dir, toblerone_urdf_dir)
     elif toss_type == 'half':
-        # half_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_half'
-        # half_traj_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_half/{toss_id-1}.pt'
-        # half_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_half'
-        # half_traj_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_half/{toss_id-1}.pt'
-        # simulate_toss_with_traj(half_traj_dir, half_urdf_dir)
+        half_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_half'
+        half_traj_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_half/{toss_id-1}.pt'
+        half_urdf_dir = "drake/../../../../../../../../../../home/cnets-vision/mengti_ws/BundleSDF/assets/gt_half.urdf"
+        simulate_toss_with_traj(half_traj_dir, half_urdf_dir)
         pass
     elif toss_type == 'egg':
         # egg_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_egg'
