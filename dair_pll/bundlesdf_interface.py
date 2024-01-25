@@ -288,24 +288,45 @@ def compute_position_and_direction_uniquenesses(
     neighbors = points.unsqueeze(0).repeat(n_points, 1, 1)
     neighbors = neighbors[torch.eye(n_points) == 0]     # don't compare to self.
     neighbors = neighbors.reshape(n_points, n_neighbors, 3)
-    
-    # Get vector to centroid of other points; take length as "position
-    # uniqueness" score.
-    point_to_neighbor = neighbors - points_expanded
-    point_to_neighbor_centroid = torch.sum(point_to_neighbor, axis=1)
-    position_uniqueness = torch.linalg.norm(point_to_neighbor_centroid, axis=1)
-    position_uniqueness /= n_neighbors
-    
-    # Use same logic to get a score for how different the direction is from the
-    # average of other points' directions.
+
     directions_expanded = directions.unsqueeze(1).repeat(1, n_neighbors, 1)
     neighbor_dirs = directions.unsqueeze(0).repeat(n_points, 1, 1)
     neighbor_dirs = neighbor_dirs[torch.eye(n_points) == 0]
     neighbor_dirs = neighbor_dirs.reshape(n_points, n_neighbors, 3)
-    dir_to_neighbor = neighbor_dirs - directions_expanded
-    dir_to_neighbor_centroid = torch.sum(dir_to_neighbor, axis=1)
-    direction_uniqueness = torch.linalg.norm(dir_to_neighbor_centroid, axis=1)
-    direction_uniqueness /= n_neighbors
+
+    # Split this computation into batches due to memory issues.
+    batch_size = 1000
+    position_uniqueness = np.zeros(n_points)
+    direction_uniqueness = np.zeros(n_points)
+
+    for start_idx in torch.arange(0, end=n_points, step=batch_size):
+        end_idx = start_idx + batch_size
+        
+        batch_points_exp = points_expanded[start_idx:end_idx]
+        batch_neighbors = neighbors[start_idx:end_idx]
+
+        batch_directions_exp = directions_expanded[start_idx:end_idx]
+        batch_neighbor_dirs = neighbor_dirs[start_idx:end_idx]
+
+        # Get vector to centroid of other points; take length as "position
+        # uniqueness" score.
+        point_to_neighbor = batch_neighbors - batch_points_exp
+        point_to_neighbor_centroid = torch.sum(point_to_neighbor, axis=1)
+        batch_pos_uniqueness = torch.linalg.norm(
+            point_to_neighbor_centroid, axis=1)
+        batch_pos_uniqueness /= n_neighbors
+        
+        # Use same logic to get a score for how different the direction is from the
+        # average of other points' directions.
+        dir_to_neighbor = batch_neighbor_dirs - batch_directions_exp
+        dir_to_neighbor_centroid = torch.sum(dir_to_neighbor, axis=1)
+        batch_dir_uniqueness = torch.linalg.norm(
+            dir_to_neighbor_centroid, axis=1)
+        batch_dir_uniqueness /= n_neighbors
+
+        # Store both in the larger vectors.
+        position_uniqueness[start_idx:end_idx] = batch_pos_uniqueness
+        direction_uniqueness[start_idx:end_idx] = batch_dir_uniqueness
 
     return position_uniqueness, direction_uniqueness
 
