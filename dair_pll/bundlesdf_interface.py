@@ -72,7 +72,8 @@ DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING = False
 DO_COMBINE_SUPPORT_POINTS_AND_MESH_SAMPLING = False
 DO_NETWORK_LOADING_TEST = False
 DO_GRADIENT_DATA_TEST = False
-DO_UNIQUENESS_SCORE_TEST = False
+DO_UNIQUENESS_SCORE_TEST = True
+DO_SUPPORT_POINT_SNAPPING_TEST = False
 
 
 # ========================= Data Generation Helpers ========================== #
@@ -111,7 +112,7 @@ def filter_points_and_directions_based_on_contact(
 def filter_mesh_samples_based_on_supports(
         sample_points: Tensor, sample_normals: Tensor, contact_points: Tensor,
         support_directions: Tensor, threshold: float = HULL_PROXIMITY_THRESH
-        ) -> Tuple[Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor]:
     """Given a set of points sampled on the convex hull mesh and their outward
     normal directions, filter out any that are located beyond a threshold away
     from support point hyperplanes.
@@ -309,6 +310,38 @@ def compute_position_and_direction_uniquenesses(
     return position_uniqueness, direction_uniqueness
 
 
+def identify_nearest_support_point(support_points: Tensor, sample_points: Tensor
+                                   ) -> Tensor:
+    """Identify the nearest support point for each sample point.
+
+    Args:
+        support_points (N, 3):  support points to which samples can snap.
+        sample_points (M, 3):  other samples in space, such as those which may
+            have been sampled on the surface of an underlying mesh.
+
+    Outputs:
+        nearest_support_idx (M):  the index of the nearest support point in
+            support_points to the samples in sample_points.
+    """
+    n_supports = support_points.shape[0]
+    n_samples = sample_points.shape[0]
+
+    # Use 3D arrays indexed by [sample_i, support_i, x/y/z].
+    samples_expanded = sample_points.unsqueeze(1).repeat(1, n_supports, 1)
+    supports_expanded = support_points.unsqueeze(0).repeat(n_samples, 1, 1)
+
+    # Get (n_samples, n_support, 3) vectors from each sample to a support point.
+    sample_to_support_vecs = supports_expanded - samples_expanded
+
+    # Get (n_samples, n_support) distances from each sample to a support point.
+    sample_to_support_dists = torch.linalg.norm(sample_to_support_vecs, axis=2)
+
+    # Get (n_samples,) index of support point closest to each sample.
+    nearest_support_idx = torch.min(sample_to_support_dists, axis=1).indices
+
+    return nearest_support_idx
+
+
 # ============================= Data Generation ============================== #
 def generate_point_sdf_pairs(
         points: Tensor, directions: Tensor,
@@ -318,7 +351,7 @@ def generate_point_sdf_pairs(
         depth_inside: float = DEPTH_INSIDE,
         depth_outside: float = DEPTH_OUTSIDE,
         depth_far_outside: float = DEPTH_FAR_OUTSIDE
-    ) -> Tuple[Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor]:
     """Generate pairs of 3D points and their associated signed distance, given
     a list of points with known signed distance of zero and directions
     associated with those points' contact directions.
@@ -382,7 +415,7 @@ def generate_point_sdf_pairs(
 
 
 def generate_point_sdf_bound_pairs(points: Tensor, directions: Tensor
-                             ) -> Tuple[Tensor, Tensor]:
+                                   ) -> Tuple[Tensor, Tensor]:
     """Generate pairs of 3D points and their associated minimum signed distance
     bounds, given a list of points with known signed distance of zero and
     directions associated with those points' contact directions.
@@ -494,7 +527,7 @@ def generate_training_data(points: Tensor, directions: Tensor) -> None:
 
 
 def generate_point_sdf_gradient_pairs(points: Tensor, normals: Tensor
-                                    ) -> Tuple[Tensor, Tensor]:
+                                      ) -> Tuple[Tensor, Tensor]:
     """Given a set of points and their associated outward normals, generate an
     sampled set of points and their associated outward normals.  These (point,
     normal) pairs are to be used in BundleSDF loss that enforces the SDF should
@@ -686,7 +719,7 @@ def visualize_sampled_points(
         mesh: MeshSummary, sampled_points: Tensor, sampled_normals: Tensor,
         filtered_points: Tensor = None, filtered_normals: Tensor = None,
         support_points: Tensor = None, support_directions: Tensor = None
-        ) -> None:
+) -> None:
     """Visualize the sample points generated on the provided mesh.  Can help
     visually verify the points are strictly on the mesh surface with normals
     facing outwards.  Optionally can show how the points are filtered based on
@@ -828,7 +861,7 @@ def visualize_point_uniquenesses(
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     color_scale = ax.scatter(points[:, 0], points[:, 1], points[:, 2], 
-                             c=position_uniqueness, cmap='viridis', marker='o')
+                             c=position_uniqueness, cmap='rainbow', marker='o')
     cbar = fig.colorbar(color_scale)
     cbar.set_label('Position uniqueness')
     ax.set_xlabel('X-axis')
@@ -843,7 +876,7 @@ def visualize_point_uniquenesses(
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     color_scale = ax.scatter(points[:, 0], points[:, 1], points[:, 2],
-                             c=direction_uniqueness, cmap='viridis', marker='o')
+                             c=direction_uniqueness, cmap='rainbow', marker='o')
     for i in range(len(directions)):
         color = color_scale.to_rgba(direction_uniqueness[i])
         ax.quiver(*points[i], *directions[i]/100, color=color, zorder=1.5)
@@ -852,6 +885,60 @@ def visualize_point_uniquenesses(
     ax.set_xlabel('X-axis')
     ax.set_ylabel('Y-axis')
     ax.set_zlabel('Z-axis')
+    # Set equal aspect ratio.
+    ax.set_box_aspect([np.ptp(arr) for arr in \
+                       [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
+    plt.show()
+
+
+def visualize_point_snapping(
+        mesh: MeshSummary, support_points: Tensor, sample_points: Tensor,
+        snapping_idxs: Tensor) -> None:
+    """Visualize the result of snapping points sampled on a mesh surface to
+    their nearest support points.
+
+    Args:
+        mesh:  can be None then wireframe will not get drawn.
+        support_points (N, 3)
+        sample_points (M, 3)
+        snapping_idxs (M,)
+    """
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Plot the mesh wireframe.
+    if mesh is not None:
+        prefix = [''] + ['_']*(len(mesh.faces)-1)
+        for i in range(len(mesh.faces)):
+            face = mesh.faces[i]
+            vertices = mesh.vertices[face]
+            vertices = torch.cat((vertices, vertices[0].unsqueeze(0)), dim=0)
+            vertices = vertices.numpy()
+            ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2],
+                    color='gray', label=prefix[i]+'Mesh edges')
+            
+    # Plot the support points.
+    ax.scatter(support_points[:, 0], support_points[:, 1], support_points[:, 2], 
+               color='b', marker='o', label='Support points')
+    
+    # Plot the sample points.
+    ax.scatter(sample_points[:, 0], sample_points[:, 1], sample_points[:, 2], 
+               color='r', marker='+', label='Sample points')
+    
+    # Plot the snapping of each sample point to nearest support point.
+    prefix = [''] + ['_']*(len(sample_points)-1)
+    for i in range(len(sample_points)):
+        support_point = support_points[snapping_idxs[i]]
+        xs = [sample_points[i][0], support_point[0]]
+        ys = [sample_points[i][1], support_point[1]]
+        zs = [sample_points[i][2], support_point[2]]
+        ax.plot(xs, ys, zs, color='r', label=prefix[i]+'Snapping travel')
+
+    ax.set_xlabel('X-axis')
+    ax.set_ylabel('Y-axis')
+    ax.set_zlabel('Z-axis')
+    plt.legend()
+
     # Set equal aspect ratio.
     ax.set_box_aspect([np.ptp(arr) for arr in \
                        [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
@@ -875,18 +962,21 @@ def load_run_data(run_name: str, system: str) -> None:
     return support_points, support_directions, normal_forces, output_dir
 
 
-def load_deep_support_convex_network(storage_name: str, run_name: str
+def load_deep_support_convex_network(run_name: str, system: str
                                      ) -> HomogeneousICNN:
     """Load a deep support convex network stored from a previous experiment run,
     corresponding to that run's best learned system state.
 
     Args:
-        storage_name:  name of the storage directory.
         run_name:  name of the run whose results are to be loaded.
+        system:  name of the system.
 
     Outputs:
         A deep support convex network in the form of a HomogemeousICNN.
     """
+    storage_name = file_utils.assure_created(
+        op.join(file_utils.RESULTS_DIR, system))
+    
     checkpoint_filename = file_utils.get_model_filename(storage_name, run_name)
     checkpoint_dict = torch.load(checkpoint_filename)
 
@@ -1021,15 +1111,12 @@ if DO_COMBINE_SUPPORT_POINTS_AND_MESH_SAMPLING:
 if DO_NETWORK_LOADING_TEST:
     print('Performing loading deep support convex network test.')
 
-    storage_name = file_utils.assure_created(
-        op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
-
     # Can load a pre-trained deep support convex network.
-    network = load_deep_support_convex_network(storage_name, TEST_RUN_NAME)
+    network = load_deep_support_convex_network(TEST_RUN_NAME, SYSTEM_NAME)
     mesh = create_mesh_from_deep_support(network)
 
     print('\tDeleting test variables so can\'t accidentally be reused.')
-    del storage_name, network, mesh
+    del network, mesh
     print('Done with loading deep support convex network test.')
 
 if DO_GRADIENT_DATA_TEST:
@@ -1065,7 +1152,7 @@ if DO_GRADIENT_DATA_TEST:
 
 if DO_UNIQUENESS_SCORE_TEST:
     print('Performing uniqueness score test.')
-    support_points, support_directions, normal_forces, _ = \
+    support_points, support_directions, _, _ = \
         load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
     
     print('\tComputing uniqueness scores.')
@@ -1078,8 +1165,28 @@ if DO_UNIQUENESS_SCORE_TEST:
                                  dir_uniq)
 
     print('\tDeleting test variables so can\'t accidentally be reused.')
-    del support_points, support_directions, normal_forces, pos_uniq, dir_uniq
+    del support_points, support_directions, pos_uniq, dir_uniq
     print('Done with uniqueness score test.')
+
+if DO_SUPPORT_POINT_SNAPPING_TEST:
+    print('Performing support point snapping test.')
+
+    # Load the support points and mesh from a finished run.
+    support_points, _, _, _ = \
+        load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
+    network = load_deep_support_convex_network(TEST_RUN_NAME, SYSTEM_NAME)
+    mesh = create_mesh_from_deep_support(network)
+
+    samples, _ = sample_on_mesh(mesh, n_sample=400)
+
+    snapping_idxs = identify_nearest_support_point(support_points, samples)
+
+    visualize_point_snapping(mesh, support_points, samples, snapping_idxs)
+
+
+    print('\tDeleting test variables so can\'t accidentally be reused.')
+    del support_points, network, mesh, samples, snapping_idxs
+    print('Done with support point snapping test.')
 
 
 if __name__ == '__main__':
