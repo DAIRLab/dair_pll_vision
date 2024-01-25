@@ -586,7 +586,7 @@ if __name__ == '__main__':
     elif toss_type == 'half':
         half_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_half'
         half_traj_dir = f'/home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_half/{toss_id-1}.pt'
-        half_urdf_dir = "drake/../../../../../../../../../../home/cnets-vision/mengti_ws/BundleSDF/assets/gt_half.urdf"
+        half_urdf_dir = "drake/../../../../../../../../../../home/cnets-vision/mengti_ws/dair_pll_latest/assets/bundlesdf_half_mesh.urdf"
         simulate_toss_with_traj(half_traj_dir, half_urdf_dir)
     elif toss_type == 'egg':
         # egg_dir = f'/home/cnets-vision/mengti_ws/BundleSDF/dair_pll/assets/bundlesdf_egg'
