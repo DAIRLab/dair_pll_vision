@@ -1396,5 +1396,3 @@ if __name__ == '__main__':
     storage_name = file_utils.assure_created(
         op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
     generate_training_data_for_run(TEST_RUN_NAME, storage_name)
-    
-    exit()
