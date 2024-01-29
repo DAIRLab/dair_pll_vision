@@ -6,6 +6,8 @@ import pdb
 from typing import Tuple
 
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d.axes3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Path3DCollection
 import numpy as np
 from dair_pll.system import MeshSummary
 import torch
@@ -63,8 +65,9 @@ BOUNDED_NEARBY_OUTSIDE_N_QUERY = 100
 BOUNDED_NEARBY_INSIDE_N_QUERY = BOUNDED_FAR_N_QUERY + BOUNDED_NEARBY_OUTSIDE_N_QUERY
 
 # Hyperparameters for filtering support points or hull sample points
-FORCE_THRESH = 0.3676               # Newtons
-HULL_PROXIMITY_THRESH = 0.001       # meters
+FORCE_THRESH = 0.3676                       # Newtons
+HULL_PROXIMITY_THRESH = 0.001               # meters
+SUPPORT_POINT_DISTANCE_THRESHOLD = 0.010    # meters
 
 # Flags for running some unit tests.
 DO_SMALL_FILTERING_AND_VISUALIZATION_TEST = False
@@ -72,7 +75,8 @@ DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING = False
 DO_COMBINE_SUPPORT_POINTS_AND_MESH_SAMPLING = False
 DO_NETWORK_LOADING_TEST = False
 DO_GRADIENT_DATA_TEST = False
-DO_UNIQUENESS_SCORE_TEST = True
+DO_UNIQUENESS_SCORE_TEST = False
+DO_DOUBLE_UNIQUENESS_SCORE_TEST = False
 DO_SUPPORT_POINT_SNAPPING_TEST = False
 
 
@@ -281,9 +285,10 @@ def compute_position_and_direction_uniquenesses(
         position_uniqueness (N,)
         direction_uniqueness (N,)
     """
-    # Use 3D arrays with indexing [point_i, neighbor_i, x/y/z].
     n_points = points.shape[0]
     n_neighbors = n_points - 1
+    
+    # Use 3D arrays with indexing [point_i, neighbor_i, x/y/z].
     points_expanded = points.unsqueeze(1).repeat(1, n_neighbors, 1)
     neighbors = points.unsqueeze(0).repeat(n_points, 1, 1)
     neighbors = neighbors[torch.eye(n_points) == 0]     # don't compare to self.
@@ -295,7 +300,7 @@ def compute_position_and_direction_uniquenesses(
     neighbor_dirs = neighbor_dirs.reshape(n_points, n_neighbors, 3)
 
     # Split this computation into batches due to memory issues.
-    batch_size = 1000
+    batch_size = 2000
     position_uniqueness = np.zeros(n_points)
     direction_uniqueness = np.zeros(n_points)
 
@@ -311,18 +316,18 @@ def compute_position_and_direction_uniquenesses(
         # Get vector to centroid of other points; take length as "position
         # uniqueness" score.
         point_to_neighbor = batch_neighbors - batch_points_exp
-        point_to_neighbor_centroid = torch.sum(point_to_neighbor, axis=1)
+        point_to_neighbor_centroid = torch.sum(
+            point_to_neighbor, axis=1) / n_neighbors
         batch_pos_uniqueness = torch.linalg.norm(
             point_to_neighbor_centroid, axis=1)
-        batch_pos_uniqueness /= n_neighbors
         
         # Use same logic to get a score for how different the direction is from the
         # average of other points' directions.
         dir_to_neighbor = batch_neighbor_dirs - batch_directions_exp
-        dir_to_neighbor_centroid = torch.sum(dir_to_neighbor, axis=1)
+        dir_to_neighbor_centroid = torch.sum(
+            dir_to_neighbor, axis=1) / n_neighbors
         batch_dir_uniqueness = torch.linalg.norm(
             dir_to_neighbor_centroid, axis=1)
-        batch_dir_uniqueness /= n_neighbors
 
         # Store both in the larger vectors.
         position_uniqueness[start_idx:end_idx] = batch_pos_uniqueness
@@ -332,7 +337,7 @@ def compute_position_and_direction_uniquenesses(
 
 
 def identify_nearest_support_point(support_points: Tensor, sample_points: Tensor
-                                   ) -> Tensor:
+                                   ) -> Tuple[Tensor, Tensor]:
     """Identify the nearest support point for each sample point.
 
     Args:
@@ -343,6 +348,7 @@ def identify_nearest_support_point(support_points: Tensor, sample_points: Tensor
     Outputs:
         nearest_support_idx (M):  the index of the nearest support point in
             support_points to the samples in sample_points.
+        nearest_support_dists (M):  the distances to the nearest support point.
     """
     n_supports = support_points.shape[0]
     n_samples = sample_points.shape[0]
@@ -358,9 +364,56 @@ def identify_nearest_support_point(support_points: Tensor, sample_points: Tensor
     sample_to_support_dists = torch.linalg.norm(sample_to_support_vecs, axis=2)
 
     # Get (n_samples,) index of support point closest to each sample.
-    nearest_support_idx = torch.min(sample_to_support_dists, axis=1).indices
+    mins = torch.min(sample_to_support_dists, axis=1)
+    nearest_support_idx = mins.indices
+    nearest_support_dists = mins.values
 
-    return nearest_support_idx
+    return nearest_support_idx, nearest_support_dists
+
+
+def rebalance_contact_points(
+        mesh: MeshSummary, contact_points: Tensor, contact_directions: Tensor,
+        snapping_threshold: float = SUPPORT_POINT_DISTANCE_THRESHOLD
+) -> Tuple[Tensor, Tensor]:
+    """The contact points may overrepresent certain corners/portions of the
+    geometry that struck the ground more often.  This function can help
+    rebalance the collection of contact points such that they are more
+    geometrically distributed.  This is done by sampling points evenly over the
+    area of the underlying mesh surface, then snapping those samples to their
+    nearest contact point, rejecting those that have to snap over a distance
+    threshold.  This process starts with generating the same number of mesh
+    samples as there are contact points, then the rejection sampling reduces the
+    total number of points in the rebalanced group.  Retention rates for an
+    example experiment (bundlesdf_cube test_004) are:
+        - threshold = 10mm:  ~57% retention
+        - threshold = 5mm:   ~32% retention
+        - threshold = 3mm:   ~18% retention
+        - threshold = 1mm:   ~ 4% retention
+
+    Args:
+        mesh
+        contact_points (N, 3)
+        contact_directions (N, 3)
+        snapping_threshold
+
+    Outputs:
+        balanced_contacts (M, 3) for M <= N
+        balanced_directions (M, 3)
+    """
+    # Sample on the mesh the same number of points as current contacts.
+    sample_points, _ = sample_on_mesh(mesh, len(contact_points))
+
+    # Snap these samples to their nearest contact point.
+    snapping_idxs, snap_dists = identify_nearest_support_point(
+        contact_points, sample_points)
+    
+    # Rejection sample by removing any points that snapped a distance greater
+    # than the threshold.
+    good_idxs = snapping_idxs[snap_dists < snapping_threshold]
+    balanced_contacts = contact_points[good_idxs]
+    balanced_directions = contact_directions[good_idxs]
+
+    return balanced_contacts, balanced_directions
 
 
 # ============================= Data Generation ============================== #
@@ -608,8 +661,10 @@ def generate_training_data_for_run(run_name: str, storage_name: str):
 
     # Filter support points via simple thresholding of normal forces, then
     # filter the sample points based on this contact knowledge.
-    contact_points, contact_directions = filter_points_and_directions_based_on_contact(
-        support_points, support_directions, normal_forces)
+    contact_points, contact_directions = \
+        filter_points_and_directions_based_on_contact(
+            support_points, support_directions, normal_forces
+        )
     sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
         sample_points, sample_normals, contact_points, contact_directions
     )
@@ -633,9 +688,15 @@ def generate_training_data_for_run(run_name: str, storage_name: str):
         sample_points_cf, sample_normals_cf
     )
 
-    # Generate training data for the contact points themselves.
+    # Redistribute the contact points to be more geometrically balanced (this
+    # will decrease the number of contacts/directions considered).
+    balanced_contacts, balanced_directions = rebalance_contact_points(
+        mesh, contact_points, contact_directions
+    )
+    
+    # Generate training data from the redistributed contact points.
     contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
-        generate_training_data(contact_points, contact_directions)
+        generate_training_data(balanced_contacts, balanced_directions)
     
     # Save the generated data.
     file_utils.store_sdf_for_bsdf(
@@ -859,62 +920,111 @@ def visualize_gradients(mesh: MeshSummary, sample_points: Tensor,
 
 def visualize_point_uniquenesses(
         points: Tensor, directions: Tensor, position_uniqueness: Tensor,
-        direction_uniqueness: Tensor) -> None:
+        direction_uniqueness: Tensor, second_points: Tensor = None,
+        second_directions: Tensor = None, second_pos_uniqueness: Tensor = None,
+        second_dir_uniqueness: Tensor = None) -> None:
     """Visualize a colorized mapping of point locations/directions and their
-    position/direction uniqueness scores.
+    position/direction uniqueness scores.  If provided two sets of everything,
+    will visualize both 3D results side-by-side with the same colorbar scale.
 
     Args:
         points (N, 3)
         directions (N, 3)
         position_uniqueness (N,)
         direction_uniqueness (N,)
+        second_points (M, 3)
+        second_directions (M, 3)
+        second_pos_uniqueness (M,)
+        second_dir_uniqueness (M,)
     """
-    # Do some input checking.
-    assert points.shape == directions.shape
-    assert position_uniqueness.shape == direction_uniqueness.shape
-    assert points.shape[0] == position_uniqueness.shape[0]
-    assert position_uniqueness.shape[0] == direction_uniqueness.shape[0]
-    assert points.ndim == 2
-    assert position_uniqueness.ndim == 1
-    assert points.shape[1] == 3
+    # See if make 1 or 2 side-by-side plots.
+    point_groups = [points]
+    direction_groups = [directions]
+    position_uniqueness_groups = [position_uniqueness]
+    direction_uniqueness_groups = [direction_uniqueness]
+    subtitles = [None]
+    n_plots = 1
+    if second_points is not None:
+        point_groups.append(second_points)
+        direction_groups.append(second_directions)
+        position_uniqueness_groups.append(second_pos_uniqueness)
+        direction_uniqueness_groups.append(second_dir_uniqueness)
+        subtitles = ['Original', 'Redistributed']
+        n_plots = 2
+
+    def do_uniqueness_subplot(
+            ax: Axes3D, pts: Tensor, dirs: Tensor, uniqueness: Tensor,
+            is_position_not_direction: bool) -> Path3DCollection:
+        """Helper function to add a 3D uniqueness plot to a given axis.  Need to
+        flag if position or direction uniqueness via is_position_not_direction.
+        Returns the Path3DCollection object which can be used later for creating
+        a color bar."""
+        # Do some input checking.
+        assert pts.shape == dirs.shape
+        assert pts.shape[0] == uniqueness.shape[0]
+        assert pts.ndim == 2
+        assert uniqueness.ndim == 1
+        assert pts.shape[1] == 3
+        assert type(ax) == Axes3D
+
+        if is_position_not_direction:
+            color_scale = ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], 
+                                     c=uniqueness, cmap='rainbow', marker='o')
+            
+        else:
+            color_scale = ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2],
+                                     c=uniqueness, cmap='rainbow', marker='o')
+            for i in range(len(dirs)):
+                color = color_scale.to_rgba(uniqueness[i])
+                ax.quiver(*pts[i], *dirs[i]/100, color=color, zorder=1.5)
+
+        ax.set_xlabel('X-axis')
+        ax.set_ylabel('Y-axis')
+        ax.set_zlabel('Z-axis')
+        # Set equal aspect ratio.
+        ax.set_box_aspect([np.ptp(arr) for arr in \
+                        [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
+        
+        return color_scale
 
     # Do position uniqueness plot first.
+    zipped = zip(point_groups, direction_groups, position_uniqueness_groups,
+                 subtitles)
+    
     fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    color_scale = ax.scatter(points[:, 0], points[:, 1], points[:, 2], 
-                             c=position_uniqueness, cmap='rainbow', marker='o')
-    cbar = fig.colorbar(color_scale)
+    gs = fig.add_gridspec(nrows=2, ncols=n_plots, height_ratios=[1, 0.05])
+    for i, (pts, dirs, pos_uniq, subtitle) in enumerate(zipped):
+        ax = fig.add_subplot(gs[0, i], projection='3d')
+        color_scale = do_uniqueness_subplot(ax, pts, dirs, pos_uniq, True)
+        ax.set_title(subtitle)
+
+    cbar = fig.colorbar(color_scale, cax=fig.add_subplot(gs[1, :]),
+                        orientation='horizontal')
     cbar.set_label('Position uniqueness')
-    ax.set_xlabel('X-axis')
-    ax.set_ylabel('Y-axis')
-    ax.set_zlabel('Z-axis')
-    # Set equal aspect ratio.
-    ax.set_box_aspect([np.ptp(arr) for arr in \
-                       [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
     plt.show()
 
     # Do direction uniqueness plot next.
+    # Surprisingly, reusing the old zip doesn't work.
+    zipped = zip(point_groups, direction_groups,
+                 direction_uniqueness_groups, subtitles)
+    
     fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    color_scale = ax.scatter(points[:, 0], points[:, 1], points[:, 2],
-                             c=direction_uniqueness, cmap='rainbow', marker='o')
-    for i in range(len(directions)):
-        color = color_scale.to_rgba(direction_uniqueness[i])
-        ax.quiver(*points[i], *directions[i]/100, color=color, zorder=1.5)
-    cbar = fig.colorbar(color_scale)
+    gs = fig.add_gridspec(nrows=2, ncols=n_plots, height_ratios=[1, 0.05])
+    for i, (pts, dirs, dir_uniq, subtitle) in enumerate(zipped):
+        ax = fig.add_subplot(gs[0, i], projection='3d')
+        color_scale = do_uniqueness_subplot(ax, pts, dirs, dir_uniq, False)
+        ax.set_title(subtitle)
+
+    cbar = fig.colorbar(color_scale, cax=fig.add_subplot(gs[1, :]),
+                        orientation='horizontal')
     cbar.set_label('Direction uniqueness')
-    ax.set_xlabel('X-axis')
-    ax.set_ylabel('Y-axis')
-    ax.set_zlabel('Z-axis')
-    # Set equal aspect ratio.
-    ax.set_box_aspect([np.ptp(arr) for arr in \
-                       [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
     plt.show()
 
 
 def visualize_point_snapping(
         mesh: MeshSummary, support_points: Tensor, sample_points: Tensor,
-        snapping_idxs: Tensor) -> None:
+        snapping_idxs: Tensor, sampling_dists: Tensor,
+        dist_threshold: float) -> None:
     """Visualize the result of snapping points sampled on a mesh surface to
     their nearest support points.
 
@@ -923,6 +1033,9 @@ def visualize_point_snapping(
         support_points (N, 3)
         sample_points (M, 3)
         snapping_idxs (M,)
+        sampling_dists (M,)
+        dist_threshold:  if sampling_dists is above the threshold, then plot
+            the snapping in gray to indicate those will be rejected.
     """
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
@@ -936,7 +1049,7 @@ def visualize_point_snapping(
             vertices = torch.cat((vertices, vertices[0].unsqueeze(0)), dim=0)
             vertices = vertices.numpy()
             ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2],
-                    color='gray', label=prefix[i]+'Mesh edges')
+                    color='b', linewidth=0.1, label=prefix[i]+'Mesh edges')
             
     # Plot the support points.
     ax.scatter(support_points[:, 0], support_points[:, 1], support_points[:, 2], 
@@ -947,13 +1060,30 @@ def visualize_point_snapping(
                color='r', marker='+', label='Sample points')
     
     # Plot the snapping of each sample point to nearest support point.
-    prefix = [''] + ['_']*(len(sample_points)-1)
+    reject_labeled, accept_labeled = False, False
+    labels = ['Rejected snap travel', 'Retained snap travel']
     for i in range(len(sample_points)):
+        snap_dist = sampling_dists[i]
+        accept = snap_dist < dist_threshold
+        color = 'cyan' if accept else 'gray'
+        linewidth = 2 if accept else 0.5
+        zorder = 1.8 if accept else 1.5
+        prefix = '_' if ((reject_labeled and not accept) or \
+                         (accept_labeled and accept)) else ''
+        label = prefix + labels[accept]
+
+        if accept:
+            accept_labeled = True
+        else:
+            reject_labeled = True
+
         support_point = support_points[snapping_idxs[i]]
+
         xs = [sample_points[i][0], support_point[0]]
         ys = [sample_points[i][1], support_point[1]]
         zs = [sample_points[i][2], support_point[2]]
-        ax.plot(xs, ys, zs, color='r', label=prefix[i]+'Snapping travel')
+        ax.plot(xs, ys, zs, color=color, linewidth=linewidth, label=label,
+                zorder=zorder)
 
     ax.set_xlabel('X-axis')
     ax.set_ylabel('Y-axis')
@@ -1189,24 +1319,73 @@ if DO_UNIQUENESS_SCORE_TEST:
     del support_points, support_directions, pos_uniq, dir_uniq
     print('Done with uniqueness score test.')
 
+if DO_DOUBLE_UNIQUENESS_SCORE_TEST:
+    print('Performing double uniqueness score test.')
+    support_points, support_directions, _, _ = \
+        load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
+    
+    print('\tComputing uniqueness scores.')
+    pos_uniq, dir_uniq = compute_position_and_direction_uniquenesses(
+        support_points, support_directions
+    )
+
+    print('\tVisualizing position then direction uniqueness.')
+    visualize_point_uniquenesses(
+        support_points, support_directions, pos_uniq, dir_uniq,
+        second_points=support_points, second_directions=support_directions,
+        second_pos_uniqueness=pos_uniq, second_dir_uniqueness=dir_uniq)
+
+    print('\tDeleting test variables so can\'t accidentally be reused.')
+    del support_points, support_directions, pos_uniq, dir_uniq
+    print('Done with double uniqueness score test.')
+
 if DO_SUPPORT_POINT_SNAPPING_TEST:
     print('Performing support point snapping test.')
 
     # Load the support points and mesh from a finished run.
-    support_points, _, _, _ = \
+    print(f'\tLoading support points and generating mesh from support network.')
+    support_points, support_directions, _, _ = \
         load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
     network = load_deep_support_convex_network(TEST_RUN_NAME, SYSTEM_NAME)
     mesh = create_mesh_from_deep_support(network)
 
-    samples, _ = sample_on_mesh(mesh, n_sample=400)
+    print(f'\tSampling on mesh and snapping to nearest support points.')
+    samples, _ = sample_on_mesh(mesh, n_sample=len(support_points))
+    snapping_idxs, snap_dists = identify_nearest_support_point(
+        support_points, samples)
+    
+    print(f'\tReject samples that need to travel too far to snap.')
+    good_idxs = snapping_idxs[snap_dists < SUPPORT_POINT_DISTANCE_THRESHOLD]
+    print(f'\t-> Went from {len(snapping_idxs)} to {len(good_idxs)} ' + \
+          f'with snap distance of {SUPPORT_POINT_DISTANCE_THRESHOLD}m;\n' + \
+          f'\t   {len(good_idxs)/len(snapping_idxs)*100:.2f}% retention rate.')
 
-    snapping_idxs = identify_nearest_support_point(support_points, samples)
+    print(f'\tVisualizing the generated points and snapped supports.')
+    visualize_point_snapping(
+        mesh, support_points, samples, snapping_idxs, snap_dists,
+        dist_threshold=SUPPORT_POINT_DISTANCE_THRESHOLD)
 
-    visualize_point_snapping(mesh, support_points, samples, snapping_idxs)
+    print(f'\tComputing uniqueness values of original supports.')
+    orig_pos_uniq, orig_dir_uniq = compute_position_and_direction_uniquenesses(
+        support_points, support_directions
+    )
+    print(f'\tComputing uniqueness values of snapped samples.')
+    snap_points = support_points[good_idxs]
+    snap_directions = support_directions[good_idxs]
+    snap_pos_uniq, snap_dir_uniq = compute_position_and_direction_uniquenesses(
+        snap_points, snap_directions)
 
+    print(f'\tVisualizing uniqueness before and after geometry-based sampling.')
+    visualize_point_uniquenesses(
+        support_points, support_directions, orig_pos_uniq, orig_dir_uniq,
+        second_points=snap_points, second_directions=snap_directions,
+        second_pos_uniqueness=snap_pos_uniq,
+        second_dir_uniqueness=snap_dir_uniq)
 
     print('\tDeleting test variables so can\'t accidentally be reused.')
-    del support_points, network, mesh, samples, snapping_idxs
+    del support_points, support_directions, network, mesh, samples, \
+        snapping_idxs, orig_pos_uniq, orig_dir_uniq, snap_points, \
+        snap_directions, snap_pos_uniq, snap_dir_uniq
     print('Done with support point snapping test.')
 
 
