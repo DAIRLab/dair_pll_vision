@@ -62,7 +62,8 @@ BOUNDED_FAR_RADIUS = 0.1
 BOUNDED_FAR_N_QUERY = 100
 BOUNDED_NEARBY_OUTSIDE_N_QUERY = 100
 # Make the inside queried points equal to all queried outside.
-BOUNDED_NEARBY_INSIDE_N_QUERY = BOUNDED_FAR_N_QUERY + BOUNDED_NEARBY_OUTSIDE_N_QUERY
+BOUNDED_NEARBY_INSIDE_N_QUERY = BOUNDED_FAR_N_QUERY + \
+    BOUNDED_NEARBY_OUTSIDE_N_QUERY
 
 # Hyperparameters for filtering support points or hull sample points
 FORCE_THRESH = 0.3676                       # Newtons
