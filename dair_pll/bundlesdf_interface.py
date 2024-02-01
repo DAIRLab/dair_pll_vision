@@ -1,6 +1,5 @@
 """Functionality related to connecting ContactNets to BundleSDF."""
 
-import os
 import os.path as op
 import pdb
 from typing import Tuple
@@ -23,8 +22,8 @@ from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
     EXPORT_FORCES_DEFAULT_NAME
 
 
-TEST_RUN_NAME = 'test_004'
-SYSTEM_NAME = 'bundlesdf_cube'
+TEST_RUN_NAME = 'napkin_004'  #'test_004'
+SYSTEM_NAME = 'bundlesdf_napkin'  #'bundlesdf_cube'
 
 # Hyperparameters for querying into and out of the object at an SDF=0 point.
 N_QUERY_INSIDE = 100
@@ -79,6 +78,7 @@ DO_GRADIENT_DATA_TEST = False
 DO_UNIQUENESS_SCORE_TEST = False
 DO_DOUBLE_UNIQUENESS_SCORE_TEST = False
 DO_SUPPORT_POINT_SNAPPING_TEST = False
+DO_ALL_VISUALIZATIONS_FOR_RUN_TEST = True
 
 
 # ========================= Data Generation Helpers ========================== #
@@ -733,7 +733,7 @@ def visualize(ps,sdfs):
 
 def visualize_sdfs(points: Tensor, directions: Tensor, ps: Tensor = None,
                    sdfs: Tensor = None, vs: Tensor = None,
-                   sdf_bounds: Tensor = None) -> None:
+                   sdf_bounds: Tensor = None, show_vs: bool = False) -> None:
     """Visualize the generated data from provided points and associated
     directions.  If the data is not already generated, this function will do so.
 
@@ -772,15 +772,16 @@ def visualize_sdfs(points: Tensor, directions: Tensor, ps: Tensor = None,
                color='r', label='Support points')
     prefix = [''] + ['_']*(len(directions)-1)
     for i in range(len(directions)):
-        ax.quiver(*points[i], *directions[i]/4, color='r',
+        ax.quiver(*points[i], *directions[i]/12, color='r',
                   label=prefix[i]+'Support directions')
 
     # Plot the generated data and their associated SDFs.
     colored_sdfs = ax.scatter(ps[:, 0], ps[:, 1], ps[:, 2], c=sdfs,
                               cmap='viridis', marker='o',
                               label='Points with assigned SDF')
-    # ax.scatter(vs[:, 0], vs[:, 1], vs[:, 2], c=sdf_bounds, cmap='viridis',
-    #            marker='.', label='Points with SDF bound')
+    if show_vs:
+        ax.scatter(vs[:, 0], vs[:, 1], vs[:, 2], c=sdf_bounds, cmap='viridis',
+                marker='.', alpha=0.3, label='Points with SDF bound')
 
     # Because both scatter series are using the 'viridis' color map, the
     # colorbar will share a mapping for both series.
@@ -1388,6 +1389,111 @@ if DO_SUPPORT_POINT_SNAPPING_TEST:
         snapping_idxs, orig_pos_uniq, orig_dir_uniq, snap_points, \
         snap_directions, snap_pos_uniq, snap_dir_uniq
     print('Done with support point snapping test.')
+
+if DO_ALL_VISUALIZATIONS_FOR_RUN_TEST:
+    print('Performing all visualizations for run test.')
+    storage_name = file_utils.assure_created(
+        op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
+
+    # Load the exported outputs from the experiment run.
+    output_dir = file_utils.geom_for_bsdf_dir(storage_name, TEST_RUN_NAME)
+    normal_forces = torch.load(
+        op.join(output_dir, EXPORT_FORCES_DEFAULT_NAME)).detach()
+    support_points = torch.load(
+        op.join(output_dir, EXPORT_POINTS_DEFAULT_NAME)).detach()
+    support_directions = torch.load(
+        op.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME)).detach()
+
+    # Sample points on the support point mesh surface and visualize them.
+    mesh = create_mesh_from_set_of_points(support_points)
+    sample_points, sample_normals = sample_on_mesh(mesh, 200)  #N_MESH_SAMPLE)
+
+    print('\tVisualizing points sampled on mesh.')
+    visualize_sampled_points(mesh, sample_points, sample_normals)
+
+    # Filter support points via simple thresholding of normal forces, then
+    # filter the sample points based on this contact knowledge.
+    contact_points, contact_directions = \
+        filter_points_and_directions_based_on_contact(
+            support_points, support_directions, normal_forces,
+            force_threshold=FORCE_THRESH
+        )
+    print(f'\tFiltered support points with force threshold {FORCE_THRESH} ' + \
+          'Newtons.')
+    print(f'\t-> Went from {len(support_points)} to {len(contact_points)}' + \
+          f' supports ({len(contact_points)/len(support_points)*100:.3f}%).')
+    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
+        sample_points, sample_normals, contact_points, contact_directions,
+        threshold=HULL_PROXIMITY_THRESH
+    )
+    print('\tFiltered mesh samples with contact plane distance threshold' + \
+          f' {HULL_PROXIMITY_THRESH} meters.')
+    print(f'\t-> Went from {len(sample_points)} to {len(sample_points_cf)} ' + \
+          'mesh samples ' + \
+          f'({len(sample_points_cf)/len(sample_points)*100:.3f}%).')
+
+    print('\tVisualizing points sampled with filtering via support points.')
+    visualize_sampled_points(
+        mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
+        filtered_normals=sample_normals_cf, support_points=support_points,
+        support_directions=support_directions)
+
+    # Generate SDF gradient training data from the mesh sample points.
+    mesh_ws, mesh_w_normals = generate_point_sdf_gradient_pairs(
+        sample_points_cf, sample_normals_cf
+    )
+    print('\tVisualizing points with outward gradients from contact-filtered ' \
+          + 'mesh samples.')
+    visualize_gradients(mesh, sample_points_cf, mesh_ws, mesh_w_normals)
+
+    # Redistribute the contact points to be more geometrically balanced (this
+    # will decrease the number of contacts/directions considered).
+    snap_thresh = 0.2
+    balanced_contacts, balanced_directions = rebalance_contact_points(
+        mesh, contact_points, contact_directions, snapping_threshold=snap_thresh
+    )
+    print('\tRedistributing for geometric balance, with snap threshold of ' + \
+          f'{snap_thresh} meters.')
+    print(f'\t-> Went from {len(contact_points)} to ' + \
+          f'{len(balanced_contacts)} support points ' + \
+          f'({len(balanced_contacts)/len(contact_points)*100:.3f}%).')
+
+    print(f'\tComputing uniqueness values of original supports.')
+    cont_pos_uniq, cont_dir_uniq = compute_position_and_direction_uniquenesses(
+        contact_points, contact_directions)
+    print(f'\tComputing uniqueness values of snapped samples.')
+    bal_pos_uniq, bal_dir_uniq = compute_position_and_direction_uniquenesses(
+        balanced_contacts, balanced_directions)
+    
+    print('\tVisualizing uniqueness before and after geometry-based ' + \
+          'rebalancing.')
+    visualize_point_uniquenesses(
+        contact_points, contact_directions, cont_pos_uniq, cont_dir_uniq,
+        second_points=balanced_contacts, second_directions=balanced_directions,
+        second_pos_uniqueness=bal_pos_uniq, second_dir_uniqueness=bal_dir_uniq)
+    
+    # Generate training data from the redistributed contact points.
+    contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
+        generate_training_data(balanced_contacts, balanced_directions)
+    
+    print('\tVisualizing the samples.')
+    visualize_sdfs(sample_points_cf, sample_normals_cf, ps=contact_ps,
+                   sdfs=contact_sdfs, vs=contact_vs,
+                   sdf_bounds=contact_sdf_bounds, show_vs=False)
+    visualize_sdfs(sample_points_cf, sample_normals_cf, ps=contact_ps,
+                   sdfs=contact_sdfs, vs=contact_vs,
+                   sdf_bounds=contact_sdf_bounds, show_vs=True)
+    
+    # Don't save the generated data since just a visualization test.
+
+    print('\tDeleting test variables so can\'t accidentally be reused.')
+    del storage_name, output_dir, normal_forces, support_points, \
+        support_directions, mesh, sample_points, sample_normals, \
+        contact_points, contact_directions, sample_points_cf, \
+        sample_normals_cf, mesh_ws, mesh_w_normals, balanced_contacts, \
+        balanced_directions, cont_pos_uniq, cont_dir_uniq, bal_pos_uniq, \
+        bal_dir_uniq, contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds
+    print('Done with all visualizations for run test.')
 
 
 if __name__ == '__main__':
