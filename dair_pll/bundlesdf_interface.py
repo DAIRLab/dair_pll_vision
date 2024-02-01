@@ -1098,6 +1098,42 @@ def visualize_point_snapping(
     plt.show()
 
 
+def visualize_force_distribution(
+        normal_forces: Tensor, threshold: float = FORCE_THRESH
+) -> None:
+    """Visualize the distribution of normal forces represented in the data in
+    comparison to the force cutoff threshold.
+
+    Args:
+        normal_forces (N,)
+        threshold:  below this threshold, support points will be pruned out.
+    """
+    # Compute cut-off.
+    n_forces = len(normal_forces)
+    n_retained = torch.sum(normal_forces >= threshold).item()
+    retention_percent = n_retained/n_forces*100
+
+    # Generate visual.
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+
+    ax.hist(normal_forces, bins=50, label='Normal forces')
+    ax.set_yscale('log')
+
+    ylims = ax.get_ylim()
+
+    ax.vlines([threshold], ymin=ylims[0], ymax=ylims[1], colors='r',
+              linestyles='dashed', label='Force threshold')
+    ax.set_ylim(bottom=ylims[0], top=ylims[1])
+
+    ax.set_xlabel('Normal Forces [N]')
+    ax.set_ylabel('Occurences')
+    plt.legend()
+    plt.title('Normal Force Distribution: ' + \
+              f'{retention_percent:.3f}% supports retained')
+    plt.show()
+
+
 # ============================ Loading Management ============================ #
 def load_run_data(run_name: str, system: str) -> None:
     storage_name = file_utils.assure_created(
@@ -1422,6 +1458,9 @@ if DO_ALL_VISUALIZATIONS_FOR_RUN_TEST:
           'Newtons.')
     print(f'\t-> Went from {len(support_points)} to {len(contact_points)}' + \
           f' supports ({len(contact_points)/len(support_points)*100:.3f}%).')
+    print('\tVisualizing distribution of normal forces.')
+    visualize_force_distribution(normal_forces, threshold=FORCE_THRESH)
+
     sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
         sample_points, sample_normals, contact_points, contact_directions,
         threshold=HULL_PROXIMITY_THRESH
