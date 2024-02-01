@@ -166,3 +166,5 @@ dmypy.json
 *.npy
 *.png
 *.pth
+
+.pylintrc
