@@ -1183,360 +1183,359 @@ def load_deep_support_convex_network(run_name: str, system: str
 
 # ======================== End of Function Definitions ======================= #
 
-
-# Tests.
-if DO_SMALL_FILTERING_AND_VISUALIZATION_TEST:
-    print('Performing small filtering and visualization test.')
-    point_set = Tensor([[0.6, 0, 0], [0.6, 1, 0], [0, 1, 0], [0, 0, 0],
-                        [0.6, 0, 1], [0.6, 1, 1], [0, 1, 1], [0, 0, 1]])
-    mesh = create_mesh_from_set_of_points(point_set)
-
-    sample_points, sample_normals = sample_on_mesh(mesh, 50)
-    print(f'\tVisualizing points sampled on mesh.')
-    visualize_sampled_points(mesh, sample_points, sample_normals)
-
-    support_points = Tensor([[0, 0, 0], [0, 0, 0], [0, 0, 0]])
-    support_dirs = Tensor([[-1, 0, 0], [0, -1, 0], [0, 0, -1]])
-    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
-        sample_points, sample_normals, support_points, support_dirs
-    )
-    print('\tVisualizing points sampled with filtering via support points.')
-    visualize_sampled_points(
-        mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
-        filtered_normals=sample_normals_cf, support_points=support_points,
-        support_directions=support_dirs
-    )
-    print('\tDeleting test variables so can\'t accidentally be reused.')
-    del point_set, mesh, sample_points, sample_normals, support_points, \
-        support_dirs, sample_points_cf, sample_normals_cf
-    print('Done with small filtering and visualization test.')
-    
-if DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING:
-    print('Performing SDF generation from mesh sampling with contact ' + \
-          'filtering test.')
-    point_set = Tensor([[0.6, 0, 0], [0.6, 1, 0], [0, 1, 0], [0, 0, 0],
-                        [0.6, 0, 1], [0.6, 1, 1], [0, 1, 1], [0, 0, 1]])
-    mesh = create_mesh_from_set_of_points(point_set)
-
-    sample_points, sample_normals = sample_on_mesh(mesh, 50)
-    print(f'\tVisualizing points sampled on mesh.')
-    visualize_sampled_points(mesh, sample_points, sample_normals)
-
-    support_points = Tensor([[0, 0, 0], [0, 0, 0], [0, 0, 0]])
-    support_dirs = Tensor([[-1, 0, 0], [0, -1, 0], [0, 0, -1]])
-    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
-        sample_points, sample_normals, support_points, support_dirs
-    )
-    print('\tVisualizing points sampled with filtering via support points.')
-    visualize_sampled_points(
-        mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
-        filtered_normals=sample_normals_cf, support_points=support_points,
-        support_directions=support_dirs
-    )
-
-    print('\tGenerating (point, SDF) pairs from mesh samples.')
-    ps, sdfs = generate_point_sdf_pairs(
-        sample_points_cf, sample_normals_cf,
-        n_nearby_inside=MESH_N_QUERY_INSIDE,
-        n_nearby_outside=MESH_N_QUERY_OUTSIDE,
-        n_far_outside=MESH_N_QUERY_OUTSIDE_FAR,
-        depth_inside=MESH_DEPTH_INSIDE,
-        depth_outside=MESH_DEPTH_OUTSIDE,
-        depth_far_outside=MESH_DEPTH_FAR_OUTSIDE
-    )
-
-    print('\tVisualizing the samples.')
-    visualize_sdfs(sample_points_cf, sample_normals_cf, ps=ps, sdfs=sdfs)
-
-    print('\tDeleting test variables so can\'t accidentally be reused.')
-    del point_set, mesh, sample_points, sample_normals, support_points, \
-        support_dirs, sample_points_cf, sample_normals_cf, ps, sdfs
-    print('Done with SDF generation from mesh and contact filtering test.')
-
-if DO_COMBINE_SUPPORT_POINTS_AND_MESH_SAMPLING:
-    print('Performing combining support points and mesh samples test.')
-
-    print(f'\tLoading results from {TEST_RUN_NAME} in {SYSTEM_NAME}.')
-    support_points, support_directions, normal_forces, output_dir = \
-        load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
-    
-    # Sample points on the mesh surface and visualize them.
-    print('\tSampling points on the mesh surface.')
-    mesh = create_mesh_from_set_of_points(support_points)
-    sample_points, sample_normals = sample_on_mesh(mesh, 100)
-    
-    # Perform filtering via simple thresholding of normal forces.
-    print('\tFiltering based on inferred contact.')
-    contact_points, contact_directions = filter_points_and_directions_based_on_contact(
-        support_points, support_directions, normal_forces)
-
-    # Generate training data.
-    mesh_ps, mesh_sdfs, mesh_vs, mesh_sdf_bounds = \
-        generate_training_data(sample_points, sample_normals)
-    contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
-        generate_training_data(contact_points, contact_directions)
-    ps = torch.cat((mesh_ps, contact_ps), dim=0)
-    sdfs = torch.cat((mesh_sdfs, contact_sdfs), dim=0)
-    vs = torch.cat((mesh_vs, contact_vs), dim=0)
-    sdf_bounds = torch.cat((mesh_sdf_bounds, contact_sdf_bounds), dim=0)
-
-    print(f'\tGenerated training data: \n\t\t{mesh_ps.shape=}')
-    print(f'\t\t{mesh_vs.shape=} \n\t\t{contact_ps.shape=}')
-    print(f'\t\t{contact_vs.shape=}')
-
-    # Visualize it.  Note:  can call this visualization function without
-    # providing the training data, and it will generate some for visualization
-    # purposes.
-    visualize_sdfs(contact_points, contact_directions, ps=ps, sdfs=sdfs, vs=vs,
-                   sdf_bounds=sdf_bounds)
-
-    print('\tDeleting test variables so can\'t accidentally be reused.')
-    del support_points, support_directions, mesh, sample_points, \
-        sample_normals, contact_points, contact_directions, mesh_ps, \
-        mesh_sdfs, mesh_vs, mesh_sdf_bounds, contact_ps, contact_sdfs, \
-        contact_vs, contact_sdf_bounds, ps, sdfs, vs, sdf_bounds
-    print('Done with combining support points and mesh samples test.')
-
-if DO_NETWORK_LOADING_TEST:
-    print('Performing loading deep support convex network test.')
-
-    # Can load a pre-trained deep support convex network.
-    network = load_deep_support_convex_network(TEST_RUN_NAME, SYSTEM_NAME)
-    mesh = create_mesh_from_deep_support(network)
-
-    print('\tDeleting test variables so can\'t accidentally be reused.')
-    del network, mesh
-    print('Done with loading deep support convex network test.')
-
-if DO_GRADIENT_DATA_TEST:
-    print('Performing gradient data generation test.')
-    support_points, support_directions, normal_forces, _ = \
-        load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
-
-    # Sample points on the support point mesh surface and visualize them.
-    mesh = create_mesh_from_set_of_points(support_points)
-    sample_points, sample_normals = sample_on_mesh(mesh, 100)
-
-    # Filter support points via simple thresholding of normal forces, then
-    # filter the sample points based on this contact knowledge.
-    contact_points, contact_directions = filter_points_and_directions_based_on_contact(
-        support_points, support_directions, normal_forces)
-    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
-        sample_points, sample_normals, contact_points, contact_directions
-    )
-
-    # Generate SDF gradient training data from the mesh sample points.
-    mesh_ws, mesh_w_normals = generate_point_sdf_gradient_pairs(
-        sample_points_cf, sample_normals_cf
-    )
-
-    # Visualize.
-    visualize_gradients(mesh, sample_points_cf, mesh_ws, mesh_w_normals)
-
-    print('\tDeleting test variables so can\'t accidentally be reused.')
-    del support_points, support_directions, normal_forces, mesh, \
-        sample_points, sample_normals, contact_points, contact_directions, \
-        sample_points_cf, sample_normals_cf, mesh_ws, mesh_w_normals
-    print('Done with gradient data generation test.')
-
-if DO_UNIQUENESS_SCORE_TEST:
-    print('Performing uniqueness score test.')
-    support_points, support_directions, _, _ = \
-        load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
-    
-    print('\tComputing uniqueness scores.')
-    pos_uniq, dir_uniq = compute_position_and_direction_uniquenesses(
-        support_points, support_directions
-    )
-
-    print('\tVisualizing position then direction uniqueness.')
-    visualize_point_uniquenesses(support_points, support_directions, pos_uniq,
-                                 dir_uniq)
-
-    print('\tDeleting test variables so can\'t accidentally be reused.')
-    del support_points, support_directions, pos_uniq, dir_uniq
-    print('Done with uniqueness score test.')
-
-if DO_DOUBLE_UNIQUENESS_SCORE_TEST:
-    print('Performing double uniqueness score test.')
-    support_points, support_directions, _, _ = \
-        load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
-    
-    print('\tComputing uniqueness scores.')
-    pos_uniq, dir_uniq = compute_position_and_direction_uniquenesses(
-        support_points, support_directions
-    )
-
-    print('\tVisualizing position then direction uniqueness.')
-    visualize_point_uniquenesses(
-        support_points, support_directions, pos_uniq, dir_uniq,
-        second_points=support_points, second_directions=support_directions,
-        second_pos_uniqueness=pos_uniq, second_dir_uniqueness=dir_uniq)
-
-    print('\tDeleting test variables so can\'t accidentally be reused.')
-    del support_points, support_directions, pos_uniq, dir_uniq
-    print('Done with double uniqueness score test.')
-
-if DO_SUPPORT_POINT_SNAPPING_TEST:
-    print('Performing support point snapping test.')
-
-    # Load the support points and mesh from a finished run.
-    print(f'\tLoading support points and generating mesh from support network.')
-    support_points, support_directions, _, _ = \
-        load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
-    network = load_deep_support_convex_network(TEST_RUN_NAME, SYSTEM_NAME)
-    mesh = create_mesh_from_deep_support(network)
-
-    print(f'\tSampling on mesh and snapping to nearest support points.')
-    samples, _ = sample_on_mesh(mesh, n_sample=len(support_points))
-    snapping_idxs, snap_dists = identify_nearest_support_point(
-        support_points, samples)
-    
-    print(f'\tReject samples that need to travel too far to snap.')
-    good_idxs = snapping_idxs[snap_dists < SUPPORT_POINT_DISTANCE_THRESHOLD]
-    print(f'\t-> Went from {len(snapping_idxs)} to {len(good_idxs)} ' + \
-          f'with snap distance of {SUPPORT_POINT_DISTANCE_THRESHOLD}m;\n' + \
-          f'\t   {len(good_idxs)/len(snapping_idxs)*100:.2f}% retention rate.')
-
-    print(f'\tVisualizing the generated points and snapped supports.')
-    visualize_point_snapping(
-        mesh, support_points, samples, snapping_idxs, snap_dists,
-        dist_threshold=SUPPORT_POINT_DISTANCE_THRESHOLD)
-
-    print(f'\tComputing uniqueness values of original supports.')
-    orig_pos_uniq, orig_dir_uniq = compute_position_and_direction_uniquenesses(
-        support_points, support_directions
-    )
-    print(f'\tComputing uniqueness values of snapped samples.')
-    snap_points = support_points[good_idxs]
-    snap_directions = support_directions[good_idxs]
-    snap_pos_uniq, snap_dir_uniq = compute_position_and_direction_uniquenesses(
-        snap_points, snap_directions)
-
-    print(f'\tVisualizing uniqueness before and after geometry-based sampling.')
-    visualize_point_uniquenesses(
-        support_points, support_directions, orig_pos_uniq, orig_dir_uniq,
-        second_points=snap_points, second_directions=snap_directions,
-        second_pos_uniqueness=snap_pos_uniq,
-        second_dir_uniqueness=snap_dir_uniq)
-
-    print('\tDeleting test variables so can\'t accidentally be reused.')
-    del support_points, support_directions, network, mesh, samples, \
-        snapping_idxs, orig_pos_uniq, orig_dir_uniq, snap_points, \
-        snap_directions, snap_pos_uniq, snap_dir_uniq
-    print('Done with support point snapping test.')
-
-if DO_ALL_VISUALIZATIONS_FOR_RUN_TEST:
-    print('Performing all visualizations for run test.')
-    storage_name = file_utils.assure_created(
-        op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
-
-    # Load the exported outputs from the experiment run.
-    output_dir = file_utils.geom_for_bsdf_dir(storage_name, TEST_RUN_NAME)
-    normal_forces = torch.load(
-        op.join(output_dir, EXPORT_FORCES_DEFAULT_NAME)).detach()
-    support_points = torch.load(
-        op.join(output_dir, EXPORT_POINTS_DEFAULT_NAME)).detach()
-    support_directions = torch.load(
-        op.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME)).detach()
-
-    # Sample points on the support point mesh surface and visualize them.
-    mesh = create_mesh_from_set_of_points(support_points)
-    sample_points, sample_normals = sample_on_mesh(mesh, 200)  #N_MESH_SAMPLE)
-
-    print('\tVisualizing points sampled on mesh.')
-    visualize_sampled_points(mesh, sample_points, sample_normals)
-
-    # Filter support points via simple thresholding of normal forces, then
-    # filter the sample points based on this contact knowledge.
-    contact_points, contact_directions = \
-        filter_points_and_directions_based_on_contact(
-            support_points, support_directions, normal_forces,
-            force_threshold=FORCE_THRESH
-        )
-    print(f'\tFiltered support points with force threshold {FORCE_THRESH} ' + \
-          'Newtons.')
-    print(f'\t-> Went from {len(support_points)} to {len(contact_points)}' + \
-          f' supports ({len(contact_points)/len(support_points)*100:.3f}%).')
-    print('\tVisualizing distribution of normal forces.')
-    visualize_force_distribution(normal_forces, threshold=FORCE_THRESH)
-
-    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
-        sample_points, sample_normals, contact_points, contact_directions,
-        threshold=HULL_PROXIMITY_THRESH
-    )
-    print('\tFiltered mesh samples with contact plane distance threshold' + \
-          f' {HULL_PROXIMITY_THRESH} meters.')
-    print(f'\t-> Went from {len(sample_points)} to {len(sample_points_cf)} ' + \
-          'mesh samples ' + \
-          f'({len(sample_points_cf)/len(sample_points)*100:.3f}%).')
-
-    print('\tVisualizing points sampled with filtering via support points.')
-    visualize_sampled_points(
-        mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
-        filtered_normals=sample_normals_cf, support_points=support_points,
-        support_directions=support_directions)
-
-    # Generate SDF gradient training data from the mesh sample points.
-    mesh_ws, mesh_w_normals = generate_point_sdf_gradient_pairs(
-        sample_points_cf, sample_normals_cf
-    )
-    print('\tVisualizing points with outward gradients from contact-filtered ' \
-          + 'mesh samples.')
-    visualize_gradients(mesh, sample_points_cf, mesh_ws, mesh_w_normals)
-
-    # Redistribute the contact points to be more geometrically balanced (this
-    # will decrease the number of contacts/directions considered).
-    snap_thresh = 0.2
-    balanced_contacts, balanced_directions = rebalance_contact_points(
-        mesh, contact_points, contact_directions, snapping_threshold=snap_thresh
-    )
-    print('\tRedistributing for geometric balance, with snap threshold of ' + \
-          f'{snap_thresh} meters.')
-    print(f'\t-> Went from {len(contact_points)} to ' + \
-          f'{len(balanced_contacts)} support points ' + \
-          f'({len(balanced_contacts)/len(contact_points)*100:.3f}%).')
-
-    print(f'\tComputing uniqueness values of original supports.')
-    cont_pos_uniq, cont_dir_uniq = compute_position_and_direction_uniquenesses(
-        contact_points, contact_directions)
-    print(f'\tComputing uniqueness values of snapped samples.')
-    bal_pos_uniq, bal_dir_uniq = compute_position_and_direction_uniquenesses(
-        balanced_contacts, balanced_directions)
-    
-    print('\tVisualizing uniqueness before and after geometry-based ' + \
-          'rebalancing.')
-    visualize_point_uniquenesses(
-        contact_points, contact_directions, cont_pos_uniq, cont_dir_uniq,
-        second_points=balanced_contacts, second_directions=balanced_directions,
-        second_pos_uniqueness=bal_pos_uniq, second_dir_uniqueness=bal_dir_uniq)
-    
-    # Generate training data from the redistributed contact points.
-    contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
-        generate_training_data(balanced_contacts, balanced_directions)
-    
-    print('\tVisualizing the samples.')
-    visualize_sdfs(sample_points_cf, sample_normals_cf, ps=contact_ps,
-                   sdfs=contact_sdfs, vs=contact_vs,
-                   sdf_bounds=contact_sdf_bounds, show_vs=False)
-    visualize_sdfs(sample_points_cf, sample_normals_cf, ps=contact_ps,
-                   sdfs=contact_sdfs, vs=contact_vs,
-                   sdf_bounds=contact_sdf_bounds, show_vs=True)
-    
-    # Don't save the generated data since just a visualization test.
-
-    print('\tDeleting test variables so can\'t accidentally be reused.')
-    del storage_name, output_dir, normal_forces, support_points, \
-        support_directions, mesh, sample_points, sample_normals, \
-        contact_points, contact_directions, sample_points_cf, \
-        sample_normals_cf, mesh_ws, mesh_w_normals, balanced_contacts, \
-        balanced_directions, cont_pos_uniq, cont_dir_uniq, bal_pos_uniq, \
-        bal_dir_uniq, contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds
-    print('Done with all visualizations for run test.')
-
-
 if __name__ == '__main__':
     pdb.set_trace()
+
+    # Tests.
+    if DO_SMALL_FILTERING_AND_VISUALIZATION_TEST:
+        print('Performing small filtering and visualization test.')
+        point_set = Tensor([[0.6, 0, 0], [0.6, 1, 0], [0, 1, 0], [0, 0, 0],
+                            [0.6, 0, 1], [0.6, 1, 1], [0, 1, 1], [0, 0, 1]])
+        mesh = create_mesh_from_set_of_points(point_set)
+
+        sample_points, sample_normals = sample_on_mesh(mesh, 50)
+        print(f'\tVisualizing points sampled on mesh.')
+        visualize_sampled_points(mesh, sample_points, sample_normals)
+
+        support_points = Tensor([[0, 0, 0], [0, 0, 0], [0, 0, 0]])
+        support_dirs = Tensor([[-1, 0, 0], [0, -1, 0], [0, 0, -1]])
+        sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
+            sample_points, sample_normals, support_points, support_dirs
+        )
+        print('\tVisualizing points sampled with filtering via support points.')
+        visualize_sampled_points(
+            mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
+            filtered_normals=sample_normals_cf, support_points=support_points,
+            support_directions=support_dirs
+        )
+        print('\tDeleting test variables so can\'t accidentally be reused.')
+        del point_set, mesh, sample_points, sample_normals, support_points, \
+            support_dirs, sample_points_cf, sample_normals_cf
+        print('Done with small filtering and visualization test.')
+        
+    if DO_SDFS_FROM_MESH_SAMPLING_WITH_SUPPORT_FILTERING:
+        print('Performing SDF generation from mesh sampling with contact ' + \
+            'filtering test.')
+        point_set = Tensor([[0.6, 0, 0], [0.6, 1, 0], [0, 1, 0], [0, 0, 0],
+                            [0.6, 0, 1], [0.6, 1, 1], [0, 1, 1], [0, 0, 1]])
+        mesh = create_mesh_from_set_of_points(point_set)
+
+        sample_points, sample_normals = sample_on_mesh(mesh, 50)
+        print(f'\tVisualizing points sampled on mesh.')
+        visualize_sampled_points(mesh, sample_points, sample_normals)
+
+        support_points = Tensor([[0, 0, 0], [0, 0, 0], [0, 0, 0]])
+        support_dirs = Tensor([[-1, 0, 0], [0, -1, 0], [0, 0, -1]])
+        sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
+            sample_points, sample_normals, support_points, support_dirs
+        )
+        print('\tVisualizing points sampled with filtering via support points.')
+        visualize_sampled_points(
+            mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
+            filtered_normals=sample_normals_cf, support_points=support_points,
+            support_directions=support_dirs
+        )
+
+        print('\tGenerating (point, SDF) pairs from mesh samples.')
+        ps, sdfs = generate_point_sdf_pairs(
+            sample_points_cf, sample_normals_cf,
+            n_nearby_inside=MESH_N_QUERY_INSIDE,
+            n_nearby_outside=MESH_N_QUERY_OUTSIDE,
+            n_far_outside=MESH_N_QUERY_OUTSIDE_FAR,
+            depth_inside=MESH_DEPTH_INSIDE,
+            depth_outside=MESH_DEPTH_OUTSIDE,
+            depth_far_outside=MESH_DEPTH_FAR_OUTSIDE
+        )
+
+        print('\tVisualizing the samples.')
+        visualize_sdfs(sample_points_cf, sample_normals_cf, ps=ps, sdfs=sdfs)
+
+        print('\tDeleting test variables so can\'t accidentally be reused.')
+        del point_set, mesh, sample_points, sample_normals, support_points, \
+            support_dirs, sample_points_cf, sample_normals_cf, ps, sdfs
+        print('Done with SDF generation from mesh and contact filtering test.')
+
+    if DO_COMBINE_SUPPORT_POINTS_AND_MESH_SAMPLING:
+        print('Performing combining support points and mesh samples test.')
+
+        print(f'\tLoading results from {TEST_RUN_NAME} in {SYSTEM_NAME}.')
+        support_points, support_directions, normal_forces, output_dir = \
+            load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
+        
+        # Sample points on the mesh surface and visualize them.
+        print('\tSampling points on the mesh surface.')
+        mesh = create_mesh_from_set_of_points(support_points)
+        sample_points, sample_normals = sample_on_mesh(mesh, 100)
+        
+        # Perform filtering via simple thresholding of normal forces.
+        print('\tFiltering based on inferred contact.')
+        contact_points, contact_directions = filter_points_and_directions_based_on_contact(
+            support_points, support_directions, normal_forces)
+
+        # Generate training data.
+        mesh_ps, mesh_sdfs, mesh_vs, mesh_sdf_bounds = \
+            generate_training_data(sample_points, sample_normals)
+        contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
+            generate_training_data(contact_points, contact_directions)
+        ps = torch.cat((mesh_ps, contact_ps), dim=0)
+        sdfs = torch.cat((mesh_sdfs, contact_sdfs), dim=0)
+        vs = torch.cat((mesh_vs, contact_vs), dim=0)
+        sdf_bounds = torch.cat((mesh_sdf_bounds, contact_sdf_bounds), dim=0)
+
+        print(f'\tGenerated training data: \n\t\t{mesh_ps.shape=}')
+        print(f'\t\t{mesh_vs.shape=} \n\t\t{contact_ps.shape=}')
+        print(f'\t\t{contact_vs.shape=}')
+
+        # Visualize it.  Note:  can call this visualization function without
+        # providing the training data, and it will generate some for visualization
+        # purposes.
+        visualize_sdfs(contact_points, contact_directions, ps=ps, sdfs=sdfs, vs=vs,
+                    sdf_bounds=sdf_bounds)
+
+        print('\tDeleting test variables so can\'t accidentally be reused.')
+        del support_points, support_directions, mesh, sample_points, \
+            sample_normals, contact_points, contact_directions, mesh_ps, \
+            mesh_sdfs, mesh_vs, mesh_sdf_bounds, contact_ps, contact_sdfs, \
+            contact_vs, contact_sdf_bounds, ps, sdfs, vs, sdf_bounds
+        print('Done with combining support points and mesh samples test.')
+
+    if DO_NETWORK_LOADING_TEST:
+        print('Performing loading deep support convex network test.')
+
+        # Can load a pre-trained deep support convex network.
+        network = load_deep_support_convex_network(TEST_RUN_NAME, SYSTEM_NAME)
+        mesh = create_mesh_from_deep_support(network)
+
+        print('\tDeleting test variables so can\'t accidentally be reused.')
+        del network, mesh
+        print('Done with loading deep support convex network test.')
+
+    if DO_GRADIENT_DATA_TEST:
+        print('Performing gradient data generation test.')
+        support_points, support_directions, normal_forces, _ = \
+            load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
+
+        # Sample points on the support point mesh surface and visualize them.
+        mesh = create_mesh_from_set_of_points(support_points)
+        sample_points, sample_normals = sample_on_mesh(mesh, 100)
+
+        # Filter support points via simple thresholding of normal forces, then
+        # filter the sample points based on this contact knowledge.
+        contact_points, contact_directions = filter_points_and_directions_based_on_contact(
+            support_points, support_directions, normal_forces)
+        sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
+            sample_points, sample_normals, contact_points, contact_directions
+        )
+
+        # Generate SDF gradient training data from the mesh sample points.
+        mesh_ws, mesh_w_normals = generate_point_sdf_gradient_pairs(
+            sample_points_cf, sample_normals_cf
+        )
+
+        # Visualize.
+        visualize_gradients(mesh, sample_points_cf, mesh_ws, mesh_w_normals)
+
+        print('\tDeleting test variables so can\'t accidentally be reused.')
+        del support_points, support_directions, normal_forces, mesh, \
+            sample_points, sample_normals, contact_points, contact_directions, \
+            sample_points_cf, sample_normals_cf, mesh_ws, mesh_w_normals
+        print('Done with gradient data generation test.')
+
+    if DO_UNIQUENESS_SCORE_TEST:
+        print('Performing uniqueness score test.')
+        support_points, support_directions, _, _ = \
+            load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
+        
+        print('\tComputing uniqueness scores.')
+        pos_uniq, dir_uniq = compute_position_and_direction_uniquenesses(
+            support_points, support_directions
+        )
+
+        print('\tVisualizing position then direction uniqueness.')
+        visualize_point_uniquenesses(support_points, support_directions, pos_uniq,
+                                    dir_uniq)
+
+        print('\tDeleting test variables so can\'t accidentally be reused.')
+        del support_points, support_directions, pos_uniq, dir_uniq
+        print('Done with uniqueness score test.')
+
+    if DO_DOUBLE_UNIQUENESS_SCORE_TEST:
+        print('Performing double uniqueness score test.')
+        support_points, support_directions, _, _ = \
+            load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
+        
+        print('\tComputing uniqueness scores.')
+        pos_uniq, dir_uniq = compute_position_and_direction_uniquenesses(
+            support_points, support_directions
+        )
+
+        print('\tVisualizing position then direction uniqueness.')
+        visualize_point_uniquenesses(
+            support_points, support_directions, pos_uniq, dir_uniq,
+            second_points=support_points, second_directions=support_directions,
+            second_pos_uniqueness=pos_uniq, second_dir_uniqueness=dir_uniq)
+
+        print('\tDeleting test variables so can\'t accidentally be reused.')
+        del support_points, support_directions, pos_uniq, dir_uniq
+        print('Done with double uniqueness score test.')
+
+    if DO_SUPPORT_POINT_SNAPPING_TEST:
+        print('Performing support point snapping test.')
+
+        # Load the support points and mesh from a finished run.
+        print(f'\tLoading support points and generating mesh from support network.')
+        support_points, support_directions, _, _ = \
+            load_run_data(TEST_RUN_NAME, SYSTEM_NAME)
+        network = load_deep_support_convex_network(TEST_RUN_NAME, SYSTEM_NAME)
+        mesh = create_mesh_from_deep_support(network)
+
+        print(f'\tSampling on mesh and snapping to nearest support points.')
+        samples, _ = sample_on_mesh(mesh, n_sample=len(support_points))
+        snapping_idxs, snap_dists = identify_nearest_support_point(
+            support_points, samples)
+        
+        print(f'\tReject samples that need to travel too far to snap.')
+        good_idxs = snapping_idxs[snap_dists < SUPPORT_POINT_DISTANCE_THRESHOLD]
+        print(f'\t-> Went from {len(snapping_idxs)} to {len(good_idxs)} ' + \
+            f'with snap distance of {SUPPORT_POINT_DISTANCE_THRESHOLD}m;\n' + \
+            f'\t   {len(good_idxs)/len(snapping_idxs)*100:.2f}% retention rate.')
+
+        print(f'\tVisualizing the generated points and snapped supports.')
+        visualize_point_snapping(
+            mesh, support_points, samples, snapping_idxs, snap_dists,
+            dist_threshold=SUPPORT_POINT_DISTANCE_THRESHOLD)
+
+        print(f'\tComputing uniqueness values of original supports.')
+        orig_pos_uniq, orig_dir_uniq = compute_position_and_direction_uniquenesses(
+            support_points, support_directions
+        )
+        print(f'\tComputing uniqueness values of snapped samples.')
+        snap_points = support_points[good_idxs]
+        snap_directions = support_directions[good_idxs]
+        snap_pos_uniq, snap_dir_uniq = compute_position_and_direction_uniquenesses(
+            snap_points, snap_directions)
+
+        print(f'\tVisualizing uniqueness before and after geometry-based sampling.')
+        visualize_point_uniquenesses(
+            support_points, support_directions, orig_pos_uniq, orig_dir_uniq,
+            second_points=snap_points, second_directions=snap_directions,
+            second_pos_uniqueness=snap_pos_uniq,
+            second_dir_uniqueness=snap_dir_uniq)
+
+        print('\tDeleting test variables so can\'t accidentally be reused.')
+        del support_points, support_directions, network, mesh, samples, \
+            snapping_idxs, orig_pos_uniq, orig_dir_uniq, snap_points, \
+            snap_directions, snap_pos_uniq, snap_dir_uniq
+        print('Done with support point snapping test.')
+
+    if DO_ALL_VISUALIZATIONS_FOR_RUN_TEST:
+        print('Performing all visualizations for run test.')
+        storage_name = file_utils.assure_created(
+            op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
+
+        # Load the exported outputs from the experiment run.
+        output_dir = file_utils.geom_for_bsdf_dir(storage_name, TEST_RUN_NAME)
+        normal_forces = torch.load(
+            op.join(output_dir, EXPORT_FORCES_DEFAULT_NAME)).detach()
+        support_points = torch.load(
+            op.join(output_dir, EXPORT_POINTS_DEFAULT_NAME)).detach()
+        support_directions = torch.load(
+            op.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME)).detach()
+
+        # Sample points on the support point mesh surface and visualize them.
+        mesh = create_mesh_from_set_of_points(support_points)
+        sample_points, sample_normals = sample_on_mesh(mesh, 200)  #N_MESH_SAMPLE)
+
+        print('\tVisualizing points sampled on mesh.')
+        visualize_sampled_points(mesh, sample_points, sample_normals)
+
+        # Filter support points via simple thresholding of normal forces, then
+        # filter the sample points based on this contact knowledge.
+        contact_points, contact_directions = \
+            filter_points_and_directions_based_on_contact(
+                support_points, support_directions, normal_forces,
+                force_threshold=FORCE_THRESH
+            )
+        print(f'\tFiltered support points with force threshold {FORCE_THRESH} ' + \
+            'Newtons.')
+        print(f'\t-> Went from {len(support_points)} to {len(contact_points)}' + \
+            f' supports ({len(contact_points)/len(support_points)*100:.3f}%).')
+        print('\tVisualizing distribution of normal forces.')
+        visualize_force_distribution(normal_forces, threshold=FORCE_THRESH)
+
+        sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
+            sample_points, sample_normals, contact_points, contact_directions,
+            threshold=HULL_PROXIMITY_THRESH
+        )
+        print('\tFiltered mesh samples with contact plane distance threshold' + \
+            f' {HULL_PROXIMITY_THRESH} meters.')
+        print(f'\t-> Went from {len(sample_points)} to {len(sample_points_cf)} ' + \
+            'mesh samples ' + \
+            f'({len(sample_points_cf)/len(sample_points)*100:.3f}%).')
+
+        print('\tVisualizing points sampled with filtering via support points.')
+        visualize_sampled_points(
+            mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
+            filtered_normals=sample_normals_cf, support_points=support_points,
+            support_directions=support_directions)
+
+        # Generate SDF gradient training data from the mesh sample points.
+        mesh_ws, mesh_w_normals = generate_point_sdf_gradient_pairs(
+            sample_points_cf, sample_normals_cf
+        )
+        print('\tVisualizing points with outward gradients from contact-filtered ' \
+            + 'mesh samples.')
+        visualize_gradients(mesh, sample_points_cf, mesh_ws, mesh_w_normals)
+
+        # Redistribute the contact points to be more geometrically balanced (this
+        # will decrease the number of contacts/directions considered).
+        snap_thresh = 0.2
+        balanced_contacts, balanced_directions = rebalance_contact_points(
+            mesh, contact_points, contact_directions, snapping_threshold=snap_thresh
+        )
+        print('\tRedistributing for geometric balance, with snap threshold of ' + \
+            f'{snap_thresh} meters.')
+        print(f'\t-> Went from {len(contact_points)} to ' + \
+            f'{len(balanced_contacts)} support points ' + \
+            f'({len(balanced_contacts)/len(contact_points)*100:.3f}%).')
+
+        print(f'\tComputing uniqueness values of original supports.')
+        cont_pos_uniq, cont_dir_uniq = compute_position_and_direction_uniquenesses(
+            contact_points, contact_directions)
+        print(f'\tComputing uniqueness values of snapped samples.')
+        bal_pos_uniq, bal_dir_uniq = compute_position_and_direction_uniquenesses(
+            balanced_contacts, balanced_directions)
+        
+        print('\tVisualizing uniqueness before and after geometry-based ' + \
+            'rebalancing.')
+        visualize_point_uniquenesses(
+            contact_points, contact_directions, cont_pos_uniq, cont_dir_uniq,
+            second_points=balanced_contacts, second_directions=balanced_directions,
+            second_pos_uniqueness=bal_pos_uniq, second_dir_uniqueness=bal_dir_uniq)
+        
+        # Generate training data from the redistributed contact points.
+        contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
+            generate_training_data(balanced_contacts, balanced_directions)
+        
+        print('\tVisualizing the samples.')
+        visualize_sdfs(sample_points_cf, sample_normals_cf, ps=contact_ps,
+                    sdfs=contact_sdfs, vs=contact_vs,
+                    sdf_bounds=contact_sdf_bounds, show_vs=False)
+        visualize_sdfs(sample_points_cf, sample_normals_cf, ps=contact_ps,
+                    sdfs=contact_sdfs, vs=contact_vs,
+                    sdf_bounds=contact_sdf_bounds, show_vs=True)
+        
+        # Don't save the generated data since just a visualization test.
+
+        print('\tDeleting test variables so can\'t accidentally be reused.')
+        del storage_name, output_dir, normal_forces, support_points, \
+            support_directions, mesh, sample_points, sample_normals, \
+            contact_points, contact_directions, sample_points_cf, \
+            sample_normals_cf, mesh_ws, mesh_w_normals, balanced_contacts, \
+            balanced_directions, cont_pos_uniq, cont_dir_uniq, bal_pos_uniq, \
+            bal_dir_uniq, contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds
+        print('Done with all visualizations for run test.')
+
 
     # Generate training data for run.
     storage_name = file_utils.assure_created(

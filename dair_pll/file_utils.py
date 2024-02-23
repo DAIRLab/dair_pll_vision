@@ -96,6 +96,23 @@ def assure_storage_tree_created(storage_name: str) -> None:
         assure_created(directory(storage_name))
 
 
+def get_run_indices_in_dir(directory: str,
+                           extension: str = TRAJ_EXTENSION) -> List[int]:
+    """Return list of run indices in storage directory.
+
+    Args:
+        directory: Directory in which to look for runs.
+        extension: Extension of files to be included.
+
+    Returns:
+        List of run indices.
+    """
+    run_names = [path.basename(file) for file in 
+                 glob.glob(path.join(directory, f'*{extension}'))]
+    run_numbers = [int(name.split('.')[0]) for name in run_names]
+    return run_numbers
+
+
 def import_data_to_storage(storage_name: str, import_data_dir: str,
                            num: int = None) -> None:
     """Import data in external folder into data directory.
@@ -111,7 +128,7 @@ def import_data_to_storage(storage_name: str, import_data_dir: str,
         learning_data_dir(storage_name)
     ]
     data_traj_count = get_numeric_file_count(import_data_dir, TRAJ_EXTENSION)
-    run_indices = [i for i in range(data_traj_count)]
+    run_indices = get_run_indices_in_dir(import_data_dir, TRAJ_EXTENSION)
 
     target_traj_number = data_traj_count if num is None else \
                          min(num, data_traj_count)
@@ -125,12 +142,13 @@ def import_data_to_storage(storage_name: str, import_data_dir: str,
         if storage_traj_count != target_traj_number:
 
             # If output directory is empty and all trajectories are desired,
-            # copy them all over.
+            # copy them all over, numbering from 0.
             if (storage_traj_count == 0) and \
                (target_traj_number >= data_traj_count):
                 for output_dir in output_directories:
                     os.system(f'rm -r {output_dir}')
                     os.system(f'cp -r {import_data_dir} {output_dir}')
+                    reorder_trajectories(output_dir, TRAJ_EXTENSION)
 
             # If output directory is empty and a subset is desired, copy a
             # random subset of trajectories.
@@ -187,6 +205,19 @@ def import_data_to_storage(storage_name: str, import_data_dir: str,
             return
         
 
+def reorder_trajectories(directory: str, extension: str = TRAJ_EXTENSION
+                         ) -> None:
+    """Rename trajectories in directory to be numbered from 0.
+
+    Args:
+        directory: Directory to reorder trajectories in.
+        extension: Extension of files to be reordered.
+    """
+    traj_files = glob.glob(path.join(directory, f'*{extension}'))
+    for i, traj_file in enumerate(traj_files):
+        os.rename(traj_file, path.join(directory, f'{i}{extension}'))
+        
+
 def check_duplicate_trajectory(data_dir: str, traj: Tensor) -> bool:
     """Checks if a trajectory is already represented in a data directory."""
     existing_traj_files = glob.glob(
@@ -197,7 +228,6 @@ def check_duplicate_trajectory(data_dir: str, traj: Tensor) -> bool:
         if torch.all(traj == existing_traj).item():
             return True
     return False
-
 
 
 def storage_dir(storage_name: str) -> str:
