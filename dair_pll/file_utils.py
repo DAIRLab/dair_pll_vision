@@ -9,8 +9,9 @@ import json
 import os
 import pickle
 import random
+from copy import deepcopy
 from os import path
-from typing import List, Callable, BinaryIO, Any, TextIO, Optional
+from typing import List, Callable, BinaryIO, Any, TextIO, Optional, Union, Dict
 
 import torch
 from torch import Tensor
@@ -21,15 +22,16 @@ TRAJ_EXTENSION = '.pt'  # trajectory file
 HYPERPARAMETERS_EXTENSION = '.json'  # hyperparameter set file
 STATS_EXTENSION = '.pkl'  # experiment statistics
 CONFIG_EXTENSION = '.pkl'
+HUMAN_READABLE_CONFIG_EXTENSION = '.json'
 CHECKPOINT_EXTENSION = '.pt'
 DATA_SUBFOLDER_NAME = 'data'
 LEARNING_DATA_SUBFOLDER_NAME = 'learning'
 GROUND_TRUTH_DATA_SUBFOLDER_NAME = 'ground_truth'
-RUNS_SUBFOLDER_NAME = 'runs'
+RUNS_SUBFOLDER_NAME = '.'  #'runs'
 STUDIES_SUBFOLDER_NAME = 'studies'
 URDFS_SUBFOLDER_NAME = 'urdfs'
 WANDB_SUBFOLDER_NAME = 'wandb'
-BSDF_SUBFOLDER_NAME = 'geom_for_bsdf'
+BSDF_SUBFOLDER_NAME = 'geom_in_pll_frame'
 BSDF_FROM_SUPPORT_SUBSUBFOLDER_NAME = 'from_support_points'
 BSDF_FROM_MESH_SUBSUBFOLDER_NAME = 'from_mesh_surface'
 EXPORT_POINTS_DEFAULT_NAME = 'support_points.pt'
@@ -46,6 +48,7 @@ FINAL_EVALUATION_NAME = f'statistics{STATS_EXTENSION}'
 HYPERPARAMETERS_FILENAME = f'optimal_hyperparameters{HYPERPARAMETERS_EXTENSION}'
 CONFIG_FILENAME = f'config{CONFIG_EXTENSION}'
 CHECKPOINT_FILENAME = f'checkpoint{CHECKPOINT_EXTENSION}'
+HUMAN_READABLE_CONFIG_FILENAME = f'config{HUMAN_READABLE_CONFIG_EXTENSION}'
 """str: extensions for saved files"""
 
 
@@ -108,7 +111,7 @@ def get_run_indices_in_dir(directory: str,
         List of run indices.
     """
     run_names = [path.basename(file) for file in 
-                 glob.glob(path.join(directory, f'*{extension}'))]
+                 glob.glob(path.join(directory, './[0-9]*' + extension))]
     run_numbers = [int(name.split('.')[0]) for name in run_names]
     return run_numbers
 
@@ -230,10 +233,12 @@ def check_duplicate_trajectory(data_dir: str, traj: Tensor) -> bool:
     return False
 
 
-def storage_dir(storage_name: str) -> str:
+def storage_dir(storage_name: str, create: bool = True) -> str:
     """Absolute path of storage directory"""
-    # return assure_created(os.path.join(RESULTS_DIR, storage_name))
-    return assure_created(storage_name)
+    if create:
+        return assure_created(os.path.join(RESULTS_DIR, storage_name))
+    else:
+        return path.join(RESULTS_DIR, storage_name)
 
 
 def data_dir(storage_name: str) -> str:
@@ -255,11 +260,14 @@ def ground_truth_data_dir(storage_name: str) -> str:
         path.join(data_dir(storage_name), GROUND_TRUTH_DATA_SUBFOLDER_NAME))
 
 
-def all_runs_dir(storage_name: str) -> str:
+def all_runs_dir(storage_name: str, create: bool = True) -> str:
     """Absolute path of tensorboard storage folder"""
-    return assure_created(
-        path.join(storage_dir(storage_name), RUNS_SUBFOLDER_NAME))
-
+    if create:
+        return assure_created(
+            path.join(storage_dir(storage_name), RUNS_SUBFOLDER_NAME))
+    else:
+        return path.join(storage_dir(storage_name, create=False),
+                         RUNS_SUBFOLDER_NAME)
 
 def all_studies_dir(storage_name: str) -> str:
     """Absolute path of tensorboard storage folder"""
@@ -292,9 +300,30 @@ def get_numeric_file_count(directory: str,
     return len(glob.glob(path.join(directory, './[0-9]*' + extension)))
 
 
-def get_trajectory_count(trajectory_dir: str):
+def get_any_named_file_count(directory: str,
+                             extension: str = TRAJ_EXTENSION) -> int:
+    """Count number of files with any name.
+
+    If folder ``/fldr`` has contents (7.pt, 11.pt, 4.pt, something.pt), then::
+
+        get_any_named_file_count("/fldr", ".pt") == 4
+
+    Args:
+        directory: Directory to tally file count in
+        extension: Extension of files to be counted
+
+    Returns:
+        Number of files in specified ``directory`` with specified
+        ``extension`` with any basename.
+    """
+    return len(glob.glob(path.join(directory, '*' + extension)))
+
+
+def get_trajectory_count(trajectory_dir: str, numeric_only: bool = True):
     """Count number of trajectories on disk in given directory."""
-    return get_numeric_file_count(trajectory_dir, TRAJ_EXTENSION)
+    if numeric_only:
+        return get_numeric_file_count(trajectory_dir, TRAJ_EXTENSION)
+    return get_any_named_file_count(trajectory_dir, TRAJ_EXTENSION)
 
 
 def trajectory_file(trajectory_dir: str, num_trajectory: int) -> str:
@@ -303,9 +332,12 @@ def trajectory_file(trajectory_dir: str, num_trajectory: int) -> str:
                      f'{num_trajectory}{TRAJ_EXTENSION}')
 
 
-def run_dir(storage_name: str, run_name: str) -> str:
+def run_dir(storage_name: str, run_name: str, create: bool = True) -> str:
     """Absolute path of run-specific storage folder."""
-    return assure_created(path.join(all_runs_dir(storage_name), run_name))
+    if create:
+        return assure_created(path.join(all_runs_dir(storage_name), run_name))
+    else:
+        return path.join(all_runs_dir(storage_name, create=False), run_name)
 
 
 def get_trajectory_video_filename(storage_name: str, run_name: str) -> str:
@@ -372,8 +404,12 @@ def get_evaluation_filename(storage_name: str, run_name: str) -> str:
     return path.join(run_dir(storage_name, run_name), FINAL_EVALUATION_NAME)
 
 
-def get_configuration_filename(storage_name: str, run_name: str) -> str:
+def get_configuration_filename(storage_name: str, run_name: str,
+                               human_readable: bool = False) -> str:
     """Absolute path of experiment configuration."""
+    if human_readable:
+        return path.join(run_dir(storage_name, run_name),
+                         HUMAN_READABLE_CONFIG_FILENAME)
     return path.join(run_dir(storage_name, run_name), CONFIG_FILENAME)
 
 
@@ -441,20 +477,33 @@ def save_string(
             file.write(value)
 
 
-def load_configuration(storage_name: str, run_name: str) -> \
-        SupervisedLearningExperimentConfig:
+def load_configuration(storage_name: str, run_name: str,
+                       do_type_check: bool = True) -> \
+        Union[SupervisedLearningExperimentConfig, Any]:
     """Load configuration file."""
     configuration_filename = get_configuration_filename(storage_name, run_name)
     configuration = load_binary(configuration_filename, pickle.load)
-    assert isinstance(configuration, SupervisedLearningExperimentConfig)
+    if do_type_check:
+        assert isinstance(configuration, SupervisedLearningExperimentConfig), \
+            f'Expected {SupervisedLearningExperimentConfig}, got ' \
+            f'{type(configuration)}'
     return configuration
 
 
 def save_configuration(storage_name: str, run_name: str,
-                       config: SupervisedLearningExperimentConfig) -> None:
+                       config: SupervisedLearningExperimentConfig,
+                       human_readable: bool = False) -> None:
     """Save configuration file."""
     configuration_filename = get_configuration_filename(storage_name, run_name)
     save_binary(configuration_filename, config, pickle.dump)
+
+    if human_readable:
+        configuration_filename = get_configuration_filename(
+            storage_name, run_name, human_readable=True)
+        serializable_config = make_serializable(config)
+
+        save_string(configuration_filename,
+                    json.dumps(serializable_config, indent=2))
 
 
 def load_evaluation(storage_name: str, run_name: str) -> Any:
@@ -482,3 +531,20 @@ def save_hyperparameters(storage_name: str, study_name: str,
     hyperparameter_filename = get_hyperparameter_filename(
         storage_name, study_name)
     save_string(hyperparameter_filename, hyperparameters, json.dump)
+
+
+def make_serializable(obj: Any) -> Dict[str, Any]:
+    """Converts a non-serializable object to a series of nested dictionaries
+    with values of regular types so the result can be written to a json file,
+    for example.  Recursively serializes subcomponents, skipping only cases
+    when a deepest traced item cannot be serialized."""
+    dict = deepcopy(obj.__dict__)
+    for key, value in dict.items():
+        try:
+            json.dumps(value)
+        except TypeError:
+            try:
+                dict[key] = make_serializable(value)
+            except TypeError:
+                dict[key] = '<UNSERIALIZABLE OBJECT>'
+    return dict

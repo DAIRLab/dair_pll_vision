@@ -7,7 +7,6 @@ from mpl_toolkits.mplot3d import Axes3D
 from helpers.train_icnn import visualize_dirs_and_pts
 from dair_pll import file_utils
 from dair_pll.file_utils import geom_for_bsdf_dir
-from examples.contactnets_simple import DATA_ASSETS
 FORCE_THRES = 0.3676 #N
 
 def load_pts(path):
@@ -125,9 +124,8 @@ def combine_pts(path):
 if __name__ == "__main__":
     run_name = 'test_003'
     system = 'bundlesdf_cube'
-    data_asset = DATA_ASSETS[system]
     storage_name = file_utils.assure_created(
-            os.path.join(file_utils.RESULTS_DIR, data_asset)
+            os.path.join(file_utils.RESULTS_DIR, system)
         )
     output_dir = geom_for_bsdf_dir(storage_name, run_name)
     normal_forces = torch.load(os.path.join(output_dir, 'normal_forces.pt'))

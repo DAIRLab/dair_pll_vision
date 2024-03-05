@@ -194,11 +194,7 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
 
     def get_learned_drake_system(
             self, learned_system: System) -> Optional[DrakeSystem]:
-        visualize_learned_geometry = cast(
-            DrakeMultibodyLearnableExperimentConfig,
-            self.config).visualize_learned_geometry
-
-        if visualize_learned_geometry:
+        if self.visualizer_regeneration_is_required():
             new_urdfs = cast(MultibodyLearnableSystem,
                              learned_system).generate_updated_urdfs()
             return DrakeSystem(new_urdfs, self.get_drake_system().dt)

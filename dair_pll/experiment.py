@@ -162,7 +162,7 @@ class SupervisedLearningExperiment(ABC):
             None:
         super().__init__()
         self.config = config
-        file_utils.assure_storage_tree_created(config.storage)
+        file_utils.assure_created(config.storage)
         base_system = self.get_base_system()
         self.space = base_system.space
         self.loss_callback = cast(LossCallbackCallable, self.prediction_loss)
@@ -487,17 +487,22 @@ class SupervisedLearningExperiment(ABC):
             else statistics[valid_loss_key]
         return torch.tensor(valid_loss)
 
-    def setup_training(self) -> Tuple[System, Optimizer, TrainingState]:
-        r"""Sets up initial condition for training process.
+    def setup_learning_data_manager(self, checkpoint_filename: str
+                                    ) -> ExperimentDataManager:
+        """Sets up learning data manager for experiment.  Attempts to load
+        initial condition from disk as a :py:class:`TrainingState`\ . Otherwise,
+        a fresh training process is started.
 
-        Attempts to load initial condition from disk as a
-        :py:class:`TrainingState`\ . Otherwise, a fresh training process is
-        started.
+        Args:
+            checkpoint_filename (str):  filepath to check for a previously
+                stored training state.
 
         Returns:
-            Initial learned system.
-            Pytorch optimizer.
-            Current state of training process.
+            is_resumed (bool):  Whether the training process was resumed from
+                disk.
+            training_state (TrainingState):  current state of training process;
+                is None if training process was started from scratch.
+
         """
         is_resumed = False
         training_state = None
@@ -515,6 +520,21 @@ class SupervisedLearningExperiment(ABC):
         except FileNotFoundError:
             self.learning_data_manager = ExperimentDataManager(
                 self.config.storage, self.config.data_config)
+            
+        return is_resumed, training_state
+
+    def setup_training(self) -> Tuple[System, Optimizer, TrainingState]:
+        r"""Sets up initial condition for training process.
+
+        Returns:
+            Initial learned system.
+            Pytorch optimizer.
+            Current state of training process.
+        """
+        checkpoint_filename = file_utils.get_model_filename(
+            self.config.storage, self.config.run_name)
+        is_resumed, training_state = \
+            self.setup_learning_data_manager(checkpoint_filename)
 
         train_set, _, _ = \
             self.learning_data_manager.get_updated_trajectory_sets()

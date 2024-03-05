@@ -1,19 +1,22 @@
+
 """Simple ContactNets/differentiable physics learning examples."""
 # pylint: disable=E1103
 import os
+import os.path as op
 import pdb
 import time
-from typing import cast
+from typing import cast, Tuple
 
 import click
 from torch import Tensor
 
 from dair_pll import file_utils
-from dair_pll.data_config import TrajectorySliceConfig, DataConfig
-from dair_pll.drake_experiment import \
-    DrakeMultibodyLearnableExperiment, DrakeSystemConfig, \
-    MultibodyLearnableSystemConfig, MultibodyLosses, \
-    DrakeMultibodyLearnableExperimentConfig
+from dair_pll.data_config import TrajectorySliceConfig
+from dair_pll.vision_config import VisionDataConfig, VisionExperiment, \
+    VisionExperimentConfig, VISION_SYSTEMS, VISION_CUBE_SYSTEM, \
+    VISION_PRISM_SYSTEM, VISION_TOBLERONE_SYSTEM, VISION_MILK_SYSTEM
+from dair_pll.drake_experiment import DrakeSystemConfig, \
+    MultibodyLearnableSystemConfig, MultibodyLosses
 from dair_pll.experiment import default_epoch_callback
 from dair_pll.experiment_config import OptimizerConfig
 from dair_pll.hyperparameter import Float, Int
@@ -21,22 +24,8 @@ from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 from dair_pll.system import System
 
 
-CUBE_SYSTEM = 'vision_cube'
-PRISM_SYSTEM = 'vision_prism'
-TOBLERONE_SYSTEM = 'vision_toblerone'
-MILK_SYSTEM = 'vision_milk'
-SYSTEMS = [CUBE_SYSTEM, PRISM_SYSTEM, TOBLERONE_SYSTEM, MILK_SYSTEM]
 
 # File management.
-CUBE_DATA_ASSET = 'vision_cube'
-PRISM_DATA_ASSET = 'vision_prism'
-TOBLERONE_DATA_ASSET = 'vision_toblerone'
-MILK_DATA_ASSET = 'vision_milk'
-DATA_ASSETS = {CUBE_SYSTEM: CUBE_DATA_ASSET,
-               PRISM_SYSTEM: PRISM_DATA_ASSET,
-               TOBLERONE_SYSTEM: TOBLERONE_DATA_ASSET,
-               MILK_SYSTEM: MILK_DATA_ASSET}
-
 CUBE_MESH_URDF_ASSET = 'bundlesdf_cube_mesh.urdf'
 PRISM_MESH_URDF_ASSET = 'bundlesdf_prism_mesh.urdf'
 TOBLERONE_MESH_URDF_ASSET = 'bundlesdf_toblerone_mesh.urdf'
@@ -47,10 +36,10 @@ CUBE_URDFS = {MESH_TYPE: CUBE_MESH_URDF_ASSET}
 PRISM_URDFS = {MESH_TYPE: PRISM_MESH_URDF_ASSET}
 TOBLERONE_URDFS = {MESH_TYPE: TOBLERONE_MESH_URDF_ASSET}
 MILK_URDFS = {MESH_TYPE: MILK_MESH_URDF_ASSET}
-URDFS = {CUBE_SYSTEM: CUBE_URDFS,
-         PRISM_SYSTEM: PRISM_URDFS,
-         TOBLERONE_SYSTEM: TOBLERONE_URDFS,
-         MILK_SYSTEM: MILK_URDFS}
+URDFS = {VISION_CUBE_SYSTEM: CUBE_URDFS,
+         VISION_PRISM_SYSTEM: PRISM_URDFS,
+         VISION_TOBLERONE_SYSTEM: TOBLERONE_URDFS,
+         VISION_MILK_SYSTEM: MILK_URDFS}
 
 # Data configuration.
 DT = 0.0333 #0.0068 # 1/frame rate of the camera
@@ -63,70 +52,96 @@ CUBE_LR = 1e-3
 PRISM_LR = 1e-3
 TOBLERONE_LR = 1e-3
 MILK_LR = 1e-3
-LRS = {CUBE_SYSTEM: CUBE_LR,
-       PRISM_SYSTEM: PRISM_LR,
-       TOBLERONE_SYSTEM: TOBLERONE_LR,
-       MILK_SYSTEM: MILK_LR}
+LRS = {VISION_CUBE_SYSTEM: CUBE_LR,
+       VISION_PRISM_SYSTEM: PRISM_LR,
+       VISION_TOBLERONE_SYSTEM: TOBLERONE_LR,
+       VISION_MILK_SYSTEM: MILK_LR}
 CUBE_WD = 0.0
 PRISM_WD = 0.0
 TOBLERONE_WD = 0.0
 MILK_WD = 0.0
-WDS = {CUBE_SYSTEM: CUBE_WD,
-       PRISM_SYSTEM: PRISM_WD,
-       TOBLERONE_SYSTEM: TOBLERONE_WD,
-       MILK_SYSTEM: MILK_WD}
-EPOCHS = 200 #500
+WDS = {VISION_CUBE_SYSTEM: CUBE_WD,
+       VISION_PRISM_SYSTEM: PRISM_WD,
+       VISION_TOBLERONE_SYSTEM: TOBLERONE_WD,
+       VISION_MILK_SYSTEM: MILK_WD}
+EPOCHS = 12 #500
 PATIENCE = EPOCHS
 
 WANDB_PROJECT = 'dair_pll-vision'
 
 
-def main(run_name: str = "",
-         system: str = CUBE_SYSTEM,
+def get_storage_names(system: str, start_toss: int, end_toss: int,
+                      cycle_iteration: int) -> Tuple[str, str, str]:
+    """Using the expected file structure designed for the vision experiments,
+    return the asset folders name, tracker name, and storage folders name.
+    
+    Args:
+        system: Which system to learn.
+        start_toss: start toss number of data to load.
+        end_toss: end toss number of data to load.
+        cycle_iteration: BundleSDF iteration number (0 means use TagSLAM poses).
+
+    Returns:
+        asset_name:  Name of the asset folder, e.g. 'cube_2'
+        tracker:  Name of the tracker folder, e.g. 'bundlesdf_iteration_1'.
+        storage_name: Name of the storage folder, e.g.
+            'vision_cube/cube_2/bundlesdf_iteration_1'.
+    """
+    asset_name = system.split('_')[1] + f'_{start_toss}'
+    asset_name += f'-{end_toss}' if start_toss != end_toss else ''
+    tracker = 'tagslam' if cycle_iteration == 0 else \
+        f'bundlesdf_iteration_{cycle_iteration}'
+    return asset_name, tracker, op.join(system, asset_name, tracker)
+
+    
+def main(pll_run_id: str = "",
+         system: str = VISION_CUBE_SYSTEM,
+         start_toss: int = 2,
+         end_toss: int = 2,
          cycle_iteration: int = 1,
+         bundlesdf_id: str = None,
          contactnets: bool = True,
          regenerate: bool = False,
-         dataset_size: int = 512,
          pretrained_icnn_weights_filepath: str = None,
          clear_data: bool = False):
     """Execute ContactNets basic example on a system.
 
     Args:
-        run_name: name of experiment run.
+        pll_run_id: name of experiment run.
         system: Which system to learn.
         cycle_iteration: BundleSDF iteration number (0 means use TagSLAM poses).
         contactnets: Whether to use ContactNets or prediction loss
         regenerate: Whether save updated URDF's each epoch.
-        dataset_size: Number of trajectories to use.
         pretrained_icnn_weights_filepath: Filepath to set of pretrained
           ICNN weights.
         clear_data: Whether to clear storage folder before running.
     """
     # pylint: disable=too-many-locals, too-many-arguments
-    if run_name == "":
-        run_name = f'run_{str(int(time.time()))}'
+    if pll_run_id == "":
+        pll_run_id = f'pll_id_{str(int(time.time()))}'
+    elif pll_run_id[:7] != 'pll_id_':
+        pll_run_id = f'pll_id_{pll_run_id}'
 
-    print(f'\n\tCreating (or restarting) run: {run_name}' \
+    print(f'\n\tCreating (or restarting) run: {pll_run_id}' \
          + f'\n\ton system: {system}' \
          + f'\n\twith BundleSDF cycle iteration: {cycle_iteration}' \
          + f'\n\tusing ContactNets: {contactnets}' \
          + f'\n\tregenerate: {regenerate}' \
-         + f'\n\tdataset_size: {dataset_size}' \
          + f'\n\twith pretrained ICNN weights at: ' \
          + f'{pretrained_icnn_weights_filepath}' \
          + f'\n\tclear_data: {clear_data}\n')
     
     # First step, clear out data on disk for a fresh start.
-    data_asset = DATA_ASSETS[system]
-    pose_source = 'tagslam_toss' if cycle_iteration == 0 else \
-        f'bundlesdf_toss_iteration_{cycle_iteration}'
-    # where to store data
-    storage_name = file_utils.assure_created(
-        os.path.join(file_utils.RESULTS_DIR, data_asset, pose_source)
-    )
-
-    if clear_data:
-        os.system(f'rm -r {file_utils.storage_dir(storage_name)}')
+    asset_name, tracker, storage_name = get_storage_names(
+        system, start_toss, end_toss, cycle_iteration)
+    run_directory = file_utils.run_dir(storage_name, pll_run_id, create=False)
+    if op.exists(run_directory):        
+        if clear_data:
+            os.system(f'rm -r {run_directory}')
+        else:
+            print(f'Directory {run_directory} already exists and not set to ' \
+                  + f'clear (run with --clear-data next time).  Exiting.')
+            exit()
 
     # Next, build the configuration of the learning experiment.
 
@@ -134,8 +149,7 @@ def main(run_name: str = "",
     optimizer_config = OptimizerConfig(lr=Float(LRS[system]),
                                        wd=Float(WDS[system]),
                                        patience=PATIENCE,
-                                       epochs=EPOCHS,
-                                       batch_size=Int(int(dataset_size/2)))
+                                       epochs=EPOCHS)
 
     # Describes the ground truth system; infers everything from the URDF.
     # This is a configuration for a DrakeSystem, which wraps a Drake simulation
@@ -155,23 +169,26 @@ def main(run_name: str = "",
       pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath
     )
 
-    # how to slice trajectories into training datapoints
+    # How to slice trajectories into training datapoints.
     slice_config = TrajectorySliceConfig(
         t_prediction=1 if contactnets else T_PREDICTION)
 
     # Describes configuration of the data.
-    data_config = DataConfig(dt=DT,
-                             train_fraction=0.7,
-                             valid_fraction=0.3,
-                             test_fraction=0.0,
-                             slice_config=slice_config,
-                             update_dynamically=False,
-                             dataset_size=dataset_size)
+    data_config = VisionDataConfig(
+        dt=DT,
+        train_fraction=0.7,
+        valid_fraction=0.3,
+        test_fraction=0.0,
+        slice_config=slice_config,
+        update_dynamically=False,
+        asset_subdirectories=op.join(system, asset_name),
+        tracker=tracker,
+        bundlesdf_id=bundlesdf_id)
 
     # Combines everything into config for entire experiment.
-    experiment_config = DrakeMultibodyLearnableExperimentConfig(
-        storage=storage_name,
-        run_name=run_name,
+    experiment_config = VisionExperimentConfig(
+        storage=file_utils.storage_dir(storage_name),
+        run_name=pll_run_id,
         base_config=base_config,
         learnable_config=learnable_config,
         optimizer_config=optimizer_config,
@@ -184,19 +201,17 @@ def main(run_name: str = "",
 
     # Makes experiment.
     print('Making experiment.')
-    experiment = DrakeMultibodyLearnableExperiment(experiment_config)
+    experiment = VisionExperiment(experiment_config)
 
-    # Prepare data.
-    print('Preparing data.')
-    # Specify directory with [T, n_x] tensor files saved as 0.pt, 1.pt, ...
-    # See :mod:`dair_pll.state_space` for state format.
-    import_directory = file_utils.get_asset(
-        os.path.join(data_asset, pose_source)
-    )
-    file_utils.import_data_to_storage(storage_name,
-                                      import_data_dir=import_directory,
-                                      num=dataset_size)
-        
+    # serialized_config = file_utils.make_serializable(experiment_config)
+    pdb.set_trace()
+    # with open('config.json', 'w') as json_file:
+    #     json_file.write(serialized_config)
+
+
+    # No need to prepare data for vision experiments since all assets from the
+    # asset directory are used.
+
     def regenerate_callback(epoch: int, learned_system: System,
                             train_loss: Tensor,
                             best_valid_loss: Tensor) -> None:
@@ -224,22 +239,30 @@ def main(run_name: str = "",
 @click.command()
 @click.option('--run-name', default="")
 @click.option('--system',
-              type=click.Choice(SYSTEMS, case_sensitive=True),
-              default=CUBE_SYSTEM)
+              type=click.Choice(VISION_SYSTEMS, case_sensitive=True),
+              default=VISION_CUBE_SYSTEM)
+@click.option('--start-toss',
+              type=int,
+              default=2,
+              help="start toss number of data to load")
+@click.option('--end-toss',
+              type=int,
+              default=2,
+              help="end toss number of data to load")
 @click.option('--cycle-iteration',
               type=int,
               default=1,
               help="BundleSDF iteration number (0 means use TagSLAM poses).")
+@click.option('--bundlesdf-id',
+              type=str,
+              default=None,
+              help="what BundleSDF run ID associated with pose outputs to use.")
 @click.option('--contactnets/--prediction',
               default=True,
               help="whether to train/test with ContactNets/prediction loss.")
 @click.option('--regenerate/--no-regenerate',
               default=False,
               help="whether save updated URDF's each epoch.")
-@click.option('--dataset-size',
-              type=int,
-              default=512,
-              help="dataset size")
 @click.option('--pretrained',
               type=str,
               default=None,
@@ -248,14 +271,13 @@ def main(run_name: str = "",
               default=False,
               help="Whether to clear storage folder before running.")
 
-def main_command(run_name: str, system: str, cycle_iteration: int,
-                 contactnets: bool, regenerate: bool, dataset_size: int,
-                 pretrained: str, clear_data: bool):
+def main_command(run_name: str, system: str, start_toss: int, end_toss: int,
+                 cycle_iteration: int, bundlesdf_id: str, contactnets: bool,
+                 regenerate: bool, pretrained: str, clear_data: bool):
     # pylint: disable=too-many-arguments
     """Executes main function with argument interface."""
-    main(run_name, system, cycle_iteration, contactnets, regenerate,
-         dataset_size, pretrained_icnn_weights_filepath=pretrained,
-         clear_data=clear_data)
+    main(run_name, system, start_toss, end_toss, cycle_iteration, bundlesdf_id,
+         contactnets, regenerate, pretrained, clear_data)
 
 
 
