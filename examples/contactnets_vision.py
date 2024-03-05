@@ -64,7 +64,7 @@ WDS = {VISION_CUBE_SYSTEM: CUBE_WD,
        VISION_PRISM_SYSTEM: PRISM_WD,
        VISION_TOBLERONE_SYSTEM: TOBLERONE_WD,
        VISION_MILK_SYSTEM: MILK_WD}
-EPOCHS = 12 #500
+EPOCHS = 200 #500
 PATIENCE = EPOCHS
 
 WANDB_PROJECT = 'dair_pll-vision'
@@ -202,12 +202,7 @@ def main(pll_run_id: str = "",
     # Makes experiment.
     print('Making experiment.')
     experiment = VisionExperiment(experiment_config)
-
-    # serialized_config = file_utils.make_serializable(experiment_config)
-    pdb.set_trace()
-    # with open('config.json', 'w') as json_file:
-    #     json_file.write(serialized_config)
-
+    # pdb.set_trace()
 
     # No need to prepare data for vision experiments since all assets from the
     # asset directory are used.
@@ -238,17 +233,11 @@ def main(pll_run_id: str = "",
     
 @click.command()
 @click.option('--run-name', default="")
-@click.option('--system',
-              type=click.Choice(VISION_SYSTEMS, case_sensitive=True),
-              default=VISION_CUBE_SYSTEM)
-@click.option('--start-toss',
-              type=int,
-              default=2,
-              help="start toss number of data to load")
-@click.option('--end-toss',
-              type=int,
-              default=2,
-              help="end toss number of data to load")
+@click.option('--vision-asset',
+              type=str,
+              default=None,
+              help="directory of the asset folder e.g. cube_2, assumed to " + \
+                "be in a vision_{SYSTEM}/ folder; encodes system and tosses.")
 @click.option('--cycle-iteration',
               type=int,
               default=1,
@@ -271,11 +260,21 @@ def main(pll_run_id: str = "",
               default=False,
               help="Whether to clear storage folder before running.")
 
-def main_command(run_name: str, system: str, start_toss: int, end_toss: int,
-                 cycle_iteration: int, bundlesdf_id: str, contactnets: bool,
-                 regenerate: bool, pretrained: str, clear_data: bool):
-    # pylint: disable=too-many-arguments
-    """Executes main function with argument interface."""
+def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
+                 bundlesdf_id: str, contactnets: bool, regenerate: bool,
+                 pretrained: str, clear_data: bool):
+    # First decode the system and start/end tosses from the provided asset
+    # directory.
+    assert '_' in vision_asset, f'Invalid asset directory: {vision_asset}.'
+    system = f"vision_{vision_asset.split('_')[0]}"
+    assert system in VISION_SYSTEMS, f'Invalid system in {vision_asset=}.'
+
+    start_toss = int(vision_asset.split('_')[1].split('-')[0])
+    end_toss = start_toss if '-' not in vision_asset else \
+        int(vision_asset.split('-')[1])
+    assert start_toss <= end_toss, f'Invalid toss range: {start_toss} ' + \
+        f'-{end_toss} inferred from {vision_asset=}.'
+
     main(run_name, system, start_toss, end_toss, cycle_iteration, bundlesdf_id,
          contactnets, regenerate, pretrained, clear_data)
 
