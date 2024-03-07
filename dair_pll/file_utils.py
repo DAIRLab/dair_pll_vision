@@ -269,6 +269,7 @@ def all_runs_dir(storage_name: str, create: bool = True) -> str:
         return path.join(storage_dir(storage_name, create=False),
                          RUNS_SUBFOLDER_NAME)
 
+
 def all_studies_dir(storage_name: str) -> str:
     """Absolute path of tensorboard storage folder"""
     return assure_created(

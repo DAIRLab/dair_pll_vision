@@ -258,7 +258,7 @@ def main(pll_run_id: str = "",
               help='pretrained weights of Homonogeneous ICNN')
 @click.option('--clear-data/--keep-data',
               default=False,
-              help="Whether to clear storage folder before running.")
+              help="Whether to clear experiment results folder before running.")
 
 def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
                  bundlesdf_id: str, contactnets: bool, regenerate: bool,
