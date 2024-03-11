@@ -301,36 +301,14 @@ def get_numeric_file_count(directory: str,
     return len(glob.glob(path.join(directory, './[0-9]*' + extension)))
 
 
-def get_any_named_file_count(directory: str,
-                             extension: str = TRAJ_EXTENSION) -> int:
-    """Count number of files with any name.
-
-    If folder ``/fldr`` has contents (7.pt, 11.pt, 4.pt, something.pt), then::
-
-        get_any_named_file_count("/fldr", ".pt") == 4
-
-    Args:
-        directory: Directory to tally file count in
-        extension: Extension of files to be counted
-
-    Returns:
-        Number of files in specified ``directory`` with specified
-        ``extension`` with any basename.
-    """
-    return len(glob.glob(path.join(directory, '*' + extension)))
-
-
-def get_trajectory_count(trajectory_dir: str, numeric_only: bool = True):
-    """Count number of trajectories on disk in given directory."""
-    if numeric_only:
-        return get_numeric_file_count(trajectory_dir, TRAJ_EXTENSION)
-    return get_any_named_file_count(trajectory_dir, TRAJ_EXTENSION)
-
+def get_trajectory_count(directory: str) -> int:
+    """Cound number of trajectories on disk in given directory."""
+    return get_numeric_file_count(directory, TRAJ_EXTENSION)
 
 def trajectory_file(trajectory_dir: str, num_trajectory: int) -> str:
     """Absolute path of specific trajectory in storage"""
     return path.join(trajectory_dir,
-                     f'{num_trajectory}{TRAJ_EXTENSION}')
+                     f'{int(num_trajectory)}{TRAJ_EXTENSION}')
 
 
 def run_dir(storage_name: str, run_name: str, create: bool = True) -> str:
