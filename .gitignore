@@ -164,7 +164,6 @@ dmypy.json
 /docsrc/source/index.rst
 
 *.npy
-*.png
 *.pth
 
 .pylintrc
