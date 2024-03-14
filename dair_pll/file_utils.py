@@ -305,6 +305,7 @@ def get_trajectory_count(directory: str) -> int:
     """Cound number of trajectories on disk in given directory."""
     return get_numeric_file_count(directory, TRAJ_EXTENSION)
 
+
 def trajectory_file(trajectory_dir: str, num_trajectory: int) -> str:
     """Absolute path of specific trajectory in storage"""
     return path.join(trajectory_dir,
