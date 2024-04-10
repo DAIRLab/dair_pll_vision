@@ -22,8 +22,10 @@ from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
     EXPORT_FORCES_DEFAULT_NAME
 
 
-TEST_RUN_NAME = 'napkin_004'  #'test_004'
+TEST_RUN_NAME = 'pll_id_01'  #'test_004'
 SYSTEM_NAME = 'bundlesdf_napkin'  #'bundlesdf_cube'
+STORAGE_NAME = '/home/bibit/Desktop'
+    # file_utils.assure_created(op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
 
 # Hyperparameters for querying into and out of the object at an SDF=0 point.
 N_QUERY_INSIDE = 100
@@ -64,10 +66,12 @@ BOUNDED_NEARBY_OUTSIDE_N_QUERY = 100
 BOUNDED_NEARBY_INSIDE_N_QUERY = BOUNDED_FAR_N_QUERY + \
     BOUNDED_NEARBY_OUTSIDE_N_QUERY
 
-# Hyperparameters for filtering support points or hull sample points
+# Hyperparameters for filtering support points or hull sample points.
 FORCE_THRESH = 0.3676                       # Newtons
+FORCE_RETENTION_RATE = 0.3                  # fraction
 HULL_PROXIMITY_THRESH = 0.001               # meters
 SUPPORT_POINT_DISTANCE_THRESHOLD = 0.010    # meters
+DO_SUPPORT_POINT_REBALANCING = False
 
 # Flags for running some unit tests.
 DO_SMALL_FILTERING_AND_VISUALIZATION_TEST = False
@@ -84,7 +88,8 @@ DO_ALL_VISUALIZATIONS_FOR_RUN_TEST = True
 # ========================= Data Generation Helpers ========================== #
 def filter_points_and_directions_based_on_contact(
         contact_points: Tensor, directions: Tensor, normal_forces: Tensor,
-        force_threshold: float = FORCE_THRESH) -> Tuple[Tensor, Tensor]:
+        use_adaptive_threshold: bool = True
+) -> Tuple[Tensor, Tensor]:
     """Filter out points that are likely not in contact with the ground during
     the data captured by the normal_forces tensor.
 
@@ -94,8 +99,8 @@ def filter_points_and_directions_based_on_contact(
         directions (M, 3):  associated support directions.
         normal_forces (M,):  normal forces associated with the contact points
             during one timestep of PLL training.
-        force_threshold:  force threshold below which contact is decided to not
-            have occurred at a support point.
+        use_adaptive_threshold:  whether to use an adaptive threshold based on
+            the normal forces observed during training.
 
     Outputs:
         filtered_points (N, 3):  N support points that experienced a normal
@@ -107,11 +112,43 @@ def filter_points_and_directions_based_on_contact(
     assert normal_forces.shape[0]==contact_points.shape[0]==directions.shape[0]
     assert contact_points.shape[1] == directions.shape[1] == 3
 
+    if use_adaptive_threshold:
+        # Adaptively find a force threshold based on the normal forces observed.
+        force_threshold = find_adaptive_force_threshold(normal_forces)
+    else:
+        # Otherwise, use a hard-coded force threshold.
+        force_threshold = FORCE_THRESH
+
     mask = normal_forces > force_threshold
     filtered_points = contact_points[mask]
     filtered_directions = directions[mask]
 
     return filtered_points.detach(), filtered_directions.detach()
+
+
+def find_adaptive_force_threshold(normal_forces: Tensor,
+                                  visualize: bool = False) -> float:
+    """Find a force threshold that is adaptive to the normal forces observed
+    during a training run.  This threshold will be selected to retain a desired
+    fraction of the normal forces, as specified by FORCE_RETENTION_RATE.
+
+    Args:
+        normal_forces (N,):  normal forces associated with the contact points
+            during PLL training.
+        visualize:  whether to visualize the distribution of normal forces and
+            the threshold selected.
+
+    Outputs:
+        force_threshold:  force threshold below which contact is decided to not
+            have occurred at a support point.
+    """
+    assert normal_forces.ndim == 1
+
+    threshold = torch.quantile(normal_forces, 1-FORCE_RETENTION_RATE).item()
+    if visualize:
+        visualize_force_distribution(normal_forces, threshold=threshold)
+
+    return threshold
 
 
 def filter_mesh_samples_based_on_supports(
@@ -656,7 +693,7 @@ def generate_training_data_for_run(run_name: str, storage_name: str):
     support_directions = torch.load(
         op.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME)).detach()
 
-    # Sample points on the support point mesh surface and visualize them.
+    # Sample points on the support point mesh surface.
     mesh = create_mesh_from_set_of_points(support_points)
     sample_points, sample_normals = sample_on_mesh(mesh, N_MESH_SAMPLE)
 
@@ -689,11 +726,15 @@ def generate_training_data_for_run(run_name: str, storage_name: str):
         sample_points_cf, sample_normals_cf
     )
 
-    # Redistribute the contact points to be more geometrically balanced (this
-    # will decrease the number of contacts/directions considered).
-    balanced_contacts, balanced_directions = rebalance_contact_points(
-        mesh, contact_points, contact_directions
-    )
+    if DO_SUPPORT_POINT_REBALANCING:
+        # Redistribute the contact points to be more geometrically balanced
+        # (this will decrease the number of contacts/directions considered).
+        balanced_contacts, balanced_directions = rebalance_contact_points(
+            mesh, contact_points, contact_directions
+        )
+    else:
+        balanced_contacts = contact_points
+        balanced_directions = contact_directions
     
     # Generate training data from the redistributed contact points.
     contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
@@ -1123,7 +1164,10 @@ def visualize_force_distribution(
     ylims = ax.get_ylim()
 
     ax.vlines([threshold], ymin=ylims[0], ymax=ylims[1], colors='r',
-              linestyles='dashed', label='Force threshold')
+              linestyles='dashed', label='Selected Force threshold')
+    ax.vlines([FORCE_THRESH], ymin=ylims[0], ymax=ylims[1], colors='g',
+              linestyles='dashed',
+              label=f'Default Force threshold ({FORCE_THRESH} N)')
     ax.set_ylim(bottom=ylims[0], top=ylims[1])
 
     ax.set_xlabel('Normal Forces [N]')
@@ -1429,12 +1473,11 @@ if __name__ == '__main__':
         print('Done with support point snapping test.')
 
     if DO_ALL_VISUALIZATIONS_FOR_RUN_TEST:
-        print('Performing all visualizations for run test.')
-        storage_name = file_utils.assure_created(
-            op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
+        print(f'Performing all visualizations for run {TEST_RUN_NAME} in ' + \
+              f'{STORAGE_NAME}.')
 
         # Load the exported outputs from the experiment run.
-        output_dir = file_utils.geom_for_bsdf_dir(storage_name, TEST_RUN_NAME)
+        output_dir = file_utils.geom_for_bsdf_dir(STORAGE_NAME, TEST_RUN_NAME)
         normal_forces = torch.load(
             op.join(output_dir, EXPORT_FORCES_DEFAULT_NAME)).detach()
         support_points = torch.load(
@@ -1453,29 +1496,32 @@ if __name__ == '__main__':
         # filter the sample points based on this contact knowledge.
         contact_points, contact_directions = \
             filter_points_and_directions_based_on_contact(
-                support_points, support_directions, normal_forces,
-                force_threshold=FORCE_THRESH
+                support_points, support_directions, normal_forces
             )
-        print(f'\tFiltered support points with force threshold {FORCE_THRESH} ' + \
-            'Newtons.')
-        print(f'\t-> Went from {len(support_points)} to {len(contact_points)}' + \
-            f' supports ({len(contact_points)/len(support_points)*100:.3f}%).')
+        adapted_threshold = find_adaptive_force_threshold(normal_forces)
+        print(f'\tFiltered support points with force threshold ' + \
+              f'{adapted_threshold} Newtons.')
+        print(f'\t-> Went from {len(support_points)} to ' + \
+              f'{len(contact_points)} supports (' + \
+              f'{len(contact_points)/len(support_points)*100:.3f}%).')
         print('\tVisualizing distribution of normal forces.')
-        visualize_force_distribution(normal_forces, threshold=FORCE_THRESH)
+        visualize_force_distribution(normal_forces, threshold=adapted_threshold)
 
-        sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
-            sample_points, sample_normals, contact_points, contact_directions,
-            threshold=HULL_PROXIMITY_THRESH
-        )
-        print('\tFiltered mesh samples with contact plane distance threshold' + \
-            f' {HULL_PROXIMITY_THRESH} meters.')
-        print(f'\t-> Went from {len(sample_points)} to {len(sample_points_cf)} ' + \
-            'mesh samples ' + \
+        sample_points_cf, sample_normals_cf = \
+            filter_mesh_samples_based_on_supports(
+                sample_points, sample_normals, contact_points,
+                contact_directions, threshold=HULL_PROXIMITY_THRESH
+            )
+        print('\tFiltered mesh samples with contact plane distance ' + \
+              f'threshold {HULL_PROXIMITY_THRESH} meters.')
+        print(f'\t-> Went from {len(sample_points)} to ' + \
+              f'{len(sample_points_cf)} mesh samples ' + \
             f'({len(sample_points_cf)/len(sample_points)*100:.3f}%).')
 
         print('\tVisualizing points sampled with filtering via support points.')
         visualize_sampled_points(
-            mesh, sample_points, sample_normals, filtered_points=sample_points_cf,
+            mesh, sample_points, sample_normals,
+            filtered_points=sample_points_cf,
             filtered_normals=sample_normals_cf, support_points=support_points,
             support_directions=support_directions)
 
@@ -1483,35 +1529,41 @@ if __name__ == '__main__':
         mesh_ws, mesh_w_normals = generate_point_sdf_gradient_pairs(
             sample_points_cf, sample_normals_cf
         )
-        print('\tVisualizing points with outward gradients from contact-filtered ' \
-            + 'mesh samples.')
+        print('\tVisualizing points with outward gradients from contact-' + \
+              'filtered mesh samples.')
         visualize_gradients(mesh, sample_points_cf, mesh_ws, mesh_w_normals)
 
-        # Redistribute the contact points to be more geometrically balanced (this
-        # will decrease the number of contacts/directions considered).
+        # Redistribute the contact points to be more geometrically balanced
+        # (this will decrease the number of contacts/directions considered).
         snap_thresh = 0.2
         balanced_contacts, balanced_directions = rebalance_contact_points(
-            mesh, contact_points, contact_directions, snapping_threshold=snap_thresh
+            mesh, contact_points, contact_directions,
+            snapping_threshold=snap_thresh
         )
-        print('\tRedistributing for geometric balance, with snap threshold of ' + \
-            f'{snap_thresh} meters.')
+        print('\tRedistributing for geometric balance, with snap threshold ' + \
+              f'of {snap_thresh} meters.')
         print(f'\t-> Went from {len(contact_points)} to ' + \
             f'{len(balanced_contacts)} support points ' + \
             f'({len(balanced_contacts)/len(contact_points)*100:.3f}%).')
 
         print(f'\tComputing uniqueness values of original supports.')
-        cont_pos_uniq, cont_dir_uniq = compute_position_and_direction_uniquenesses(
-            contact_points, contact_directions)
+        cont_pos_uniq, cont_dir_uniq = \
+            compute_position_and_direction_uniquenesses(
+                contact_points, contact_directions)
         print(f'\tComputing uniqueness values of snapped samples.')
-        bal_pos_uniq, bal_dir_uniq = compute_position_and_direction_uniquenesses(
-            balanced_contacts, balanced_directions)
+        bal_pos_uniq, bal_dir_uniq = \
+            compute_position_and_direction_uniquenesses(
+                balanced_contacts, balanced_directions)
         
         print('\tVisualizing uniqueness before and after geometry-based ' + \
             'rebalancing.')
         visualize_point_uniquenesses(
             contact_points, contact_directions, cont_pos_uniq, cont_dir_uniq,
-            second_points=balanced_contacts, second_directions=balanced_directions,
-            second_pos_uniqueness=bal_pos_uniq, second_dir_uniqueness=bal_dir_uniq)
+            second_points=balanced_contacts,
+            second_directions=balanced_directions,
+            second_pos_uniqueness=bal_pos_uniq,
+            second_dir_uniqueness=bal_dir_uniq
+        )
         
         # Generate training data from the redistributed contact points.
         contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
@@ -1528,16 +1580,14 @@ if __name__ == '__main__':
         # Don't save the generated data since just a visualization test.
 
         print('\tDeleting test variables so can\'t accidentally be reused.')
-        del storage_name, output_dir, normal_forces, support_points, \
-            support_directions, mesh, sample_points, sample_normals, \
-            contact_points, contact_directions, sample_points_cf, \
-            sample_normals_cf, mesh_ws, mesh_w_normals, balanced_contacts, \
-            balanced_directions, cont_pos_uniq, cont_dir_uniq, bal_pos_uniq, \
-            bal_dir_uniq, contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds
+        del output_dir, normal_forces, support_points, support_directions, \
+            mesh, sample_points, sample_normals, contact_points, \
+            contact_directions, sample_points_cf, sample_normals_cf, mesh_ws, \
+            mesh_w_normals, balanced_contacts, balanced_directions, \
+            cont_pos_uniq, cont_dir_uniq, bal_pos_uniq, bal_dir_uniq, \
+            contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds
         print('Done with all visualizations for run test.')
 
 
     # Generate training data for run.
-    storage_name = file_utils.assure_created(
-        op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
-    generate_training_data_for_run(TEST_RUN_NAME, storage_name)
+    generate_training_data_for_run(TEST_RUN_NAME, STORAGE_NAME)
