@@ -23,8 +23,9 @@ from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
 
 
 TEST_RUN_NAME = 'pll_id_01'  #'test_004'
-SYSTEM_NAME = 'bundlesdf_napkin'  #'bundlesdf_cube'
-STORAGE_NAME = '/home/bibit/Desktop'
+SYSTEM_NAME = 'vision_cube'  #'bundlesdf_cube'
+ASSET_NAME = 'cube_1'
+STORAGE_NAME = op.join(file_utils.RESULTS_DIR, SYSTEM_NAME, ASSET_NAME, 'bundlesdf_iteration_1')
     # file_utils.assure_created(op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
 
 # Hyperparameters for querying into and out of the object at an SDF=0 point.
@@ -82,7 +83,7 @@ DO_GRADIENT_DATA_TEST = False
 DO_UNIQUENESS_SCORE_TEST = False
 DO_DOUBLE_UNIQUENESS_SCORE_TEST = False
 DO_SUPPORT_POINT_SNAPPING_TEST = False
-DO_ALL_VISUALIZATIONS_FOR_RUN_TEST = True
+DO_ALL_VISUALIZATIONS_FOR_RUN_TEST = False
 
 
 # ========================= Data Generation Helpers ========================== #
@@ -1008,7 +1009,7 @@ def visualize_point_uniquenesses(
         assert pts.ndim == 2
         assert uniqueness.ndim == 1
         assert pts.shape[1] == 3
-        assert type(ax) == Axes3D
+        assert isinstance(ax, Axes3D), "type(ax) = {}".format(type(ax))
 
         if is_position_not_direction:
             color_scale = ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], 
@@ -1228,7 +1229,7 @@ def load_deep_support_convex_network(run_name: str, system: str
 # ======================== End of Function Definitions ======================= #
 
 if __name__ == '__main__':
-    pdb.set_trace()
+    # pdb.set_trace()
 
     # Tests.
     if DO_SMALL_FILTERING_AND_VISUALIZATION_TEST:

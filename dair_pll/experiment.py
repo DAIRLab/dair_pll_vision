@@ -482,7 +482,12 @@ class SupervisedLearningExperiment(ABC):
         # pylint: disable=E1103
         valid_loss_key = f'{VALID_SET}_{LEARNED_SYSTEM_NAME}_{LOSS_NAME}' \
                          f'_{AVERAGE_TAG}'
-        valid_loss = 0.0 \
+        
+        # valid_loss = statistics[f'{TRAIN_SET}_{LEARNED_SYSTEM_NAME}_{TRAJECTORY_ERROR_NAME}_{AVERAGE_TAG}'] \
+        #     if valid_loss_key not in statistics \
+        #     else statistics[valid_loss_key]
+        valid_loss = statistics[f'{TRAIN_SET}_{LEARNED_SYSTEM_NAME}_'
+                   f'{LOSS_NAME}_{AVERAGE_TAG}'] \
             if valid_loss_key not in statistics \
             else statistics[valid_loss_key]
         return torch.tensor(valid_loss)
