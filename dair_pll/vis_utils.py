@@ -32,7 +32,7 @@ LEARNED_SYSTEM_DEFAULT_COLOR = BLUE
 PERCEPTION_COLOR_GROUP = 'phong'
 PERCEPTION_COLOR_PROPERTY = 'diffuse'
 LEARNED_TAG = '__learned__'
-GEOMETRY_INSPECTION_TRAJECTORY_LENGTH = 1000
+GEOMETRY_INSPECTION_TRAJECTORY_LENGTH = 360
 HALF_STEPS = int(GEOMETRY_INSPECTION_TRAJECTORY_LENGTH/2)
 
 FULL_SPIN_HALF_TIME = torch.stack([
@@ -69,11 +69,9 @@ def get_geometry_inspection_trajectory(learned_system: DrakeSystem) -> Tensor:
 
     # Rotation and articulation depend on if there's articulation or not.
     if n_q == 7:
-        rotation_piece = torch.cat(
+        trajectory = torch.cat(
             (FULL_SPIN_HALF_TIME, LINEAR_LOCATION_HALF_TIME, vels), dim=1)
 
-        trajectory = torch.cat((rotation_piece, rotation_piece), dim=0)
-        
     elif n_q == 8:
         rotation_piece = torch.cat(
             (FULL_SPIN_HALF_TIME, LINEAR_LOCATION_HALF_TIME,
