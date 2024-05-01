@@ -167,3 +167,6 @@ dmypy.json
 *.pth
 
 .pylintrc
+
+# All vision-related trajectories
+assets/vision_*/
