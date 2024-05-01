@@ -572,11 +572,11 @@ class MultibodyTerms(Module):
                     friction_coefficients[geometry_index].item()
 
                 if isinstance(geometry, DeepSupportConvex):
-                    print('>>>>>>>>>>>>', self.pretrained_icnn_weights_filepath)
-                    if self.pretrained_icnn_weights_filepath is not None:
-                        print(f'Loading pretrained ICNN weight from ' \
-                              + f'{self.pretrained_icnn_weights_filepath}')
-                        geometry.load_weights(self.pretrained_icnn_weights_filepath)
+                    # print('>>>>>>>>>>>>', self.pretrained_icnn_weights_filepath)
+                    # if self.pretrained_icnn_weights_filepath is not None:
+                    #     print(f'Loading pretrained ICNN weight from ' \
+                    #           + f'{self.pretrained_icnn_weights_filepath}')
+                    #     geometry.load_weights(self.pretrained_icnn_weights_filepath)
                     geometry_mesh = extract_mesh(geometry.network)
                     meshes[body_id] = geometry_mesh
                     vertices = geometry_mesh.vertices
@@ -591,13 +591,13 @@ class MultibodyTerms(Module):
                         f'{body_id}_center_{axis}': value.item()
                         for axis, value in zip(['x', 'y', 'z'], center)
                     })
-                    if self.pretrained_icnn_weights_filepath is not None:
-                        print(f'Saving trained weight to ' \
-                              + f'{self.pretrained_icnn_weights_filepath}')
-                        geometry.save_weights(self.pretrained_icnn_weights_filepath)
-                    else:
-                        print(f'Saving trained weight to icnn_weight_trained.pth')
-                        geometry.save_weights(f'icnn_weight_trained.pth')
+                    # if self.pretrained_icnn_weights_filepath is not None:
+                    #     print(f'Saving trained weight to ' \
+                    #           + f'{self.pretrained_icnn_weights_filepath}')
+                    #     geometry.save_weights(self.pretrained_icnn_weights_filepath)
+                    # else:
+                    #     print(f'Saving trained weight to icnn_weight_trained.pth')
+                    #     geometry.save_weights(f'icnn_weight_trained.pth')
 
         return scalars, meshes
 

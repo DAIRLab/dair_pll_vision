@@ -22,10 +22,11 @@ from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
     EXPORT_FORCES_DEFAULT_NAME
 
 
-TEST_RUN_NAME = 'pll_id_01'  #'test_004'
+TEST_RUN_NAME = 'pll_id_p02'  #'test_004'
 SYSTEM_NAME = 'vision_cube'  #'bundlesdf_cube'
-ASSET_NAME = 'cube_1'
-STORAGE_NAME = op.join(file_utils.RESULTS_DIR, SYSTEM_NAME, ASSET_NAME, 'bundlesdf_iteration_1')
+ASSET_NAME = 'cube_2'
+STORAGE_NAME = op.join(file_utils.RESULTS_DIR, SYSTEM_NAME, ASSET_NAME,
+                       'bundlesdf_iteration_1')
     # file_utils.assure_created(op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
 
 # Hyperparameters for querying into and out of the object at an SDF=0 point.
@@ -1534,49 +1535,56 @@ if __name__ == '__main__':
               'filtered mesh samples.')
         visualize_gradients(mesh, sample_points_cf, mesh_ws, mesh_w_normals)
 
-        # Redistribute the contact points to be more geometrically balanced
-        # (this will decrease the number of contacts/directions considered).
-        snap_thresh = 0.2
-        balanced_contacts, balanced_directions = rebalance_contact_points(
-            mesh, contact_points, contact_directions,
-            snapping_threshold=snap_thresh
-        )
-        print('\tRedistributing for geometric balance, with snap threshold ' + \
-              f'of {snap_thresh} meters.')
-        print(f'\t-> Went from {len(contact_points)} to ' + \
-            f'{len(balanced_contacts)} support points ' + \
-            f'({len(balanced_contacts)/len(contact_points)*100:.3f}%).')
+        if DO_SUPPORT_POINT_REBALANCING:
+            # Redistribute the contact points to be more geometrically balanced
+            # (this will decrease the number of contacts/directions considered).
+            snap_thresh = 0.2
+            balanced_contacts, balanced_directions = rebalance_contact_points(
+                mesh, contact_points, contact_directions,
+                snapping_threshold=snap_thresh
+            )
+            print('\tRedistributing for geometric balance, with snap ' + \
+                  f'threshold of {snap_thresh} meters.')
+            print(f'\t-> Went from {len(contact_points)} to ' + \
+                f'{len(balanced_contacts)} support points ' + \
+                f'({len(balanced_contacts)/len(contact_points)*100:.3f}%).')
 
-        print(f'\tComputing uniqueness values of original supports.')
-        cont_pos_uniq, cont_dir_uniq = \
-            compute_position_and_direction_uniquenesses(
-                contact_points, contact_directions)
-        print(f'\tComputing uniqueness values of snapped samples.')
-        bal_pos_uniq, bal_dir_uniq = \
-            compute_position_and_direction_uniquenesses(
-                balanced_contacts, balanced_directions)
+            print(f'\tComputing uniqueness values of original supports.')
+            cont_pos_uniq, cont_dir_uniq = \
+                compute_position_and_direction_uniquenesses(
+                    contact_points, contact_directions)
+            print(f'\tComputing uniqueness values of snapped samples.')
+            bal_pos_uniq, bal_dir_uniq = \
+                compute_position_and_direction_uniquenesses(
+                    balanced_contacts, balanced_directions)
+
+            print('\tVisualizing uniqueness before and after geometry-' + \
+                'based rebalancing.')
+            visualize_point_uniquenesses(
+                contact_points, contact_directions,
+                cont_pos_uniq, cont_dir_uniq,
+                second_points=balanced_contacts,
+                second_directions=balanced_directions,
+                second_pos_uniqueness=bal_pos_uniq,
+                second_dir_uniqueness=bal_dir_uniq
+            )
+
+        else:
+            print(f'\tSKIPPING support point rebalancing.')
+            balanced_contacts = contact_points
+            balanced_directions = contact_directions
         
-        print('\tVisualizing uniqueness before and after geometry-based ' + \
-            'rebalancing.')
-        visualize_point_uniquenesses(
-            contact_points, contact_directions, cont_pos_uniq, cont_dir_uniq,
-            second_points=balanced_contacts,
-            second_directions=balanced_directions,
-            second_pos_uniqueness=bal_pos_uniq,
-            second_dir_uniqueness=bal_dir_uniq
-        )
-        
-        # Generate training data from the redistributed contact points.
+        # Generate training data from the (maybe) redistributed contact points.
         contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
-            generate_training_data(balanced_contacts, balanced_directions)
+            generate_training_data(contact_points, contact_directions)
         
         print('\tVisualizing the samples.')
         visualize_sdfs(sample_points_cf, sample_normals_cf, ps=contact_ps,
-                    sdfs=contact_sdfs, vs=contact_vs,
-                    sdf_bounds=contact_sdf_bounds, show_vs=False)
+                       sdfs=contact_sdfs, vs=contact_vs,
+                       sdf_bounds=contact_sdf_bounds, show_vs=False)
         visualize_sdfs(sample_points_cf, sample_normals_cf, ps=contact_ps,
-                    sdfs=contact_sdfs, vs=contact_vs,
-                    sdf_bounds=contact_sdf_bounds, show_vs=True)
+                       sdfs=contact_sdfs, vs=contact_vs,
+                       sdf_bounds=contact_sdf_bounds, show_vs=True)
         
         # Don't save the generated data since just a visualization test.
 
@@ -1585,8 +1593,9 @@ if __name__ == '__main__':
             mesh, sample_points, sample_normals, contact_points, \
             contact_directions, sample_points_cf, sample_normals_cf, mesh_ws, \
             mesh_w_normals, balanced_contacts, balanced_directions, \
-            cont_pos_uniq, cont_dir_uniq, bal_pos_uniq, bal_dir_uniq, \
             contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds
+        if DO_SUPPORT_POINT_REBALANCING:
+            del cont_pos_uniq, cont_dir_uniq, bal_pos_uniq, bal_dir_uniq
         print('Done with all visualizations for run test.')
 
 
