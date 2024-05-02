@@ -69,6 +69,13 @@ PATIENCE = 100 #EPOCHS
 
 WANDB_PROJECT = 'dair_pll-vision'
 
+# Loss term weights.
+W_PRED = 1.0
+W_COMP = 1.0
+W_DISS = 1.0
+W_PEN = 20.0
+W_BSDF = 1.0
+
 
 def get_storage_names(system: str, start_toss: int, end_toss: int,
                       cycle_iteration: int) -> Tuple[str, str, str]:
@@ -103,6 +110,7 @@ def main(pll_run_id: str = "",
          contactnets: bool = True,
          regenerate: bool = False,
          pretrained_icnn_weights_filepath: str = None,
+         make_videos: bool = True,
          clear_data: bool = False):
     """Execute ContactNets basic example on a system.
 
@@ -114,6 +122,9 @@ def main(pll_run_id: str = "",
         regenerate: Whether save updated URDF's each epoch.
         pretrained_icnn_weights_filepath: Filepath to set of pretrained
           ICNN weights.
+        make_videos: Whether to generate rollout and geometry videos for every
+          epoch or not.  Skipping generating these saves a lot of time (10x or
+          more speedup).
         clear_data: Whether to clear storage folder before running.
     """
     # pylint: disable=too-many-locals, too-many-arguments
@@ -166,7 +177,8 @@ def main(pll_run_id: str = "",
         MultibodyLosses.PREDICTION_LOSS
     learnable_config = MultibodyLearnableSystemConfig(
       urdfs=urdfs, loss=loss,
-      pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath
+      pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
+      w_pred=W_PRED, w_comp=W_COMP, w_diss=W_DISS, w_pen=W_PEN, w_bsdf=W_BSDF
     )
 
     # How to slice trajectories into training datapoints.
@@ -195,6 +207,7 @@ def main(pll_run_id: str = "",
         data_config=data_config,
         full_evaluation_period=1,
         visualize_learned_geometry=True,
+        generate_videos_throughout=make_videos,
         run_wandb=True,
         wandb_project=WANDB_PROJECT
     )
@@ -251,18 +264,23 @@ def main(pll_run_id: str = "",
               help="whether to train/test with ContactNets/prediction loss.")
 @click.option('--regenerate/--no-regenerate',
               default=False,
-              help="whether save updated URDF's each epoch.")
+              help="whether to save updated URDFs each epoch.")
 @click.option('--pretrained',
               type=str,
               default=None,
               help='pretrained weights of Homonogeneous ICNN')
+@click.option('--make-videos/--skip-videos',
+              default=True,
+              help="whether to generate videos for every epoch to inspect " + \
+                "the learned geometry and predicted rollouts (saves time to" + \
+                " skip generating these).")
 @click.option('--clear-data/--keep-data',
               default=False,
-              help="Whether to clear experiment results folder before running.")
+              help="whether to clear experiment results folder before running.")
 
 def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
                  bundlesdf_id: str, contactnets: bool, regenerate: bool,
-                 pretrained: str, clear_data: bool):
+                 pretrained: str, make_videos: bool, clear_data: bool):
     # First decode the system and start/end tosses from the provided asset
     # directory.
     assert '_' in vision_asset, f'Invalid asset directory: {vision_asset}.'
@@ -276,7 +294,7 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
         f'-{end_toss} inferred from {vision_asset=}.'
 
     main(run_name, system, start_toss, end_toss, cycle_iteration, bundlesdf_id,
-         contactnets, regenerate, pretrained, clear_data)
+         contactnets, regenerate, pretrained, make_videos, clear_data)
 
 
 

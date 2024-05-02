@@ -52,6 +52,7 @@ class MultibodyLearnableSystem(System):
     def __init__(self,
                  init_urdfs: Dict[str, str],
                  dt: float,
+                 loss_weights_dict: dict,
                  output_urdfs_dir: Optional[str] = None,
                  pretrained_icnn_weights_filepath: Optional[str] = None) -> None:
         """Inits :py:class:`MultibodyLearnableSystem` with provided model URDFs.
@@ -65,6 +66,9 @@ class MultibodyLearnableSystem(System):
             init_urdfs: Names and corresponding URDFs to model with
                 :py:class:`MultibodyTerms`.
             dt: Time step of system in seconds.
+            loss_weights_dict: Dictionary of weights for the vision loss.
+                Requires keys 'w_pred', 'w_comp', 'w_pen', 'w_diss', and
+                'w_bsdf'.
             output_urdfs_dir: Optionally, a directory that learned URDFs can be
                 written to.
             pretrained_icnn_weights_filepath: Filepath of a set of pretrained
@@ -85,6 +89,13 @@ class MultibodyLearnableSystem(System):
         self.dt = dt
         self.set_carry_sampler(lambda: Tensor([False]))
         self.max_batch_dim = 1
+
+        # Save the loss weights.
+        self.w_pred = loss_weights_dict['w_pred']
+        self.w_comp = loss_weights_dict['w_comp']
+        self.w_pen = loss_weights_dict['w_pen']
+        self.w_diss = loss_weights_dict['w_diss']
+        self.w_bsdf = loss_weights_dict['w_bsdf']
 
     def generate_updated_urdfs(self, epoch: int = None) -> Dict[str, str]:
         """Exports current parameterization as a :py:class:`DrakeSystem`.
@@ -145,14 +156,44 @@ class MultibodyLearnableSystem(System):
         Returns:
             (\*,) loss batch.
         """
+        loss_pred, loss_comp, loss_pen, loss_diss = \
+            self.calculate_contactnets_loss_terms(x, u, x_plus)
+
+        loss = (self.w_pred * loss_pred) + (self.w_comp * loss_comp) + \
+               (self.w_pen * loss_pen) + (self.w_diss * loss_diss)
+
+        return loss
+
+    def calculate_contactnets_loss_terms(
+            self, x: Tensor, u: Tensor, x_plus: Tensor
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Helper function for
+        :py:meth:`MultibodyLearnableSystem.contactnets_loss` that returns the
+        individual pre-weighted loss contributions:
+            * Prediction
+            * Complementarity
+            * Penetration
+            * Dissipation
+
+        Args:
+            x: (*, space.n_x) current state batch.
+            u: (*, ?) input batch.
+            x_plus: (*, space.n_x) current state batch.
+
+        Returns:
+            (*,) prediction error loss.
+            (*,) complementarity violation loss.
+            (*,) penetration loss.
+            (*,) dissipation violation loss.
+        """
         # pylint: disable-msg=too-many-locals
         v = self.space.v(x)
         q_plus, v_plus = self.space.q_v(x_plus)
         dt = self.dt
         eps = 1e-3
 
-        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B = self.multibody_terms(
-            q_plus, v_plus, u)
+        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B = \
+            self.multibody_terms(q_plus, v_plus, u)
 
         n_contacts = phi.shape[-1]
         reorder_mat = tensor_utils.sappy_reorder_mat(n_contacts)
@@ -180,24 +221,22 @@ class MultibodyLearnableSystem(System):
         q_pred = -pbmm(J, dv.transpose(-1, -2))
         q_comp = torch.abs(phi_then_zero).unsqueeze(-1)
         q_diss = dt * torch.cat((sliding_speeds, sliding_velocities), dim=-2)
-        q = q_pred + q_comp + q_diss
 
-        penetration_penalty = (torch.maximum(
-            -phi, torch.zeros_like(phi))**2).sum(dim=-1)
+        # Implement ContactNets loss weighting -- for solving for the forces,
+        # normalize based on w_pred.
+        q = q_pred + (self.w_comp/self.w_pred)*q_comp + \
+                     (self.w_diss/self.w_pred)*q_diss
 
-        penetration_penalty = penetration_penalty.reshape(
-            penetration_penalty.shape + (1, 1)) * 20. #100.
+        c_pen = (torch.maximum(-phi, torch.zeros_like(phi))**2).sum(dim=-1)
+        c_pen = c_pen.reshape(c_pen.shape + (1, 1))
 
-        constant = 0.5 * pbmm(dv, pbmm(M, dv.transpose(
-            -1, -2))) + penetration_penalty
+        c_pred = 0.5 * pbmm(dv, pbmm(M, dv.transpose(-1, -2)))
 
         # Envelope theorem guarantees that gradient of loss w.r.t. parameters
         # can ignore the gradient of the force w.r.t. the QCQP parameters.
         # Therefore, we can detach ``force`` from pytorch's computation graph
         # without causing error in the overall loss gradient.
         # pylint: disable=E1103
-        #force = self.solver.apply(Q, q, torch.rand(q.shape), 1e-7, 1000, 1e-7,
-        #                          loss_pool).detach()
         force = pbmm(
             reorder_mat,
             self.solver.apply(
@@ -210,13 +249,18 @@ class MultibodyLearnableSystem(System):
                             dim=-2,
                             keepdim=True)
 
-        constant[invalid] *= 0.
+        c_pred[invalid] *= 0.
+        c_pen[invalid] *= 0.
         force[invalid.expand(force.shape)] = 0.
 
-        loss = 0.5 * pbmm(force.transpose(-1, -2), pbmm(Q, force)) + pbmm(
-            force.transpose(-1, -2), q) + constant
+        loss_pred = 0.5 * pbmm(force.transpose(-1, -2), pbmm(Q, force)) \
+                    + pbmm(force.transpose(-1, -2), q_pred) + c_pred
+        loss_comp = pbmm(force.transpose(-1, -2), q_comp)
+        loss_pen = c_pen
+        loss_diss = pbmm(force.transpose(-1, -2), q_diss)
 
-        return loss.squeeze(-1).squeeze(-1)
+        return loss_pred.reshape(-1), loss_comp.reshape(-1), \
+               loss_pen.reshape(-1), loss_diss.reshape(-1)
 
     def forward_dynamics(self,
                          q: Tensor,

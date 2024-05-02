@@ -11,7 +11,8 @@ import pickle
 import random
 from copy import deepcopy
 from os import path
-from typing import List, Callable, BinaryIO, Any, TextIO, Optional, Union, Dict
+from typing import List, Callable, BinaryIO, Any, TextIO, Optional, Tuple, \
+    Union, Dict
 
 import torch
 from torch import Tensor
@@ -34,6 +35,8 @@ WANDB_SUBFOLDER_NAME = 'wandb'
 BSDF_SUBFOLDER_NAME = 'geom_for_bsdf'
 BSDF_FROM_SUPPORT_SUBSUBFOLDER_NAME = 'from_support_points'
 BSDF_FROM_MESH_SUBSUBFOLDER_NAME = 'from_mesh_surface'
+BSDF_SUPPORT_DIRECTIONS_NAME = 'support_directions.pt'
+BSDF_SUPPORT_POINTS_NAME = 'support_points.pt'
 EXPORT_POINTS_DEFAULT_NAME = 'support_points.pt'
 EXPORT_DIRECTIONS_DEFAULT_NAME = 'support_directions.pt'
 EXPORT_FORCES_DEFAULT_NAME = 'support_point_normal_forces.pt'
@@ -338,8 +341,42 @@ def wandb_dir(storage_name: str, run_name: str) -> str:
         path.join(run_dir(storage_name, run_name), WANDB_SUBFOLDER_NAME))
 
 
+def geom_for_pll_dir(asset_subdirs: str, bundlesdf_id: str,
+                     check_exists: bool = True) -> str:
+    """Absolute path of geometry for PLL (a PLL input) storage folder"""
+    geom_input_dir = path.join(get_asset(asset_subdirs), bundlesdf_id)
+    if check_exists:
+        assert path.exists(geom_input_dir), f'No BundleSDF geometry input ' + \
+            f'found at {geom_input_dir}'
+    return geom_input_dir
+
+
+def get_bundlesdf_geometry_data(asset_subdirs: str, bundlesdf_id: str) -> \
+        Tuple[Tensor, Tensor]:
+    """Load geometry data from BundleSDF."""
+    geom_input_dir = geom_for_pll_dir(asset_subdirs, bundlesdf_id)
+    assert BSDF_SUPPORT_DIRECTIONS_NAME in os.listdir(geom_input_dir) and \
+        BSDF_SUPPORT_POINTS_NAME in os.listdir(geom_input_dir), \
+        f'BundleSDF geometry input at {geom_input_dir} is incomplete; ' + \
+        f'missing {BSDF_SUPPORT_DIRECTIONS_NAME} or {BSDF_SUPPORT_POINTS_NAME}.'
+
+    bsdf_dirs = torch.load(path.join(geom_input_dir,
+                                     BSDF_SUPPORT_DIRECTIONS_NAME))
+    bsdf_pts = torch.load(path.join(geom_input_dir, BSDF_SUPPORT_POINTS_NAME))
+
+    assert bsdf_dirs.shape == bsdf_pts.shape, f'Expected BundleSDF support ' + \
+        f'directions and points to have same shape, got {bsdf_dirs.shape} ' + \
+        f'and {bsdf_pts.shape} respectively.'
+    assert bsdf_dirs.ndim == 2, f'Expected BundleSDF support directions ' + \
+        f'and points to be (N, 3) but got shape {bsdf_dirs.shape}.'
+    assert bsdf_dirs.shape[1] == 3, f'Expected BundleSDF support ' + \
+        f'directions and points to be (N, 3) but got shape {bsdf_dirs.shape}.'
+
+    return bsdf_dirs, bsdf_pts
+
+
 def geom_for_bsdf_dir(storage_name: str, run_name: str) -> str:
-    """Absolute path of geometry for BundleSDF storage folder"""
+    """Absolute path of geometry for BundleSDF (a PLL output) storage folder"""
     return assure_created(
         path.join(run_dir(storage_name, run_name), BSDF_SUBFOLDER_NAME))
 

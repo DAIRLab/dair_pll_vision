@@ -378,18 +378,22 @@ class SupervisedLearningExperiment(ABC):
         # pylint: disable=unused-argument
         return SystemSummary()
 
-    def write_to_wandb(self, epoch: int, learned_system: System,
-                       statistics: Dict) -> None:
-        """Extracts and writes summary of training progress to Tensorboard.
+    def build_epoch_vars_and_system_summary(self, statistics: Dict,
+        learned_system: System, skip_videos=True) -> Tuple[Dict, SystemSummary]:
+        """Build epoch variables and system summary for learning process.
 
         Args:
-            epoch: Current epoch.
-            learned_system: System being trained.
             statistics: Summary statistics for learning process.
+            learned_system: System being trained.
+            skip_videos: Whether to skip making videos or not.
+
+        Returns:
+            Dictionary of scalars to log.
+            System summary.
         """
         # begin recording wall-clock logging time.
-        assert self.wandb_manager is not None
         start_log_time = time.time()
+
         epoch_vars = {}
         for stats_set in TRAIN_TIME_SETS:
             for variable in EVALUATION_VARIABLES:
@@ -400,8 +404,9 @@ class SupervisedLearningExperiment(ABC):
 
         learned_system_summary = learned_system.summary(statistics)
 
-        comparison_summary = self.base_and_learned_comparison_summary(
-            statistics, learned_system)
+        if not skip_videos:
+            comparison_summary = self.base_and_learned_comparison_summary(
+                statistics, learned_system)
 
         epoch_vars.update(learned_system_summary.scalars)
         logging_duration = time.time() - start_log_time
@@ -409,11 +414,33 @@ class SupervisedLearningExperiment(ABC):
         epoch_vars.update(
             {duration: statistics[duration] for duration in ALL_DURATIONS})
 
-        epoch_vars.update(comparison_summary.scalars)
+        if not skip_videos:
+            epoch_vars.update(comparison_summary.scalars)
+            learned_system_summary.videos.update(comparison_summary.videos)
+            learned_system_summary.meshes.update(comparison_summary.meshes)
 
-        learned_system_summary.videos.update(comparison_summary.videos)
+        return epoch_vars, learned_system_summary
 
-        learned_system_summary.meshes.update(comparison_summary.meshes)
+    def write_to_wandb(self, epoch: int, learned_system: System,
+                       statistics: Dict) -> None:
+        """Extracts and writes summary of training progress to Tensorboard.
+
+        Args:
+            epoch: Current epoch.
+            learned_system: System being trained.
+            statistics: Summary statistics for learning process.
+        """
+        assert self.wandb_manager is not None
+
+        # To save space on W&B storage, only generate comparison videos at first
+        # and best epoch, the latter of which is implemented in
+        # :meth:`_evaluation`.
+        skip_videos = not self.config.generate_videos_throughout
+        skip_videos = False #if epoch==0 else True
+
+        epoch_vars, learned_system_summary = \
+            self.build_epoch_vars_and_system_summary(statistics, learned_system,
+                                                     skip_videos=skip_videos)
 
         self.wandb_manager.update(epoch, epoch_vars,
                                   learned_system_summary.videos,

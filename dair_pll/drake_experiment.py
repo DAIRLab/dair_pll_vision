@@ -36,6 +36,16 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """Whether to use ContactNets or prediction loss."""
     pretrained_icnn_weights_filepath: str = None
     """If provided, filepath to pretrained ICNN weights."""
+    w_pred: float = 1.0
+    """Weight of prediction term in ContactNets loss (suggested keep at 1.0)."""
+    w_comp: float = 1.0
+    """Weight of complementarity term in ContactNets loss."""
+    w_diss: float = 1.0
+    """Weight of dissipation term in ContactNets loss."""
+    w_pen: float = 20.0
+    """Weight of penetration term in ContactNets loss."""
+    w_bsdf: float = 1.0
+    """Weight of BundleSDF matching term in vision experiment loss."""
 
 
 @dataclass
@@ -43,6 +53,9 @@ class DrakeMultibodyLearnableExperimentConfig(SupervisedLearningExperimentConfig
                                              ):
     visualize_learned_geometry: bool = True
     """Whether to use learned geometry in trajectory overlay visualization."""
+    generate_videos_throughout: bool = True
+    """Whether to visualize learned geometry and rollout predictions in W&B
+    gifs throughout training."""
 
 
 class DrakeExperiment(SupervisedLearningExperiment, ABC):
@@ -202,6 +215,11 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
                                                      self.config.run_name)
         return MultibodyLearnableSystem(
             learnable_config.urdfs, self.config.data_config.dt,
+            {'w_pred': self.config.learnable_config.w_pred,
+             'w_comp': self.config.learnable_config.w_comp,
+             'w_diss': self.config.learnable_config.w_diss,
+             'w_pen': self.config.learnable_config.w_pen,
+             'w_bsdf': self.config.learnable_config.w_bsdf},
             output_urdfs_dir=output_dir,
             pretrained_icnn_weights_filepath = \
                 learnable_config.pretrained_icnn_weights_filepath
