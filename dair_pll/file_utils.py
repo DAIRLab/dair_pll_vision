@@ -32,7 +32,8 @@ RUNS_SUBFOLDER_NAME = '.'  #'runs'
 STUDIES_SUBFOLDER_NAME = 'studies'
 URDFS_SUBFOLDER_NAME = 'urdfs'
 WANDB_SUBFOLDER_NAME = 'wandb'
-BSDF_SUBFOLDER_NAME = 'geom_for_bsdf'
+GEOM_FOR_BSDF_SUBFOLDER_NAME = 'geom_for_bsdf'
+GEOM_FOR_PLL_SUBFOLDER_NAME = 'geom_for_pll'
 BSDF_FROM_SUPPORT_SUBSUBFOLDER_NAME = 'from_support_points'
 BSDF_FROM_MESH_SUBSUBFOLDER_NAME = 'from_mesh_surface'
 BSDF_SUPPORT_DIRECTIONS_NAME = 'support_directions.pt'
@@ -341,20 +342,23 @@ def wandb_dir(storage_name: str, run_name: str) -> str:
         path.join(run_dir(storage_name, run_name), WANDB_SUBFOLDER_NAME))
 
 
-def geom_for_pll_dir(asset_subdirs: str, bundlesdf_id: str,
+def geom_for_pll_dir(asset_subdirs: str, bundlesdf_id: str, iteration: int,
                      check_exists: bool = True) -> str:
     """Absolute path of geometry for PLL (a PLL input) storage folder"""
-    geom_input_dir = path.join(get_asset(asset_subdirs), bundlesdf_id)
+    geom_input_dir = path.join(
+        get_asset(asset_subdirs), GEOM_FOR_PLL_SUBFOLDER_NAME,
+        f'bundlesdf_iteration_{iteration}', bundlesdf_id
+    )
     if check_exists:
         assert path.exists(geom_input_dir), f'No BundleSDF geometry input ' + \
             f'found at {geom_input_dir}'
     return geom_input_dir
 
 
-def get_bundlesdf_geometry_data(asset_subdirs: str, bundlesdf_id: str) -> \
-        Tuple[Tensor, Tensor]:
+def get_bundlesdf_geometry_data(asset_subdirs: str, bundlesdf_id: str,
+                                iteration: int) -> Tuple[Tensor, Tensor]:
     """Load geometry data from BundleSDF."""
-    geom_input_dir = geom_for_pll_dir(asset_subdirs, bundlesdf_id)
+    geom_input_dir = geom_for_pll_dir(asset_subdirs, bundlesdf_id, iteration)
     assert BSDF_SUPPORT_DIRECTIONS_NAME in os.listdir(geom_input_dir) and \
         BSDF_SUPPORT_POINTS_NAME in os.listdir(geom_input_dir), \
         f'BundleSDF geometry input at {geom_input_dir} is incomplete; ' + \
@@ -378,7 +382,7 @@ def get_bundlesdf_geometry_data(asset_subdirs: str, bundlesdf_id: str) -> \
 def geom_for_bsdf_dir(storage_name: str, run_name: str) -> str:
     """Absolute path of geometry for BundleSDF (a PLL output) storage folder"""
     return assure_created(
-        path.join(run_dir(storage_name, run_name), BSDF_SUBFOLDER_NAME))
+        path.join(run_dir(storage_name, run_name), GEOM_FOR_BSDF_SUBFOLDER_NAME))
 
 
 def store_geom_for_bsdf(storage_name: str, run_name: str, points: Tensor,

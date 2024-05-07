@@ -259,7 +259,8 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         # Next load a random subset of the BundleSDF data.
         bsdf_dirs, bsdf_pts = file_utils.get_bundlesdf_geometry_data(
             self.config.data_config.asset_subdirectories,
-            self.config.data_config.bundlesdf_id
+            self.config.data_config.bundlesdf_id,
+            iteration = int(self.config.data_config.tracker.split('_')[-1])
         )
         n_points = bsdf_pts.shape[0]
         n_random_points = min(1000, n_points)
@@ -267,8 +268,8 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         dirs, pts = bsdf_dirs[random_indices], bsdf_pts[random_indices]
 
         # Finally, compute the loss.
-        loss = (torch.linalg.norm(pts - deep_support_network(dirs), dim=1)**2
-                ).mean()
+        loss = torch.linalg.norm(pts - deep_support_network(dirs), dim=1)**2
+        loss = loss.mean()
         return loss
 
     def write_to_wandb(self, epoch: int, learned_system: System,
