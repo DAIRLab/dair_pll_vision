@@ -38,6 +38,7 @@ BSDF_FROM_SUPPORT_SUBSUBFOLDER_NAME = 'from_support_points'
 BSDF_FROM_MESH_SUBSUBFOLDER_NAME = 'from_mesh_surface'
 BSDF_SUPPORT_DIRECTIONS_NAME = 'support_directions.pt'
 BSDF_SUPPORT_POINTS_NAME = 'support_points.pt'
+BSDF_MESH_FILENAME = 'mesh.obj'
 EXPORT_POINTS_DEFAULT_NAME = 'support_points.pt'
 EXPORT_DIRECTIONS_DEFAULT_NAME = 'support_directions.pt'
 EXPORT_FORCES_DEFAULT_NAME = 'support_point_normal_forces.pt'
@@ -377,6 +378,22 @@ def get_bundlesdf_geometry_data(asset_subdirs: str, bundlesdf_id: str,
         f'directions and points to be (N, 3) but got shape {bsdf_dirs.shape}.'
 
     return bsdf_dirs, bsdf_pts
+
+
+def get_mesh_from_bundlesdf(asset_subdirs: str, bundlesdf_id: str,
+                            iteration: int) -> str:
+    """Load mesh data from BundleSDF."""
+    geom_input_dir = geom_for_pll_dir(asset_subdirs, bundlesdf_id, iteration)
+    assert BSDF_MESH_FILENAME in os.listdir(geom_input_dir), \
+        f'BundleSDF geometry input at {geom_input_dir} is incomplete; ' + \
+        f'missing {BSDF_MESH_FILENAME}.'
+
+    return os.path.join(geom_input_dir, BSDF_MESH_FILENAME)
+
+
+def get_vision_urdf_template_path() -> str:
+    """Return the path to the vision URDF template file."""
+    return get_asset('vision_template.urdf')
 
 
 def geom_for_bsdf_dir(storage_name: str, run_name: str) -> str:

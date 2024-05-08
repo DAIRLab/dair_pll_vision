@@ -70,11 +70,11 @@ PATIENCE = 100 #EPOCHS
 WANDB_PROJECT = 'dair_pll-vision'
 
 # Loss term weights.
-W_PRED = 1.0
-W_COMP = 1.0
-W_DISS = 1.0
-W_PEN = 20.0
-W_BSDF = 1.0
+DEFAULT_W_PRED = 1.0
+DEFAULT_W_COMP = 1.0
+DEFAULT_W_DISS = 1.0
+DEFAULT_W_PEN = 20.0
+DEFAULT_W_BSDF = 1.0
 
 
 def get_storage_names(system: str, start_toss: int, end_toss: int,
@@ -100,6 +100,31 @@ def get_storage_names(system: str, start_toss: int, end_toss: int,
         f'bundlesdf_iteration_{cycle_iteration}'
     return asset_name, tracker, op.join(system, asset_name, tracker)
 
+
+def make_urdf_with_bundlesdf_mesh(
+        system: str, vision_asset: str, bundlesdf_id: str,
+        cycle_iteration: int, storage_name: str, pll_id: str) -> str:
+    """To use BundleSDF mesh as geometry for comparison, copy the mesh from the
+    BundleSDF outputs in the PLL assets directory to the PLL run directory along
+    with a URDF template that will reference the mesh.  Returns the path to the
+    created URDF file."""
+    if not bundlesdf_id.startswith('bundlesdf_id_'):
+        bundlesdf_id = f'bundlesdf_id_{bundlesdf_id}'
+
+    asset_subdirs = op.join(system, vision_asset)
+    bundlesdf_mesh_filepath = file_utils.get_mesh_from_bundlesdf(
+        asset_subdirs, bundlesdf_id, cycle_iteration)
+    urdf_template_filepath = file_utils.get_vision_urdf_template_path()
+
+    target_dir = file_utils.run_dir(storage_name, pll_id)
+    target_mesh_filepath = op.join(target_dir, 'bundlesdf_mesh.obj')
+    target_urdf_filepath = op.join(target_dir, 'with_bundlesdf_mesh.urdf')
+
+    os.system(f'cp {bundlesdf_mesh_filepath} {target_mesh_filepath}')
+    os.system(f'cp {urdf_template_filepath} {target_urdf_filepath}')
+
+    return target_urdf_filepath
+
     
 def main(pll_run_id: str = "",
          system: str = VISION_CUBE_SYSTEM,
@@ -111,7 +136,13 @@ def main(pll_run_id: str = "",
          regenerate: bool = False,
          pretrained_icnn_weights_filepath: str = None,
          make_videos: bool = True,
-         clear_data: bool = False):
+         clear_data: bool = False,
+         w_pred: float = DEFAULT_W_PRED,
+         w_comp: float = DEFAULT_W_COMP,
+         w_diss: float = DEFAULT_W_DISS,
+         w_pen: float = DEFAULT_W_PEN,
+         w_bsdf: float = DEFAULT_W_BSDF,
+         use_bundlesdf_mesh: bool = True):
     """Execute ContactNets basic example on a system.
 
     Args:
@@ -126,6 +157,14 @@ def main(pll_run_id: str = "",
           epoch or not.  Skipping generating these saves a lot of time (10x or
           more speedup).
         clear_data: Whether to clear storage folder before running.
+        w_pred: Weight of prediction loss term.
+        w_comp: Weight of complimentarity loss term.
+        w_diss: Weight of dissipation loss term.
+        w_pen: Weight of penetration loss term.
+        w_bsdf: Weight of BundleSDF loss term.
+        use_bundlesdf_mesh: Whether to use the mesh from BundleSDF or the
+          default URDF for the system (warning: the default URDFs are not
+          origin-aligned to the BundleSDF tracking origin).
     """
     # pylint: disable=too-many-locals, too-many-arguments
     if pll_run_id == "":
@@ -140,7 +179,13 @@ def main(pll_run_id: str = "",
          + f'\n\tregenerate: {regenerate}' \
          + f'\n\twith pretrained ICNN weights at: ' \
          + f'{pretrained_icnn_weights_filepath}' \
-         + f'\n\tclear_data: {clear_data}\n')
+         + f'\n\tclear_data: {clear_data}' \
+         + f'\n\tw_pred: {w_pred}' \
+         + f'\n\tw_comp: {w_comp}' \
+         + f'\n\tw_diss: {w_diss}' \
+         + f'\n\tw_pen: {w_pen}' \
+         + f'\n\tw_bsdf: {w_bsdf}' \
+         + f'\n\tand using BundleSDF mesh: {use_bundlesdf_mesh}\n')
     
     # First step, clear out data on disk for a fresh start.
     asset_name, tracker, storage_name = get_storage_names(
@@ -165,8 +210,15 @@ def main(pll_run_id: str = "",
     # Describes the ground truth system; infers everything from the URDF.
     # This is a configuration for a DrakeSystem, which wraps a Drake simulation
     # for the described URDFs.
-    urdf_asset = URDFS[system][MESH_TYPE]
-    urdf = file_utils.get_asset(urdf_asset)
+    if use_bundlesdf_mesh and tracker != 'tagslam':
+        urdf = make_urdf_with_bundlesdf_mesh(
+            system=system, vision_asset=asset_name, bundlesdf_id=bundlesdf_id,
+            cycle_iteration=cycle_iteration, storage_name=storage_name,
+            pll_id=pll_run_id
+        )
+    else:
+        urdf_asset = URDFS[system][MESH_TYPE]
+        urdf = file_utils.get_asset(urdf_asset)
     urdfs = {system: urdf}
     base_config = DrakeSystemConfig(urdfs=urdfs)
 
@@ -178,7 +230,7 @@ def main(pll_run_id: str = "",
     learnable_config = MultibodyLearnableSystemConfig(
       urdfs=urdfs, loss=loss,
       pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
-      w_pred=W_PRED, w_comp=W_COMP, w_diss=W_DISS, w_pen=W_PEN, w_bsdf=W_BSDF
+      w_pred=w_pred, w_comp=w_comp, w_diss=w_diss, w_pen=w_pen, w_bsdf=w_bsdf
     )
 
     # How to slice trajectories into training datapoints.
@@ -277,10 +329,32 @@ def main(pll_run_id: str = "",
 @click.option('--clear-data/--keep-data',
               default=False,
               help="whether to clear experiment results folder before running.")
+@click.option('--w-pred',
+              type=float,
+              default=DEFAULT_W_PRED,
+              help="weight of prediction loss term.")
+@click.option('--w-comp',
+              type=float,
+              default=DEFAULT_W_COMP,
+              help="weight of complimentarity loss term.")
+@click.option('--w-diss',
+              type=float,
+              default=DEFAULT_W_DISS,
+              help="weight of dissipation loss term.")
+@click.option('--w-pen',
+              type=float,
+              default=DEFAULT_W_PEN,
+              help="weight of penetration loss term.")
+@click.option('--w-bsdf',
+              type=float,
+              default=DEFAULT_W_BSDF,
+              help="weight of BundleSDF loss term.")
 
 def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
                  bundlesdf_id: str, contactnets: bool, regenerate: bool,
-                 pretrained: str, make_videos: bool, clear_data: bool):
+                 pretrained: str, make_videos: bool, clear_data: bool,
+                 w_pred: float, w_comp: float, w_diss: float, w_pen: float,
+                 w_bsdf: float):
     # First decode the system and start/end tosses from the provided asset
     # directory.
     assert '_' in vision_asset, f'Invalid asset directory: {vision_asset}.'
@@ -294,7 +368,8 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
         f'-{end_toss} inferred from {vision_asset=}.'
 
     main(run_name, system, start_toss, end_toss, cycle_iteration, bundlesdf_id,
-         contactnets, regenerate, pretrained, make_videos, clear_data)
+         contactnets, regenerate, pretrained, make_videos, clear_data, w_pred,
+         w_comp, w_diss, w_pen, w_bsdf)
 
 
 

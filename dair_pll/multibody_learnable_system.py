@@ -27,13 +27,13 @@ from typing import Tuple, Optional, Dict, cast
 
 import numpy as np
 import torch
-from sappy import SAPSolver  # type: ignore
 from torch import Tensor
 
 from dair_pll import urdf_utils, tensor_utils, file_utils
 from dair_pll.drake_system import DrakeSystem
 from dair_pll.integrator import VelocityIntegrator
 from dair_pll.multibody_terms import MultibodyTerms
+from dair_pll.solvers import DynamicCvxpyLCQPLayer
 from dair_pll.system import System, \
     SystemSummary
 from dair_pll.tensor_utils import pbmm, broadcast_lorentz
@@ -46,7 +46,7 @@ class MultibodyLearnableSystem(System):
     init_urdfs: Dict[str, str]
     output_urdfs_dir: Optional[str] = None
     visualization_system: Optional[DrakeSystem]
-    solver: SAPSolver
+    solver: DynamicCvxpyLCQPLayer
     dt: float
 
     def __init__(self,
@@ -85,7 +85,7 @@ class MultibodyLearnableSystem(System):
         self.init_urdfs = init_urdfs
         self.output_urdfs_dir = output_urdfs_dir
         self.visualization_system = None
-        self.solver = SAPSolver()
+        self.solver = DynamicCvxpyLCQPLayer(self.space.n_v)
         self.dt = dt
         self.set_carry_sampler(lambda: Tensor([False]))
         self.max_batch_dim = 1
@@ -186,11 +186,16 @@ class MultibodyLearnableSystem(System):
             (*,) penetration loss.
             (*,) dissipation violation loss.
         """
+        if self.w_pred == 0:
+            assert self.w_comp==self.w_pen==self.w_diss==0, f'w_pred is 0 ' + \
+                f'so required the rest are zero too.'
+            return torch.zeros_like(x[..., 0]), torch.zeros_like(x[..., 0]), \
+                   torch.zeros_like(x[..., 0]), torch.zeros_like(x[..., 0])
+
         # pylint: disable-msg=too-many-locals
         v = self.space.v(x)
         q_plus, v_plus = self.space.q_v(x_plus)
         dt = self.dt
-        eps = 1e-3
 
         delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B = \
             self.multibody_terms(q_plus, v_plus, u)
@@ -212,7 +217,7 @@ class MultibodyLearnableSystem(System):
                                                     (n_contacts, 2)).norm(
                                                         dim=-1, keepdim=True)
 
-        Q = delassus + eps * torch.eye(3 * n_contacts)
+        Q = delassus
         J_M = pbmm(reorder_mat.transpose(-1, -2),
                    pbmm(J, torch.linalg.cholesky(torch.inverse((M)))))
 
@@ -239,10 +244,10 @@ class MultibodyLearnableSystem(System):
         # pylint: disable=E1103
         force = pbmm(
             reorder_mat,
-            self.solver.apply(
+            self.solver(
                 J_M,
-                pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1),
-                eps).detach().unsqueeze(-1))
+                pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1)
+            ).detach().unsqueeze(-1))
 
         # Hack: remove elements of ``force`` where solver likely failed.
         invalid = torch.any((force.abs() > 1e3) | force.isnan() | force.isinf(),
@@ -326,13 +331,10 @@ class MultibodyLearnableSystem(System):
         # pylint: disable=too-many-locals
         dt = self.dt
         eps = 1e6
-        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B = self.multibody_terms(
-            q, v, u)
+        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B = \
+            self.multibody_terms(q, v, u)
         n_contacts = phi.shape[-1]
         contact_filter = (broadcast_lorentz(phi) <= eps).unsqueeze(-1)
-        contact_matrix_filter = pbmm(contact_filter.int(),
-                                     contact_filter.transpose(-1,
-                                                              -2).int()).bool()
 
         reorder_mat = tensor_utils.sappy_reorder_mat(n_contacts)
         reorder_mat = reorder_mat.reshape((1,) * (delassus.dim() - 2) +
@@ -345,23 +347,16 @@ class MultibodyLearnableSystem(System):
         double_zero_vector = torch.zeros(phi.shape[:-1] + (2 * n_contacts,))
         phi_then_zero = torch.cat((phi, double_zero_vector),
                                   dim=-1).unsqueeze(-1)
-        # pylint: disable=E1103
-        Q_full = delassus + torch.eye(3 * n_contacts) * 1e-4
 
         v_minus = v + dt * non_contact_acceleration
         q_full = pbmm(J, v_minus.unsqueeze(-1)) + (1 / dt) * phi_then_zero
 
-        Q = torch.zeros_like(Q_full)
-        q = torch.zeros_like(q_full)
-        Q[contact_matrix_filter] += Q_full[contact_matrix_filter]
-        q[contact_filter] += q_full[contact_filter]
-
         impulse_full = pbmm(
             reorder_mat,
-            self.solver.apply(
+            self.solver(
                 J_M,
-                pbmm(reorder_mat.transpose(-1, -2), q_full).squeeze(-1),
-                1e-4).unsqueeze(-1))
+                pbmm(reorder_mat.transpose(-1, -2), q_full).squeeze(-1)
+            ).unsqueeze(-1))
 
         impulse = torch.zeros_like(impulse_full)
         impulse[contact_filter] += impulse_full[contact_filter]

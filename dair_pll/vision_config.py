@@ -20,6 +20,7 @@ from dair_pll.experiment import LossCallbackCallable, TrainingState, \
     LOGGING_DURATION
 from dair_pll.geometry import DeepSupportConvex
 from dair_pll.system import System
+from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 
 
 VISION_CUBE_SYSTEM = 'vision_cube'
@@ -272,7 +273,8 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         loss = loss.mean()
         return loss
 
-    def write_to_wandb(self, epoch: int, learned_system: System,
+    def write_to_wandb(self, epoch: int,
+                       learned_system: MultibodyLearnableSystem,
                        statistics: Dict) -> None:
         """In addition to extracting and writing training progress summary via
         the parent :py:meth:`Experiment.write_to_wandb` method, also make a
@@ -284,6 +286,7 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
             statistics: Summary statistics for learning process.
         """
         assert self.wandb_manager is not None
+        assert isinstance(learned_system, MultibodyLearnableSystem)
 
         # begin recording wall-clock logging time.
         start_log_time = time.time()
