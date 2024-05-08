@@ -452,10 +452,10 @@ class MultibodyLearnableSystem(System):
         # pylint: disable=E1103
         force = pbmm(
             reorder_mat,
-            self.solver.apply(
+            self.solver(
                 J_M,
                 pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1),
-                eps).detach().unsqueeze(-1))
+            ).detach().unsqueeze(-1))
 
         # Hack: remove elements of ``force`` where solver likely failed.
         invalid = torch.any((force.abs() > 1e3) | force.isnan() | force.isinf(),
