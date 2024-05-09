@@ -69,6 +69,8 @@ PATIENCE = 100 #EPOCHS
 
 WANDB_PROJECT = 'dair_pll-vision'
 
+SKIP_VIDEO_OPTIONS = ['none', 'all', 'geometry', 'rollout']
+
 # Loss term weights.
 DEFAULT_W_PRED = 1.0
 DEFAULT_W_COMP = 1.0
@@ -135,7 +137,7 @@ def main(pll_run_id: str = "",
          contactnets: bool = True,
          regenerate: bool = False,
          pretrained_icnn_weights_filepath: str = None,
-         make_videos: bool = True,
+         skip_videos: str = 'rollout',
          clear_data: bool = False,
          w_pred: float = DEFAULT_W_PRED,
          w_comp: float = DEFAULT_W_COMP,
@@ -153,9 +155,9 @@ def main(pll_run_id: str = "",
         regenerate: Whether save updated URDF's each epoch.
         pretrained_icnn_weights_filepath: Filepath to set of pretrained
           ICNN weights.
-        make_videos: Whether to generate rollout and geometry videos for every
-          epoch or not.  Skipping generating these saves a lot of time (10x or
-          more speedup).
+        skip_videos: What videos to skip generating at every epoch; can be
+          'none', 'all', 'rollout' (default), or 'geometry'.  Skipping
+          generating all of these saves a lot of time (10x or more speedup).
         clear_data: Whether to clear storage folder before running.
         w_pred: Weight of prediction loss term.
         w_comp: Weight of complimentarity loss term.
@@ -185,7 +187,8 @@ def main(pll_run_id: str = "",
          + f'\n\tw_diss: {w_diss}' \
          + f'\n\tw_pen: {w_pen}' \
          + f'\n\tw_bsdf: {w_bsdf}' \
-         + f'\n\tand using BundleSDF mesh: {use_bundlesdf_mesh}\n')
+         + f'\n\tusing BundleSDF mesh: {use_bundlesdf_mesh}' \
+         + f'\n\tand skipping video generation: {skip_videos} \n')
     
     # First step, clear out data on disk for a fresh start.
     asset_name, tracker, storage_name = get_storage_names(
@@ -250,6 +253,8 @@ def main(pll_run_id: str = "",
         bundlesdf_id=bundlesdf_id)
 
     # Combines everything into config for entire experiment.
+    gen_geom_videos = False if skip_videos in ['all', 'geometry'] else True
+    gen_pred_videos = False if skip_videos in ['all', 'rollout'] else True
     experiment_config = VisionExperimentConfig(
         storage=file_utils.storage_dir(storage_name),
         run_name=pll_run_id,
@@ -259,7 +264,8 @@ def main(pll_run_id: str = "",
         data_config=data_config,
         full_evaluation_period=1,
         visualize_learned_geometry=True,
-        generate_videos_throughout=make_videos,
+        generate_video_predictions_throughout=gen_pred_videos,
+        generate_video_geometries_throughout=gen_geom_videos,
         run_wandb=True,
         wandb_project=WANDB_PROJECT
     )
@@ -267,7 +273,6 @@ def main(pll_run_id: str = "",
     # Makes experiment.
     print('Making experiment.')
     experiment = VisionExperiment(experiment_config)
-    # pdb.set_trace()
 
     # No need to prepare data for vision experiments since all assets from the
     # asset directory are used.
@@ -321,11 +326,11 @@ def main(pll_run_id: str = "",
               type=str,
               default=None,
               help='pretrained weights of Homonogeneous ICNN')
-@click.option('--make-videos/--skip-videos',
-              default=True,
-              help="whether to generate videos for every epoch to inspect " + \
-                "the learned geometry and predicted rollouts (saves time to" + \
-                " skip generating these).")
+@click.option('--skip-videos',
+              type=click.Choice(SKIP_VIDEO_OPTIONS),
+              default='rollout',
+              help="what videos to skip generating every epoch (saves time)" + \
+                " can be 'none', 'all', 'rollout' (default), or 'geometry'.")
 @click.option('--clear-data/--keep-data',
               default=False,
               help="whether to clear experiment results folder before running.")
@@ -352,7 +357,7 @@ def main(pll_run_id: str = "",
 
 def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
                  bundlesdf_id: str, contactnets: bool, regenerate: bool,
-                 pretrained: str, make_videos: bool, clear_data: bool,
+                 pretrained: str, skip_videos: str, clear_data: bool,
                  w_pred: float, w_comp: float, w_diss: float, w_pen: float,
                  w_bsdf: float):
     # First decode the system and start/end tosses from the provided asset
@@ -368,7 +373,7 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
         f'-{end_toss} inferred from {vision_asset=}.'
 
     main(run_name, system, start_toss, end_toss, cycle_iteration, bundlesdf_id,
-         contactnets, regenerate, pretrained, make_videos, clear_data, w_pred,
+         contactnets, regenerate, pretrained, skip_videos, clear_data, w_pred,
          w_comp, w_diss, w_pen, w_bsdf)
 
 

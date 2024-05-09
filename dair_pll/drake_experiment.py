@@ -53,9 +53,11 @@ class DrakeMultibodyLearnableExperimentConfig(SupervisedLearningExperimentConfig
                                              ):
     visualize_learned_geometry: bool = True
     """Whether to use learned geometry in trajectory overlay visualization."""
-    generate_videos_throughout: bool = True
-    """Whether to visualize learned geometry and rollout predictions in W&B
-    gifs throughout training."""
+    generate_video_predictions_throughout: bool = True
+    """Whether to visualize rollout predictions in W&B gifs throughout training.
+    """
+    generate_video_geometries_throughout: bool = True
+    """Whether to visualize learned geometry in W&B gifs throughout training."""
 
 
 class DrakeExperiment(SupervisedLearningExperiment, ABC):
@@ -132,7 +134,8 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
         return self.visualization_system
 
     def base_and_learned_comparison_summary(
-            self, statistics: Dict, learned_system: System) -> SystemSummary:
+            self, statistics: Dict, learned_system: System,
+            force_generate_videos: bool = False) -> SystemSummary:
         r"""Extracts a :py:class:`~dair_pll.system.SystemSummary` that compares
         the base system to the learned system.
 
@@ -149,10 +152,17 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
             statistics: Dictionary of training statistics.
             learned_system: Most updated version of learned system during
               training.
+            force_generate_videos: Whether to force generate videos for
+              comparison, even if the experiment's config says to skip.  This is
+              useful for generating videos at the first and last epochs.
 
         Returns:
             Summary containing overlaid video(s).
         """
+        if (not force_generate_videos) and \
+            (not self.config.generate_video_predictions_throughout) and \
+            (not self.config.generate_video_geometries_throughout):
+            return SystemSummary(scalars={}, videos={}, meshes={})
 
         visualization_system = self.get_visualization_system(learned_system)
 
@@ -160,37 +170,41 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
         videos = {}
 
         # First do overlay prediction videos.
-        for traj_num in [0]:
-            for set_name in ['train', 'valid']:
-                target_key = f'{set_name}_{LEARNED_SYSTEM_NAME}' + \
-                             f'_{TARGET_NAME}'
-                prediction_key = f'{set_name}_{LEARNED_SYSTEM_NAME}' + \
-                                 f'_{PREDICTION_NAME}'
-                if not target_key in statistics:
-                    continue
-                target_trajectory = Tensor(statistics[target_key][traj_num])
-                prediction_trajectory = Tensor(
-                    statistics[prediction_key][traj_num])
-                visualization_trajectory = torch.cat(
-                    (space.q(target_trajectory), space.q(prediction_trajectory),
-                     space.v(target_trajectory),
-                     space.v(prediction_trajectory)), -1)
-                video, framerate = vis_utils.visualize_trajectory(
-                    visualization_system, visualization_trajectory)
-                videos[f'{set_name}_trajectory_prediction_{traj_num}'] = \
-                    (video, framerate)
+        if self.config.generate_video_predictions_throughout or \
+            force_generate_videos:
+            for traj_num in [0]:
+                for set_name in ['train', 'valid']:
+                    target_key = f'{set_name}_{LEARNED_SYSTEM_NAME}' + \
+                                f'_{TARGET_NAME}'
+                    prediction_key = f'{set_name}_{LEARNED_SYSTEM_NAME}' + \
+                                    f'_{PREDICTION_NAME}'
+                    if not target_key in statistics:
+                        continue
+                    target_trajectory = Tensor(statistics[target_key][traj_num])
+                    prediction_trajectory = Tensor(
+                        statistics[prediction_key][traj_num])
+                    visualization_trajectory = torch.cat(
+                        (space.q(target_trajectory), space.q(prediction_trajectory),
+                        space.v(target_trajectory),
+                        space.v(prediction_trajectory)), -1)
+                    video, framerate = vis_utils.visualize_trajectory(
+                        visualization_system, visualization_trajectory)
+                    videos[f'{set_name}_trajectory_prediction_{traj_num}'] = \
+                        (video, framerate)
 
         # Second do geometry inspection videos.
-        geometry_inspection_traj = \
-            vis_utils.get_geometry_inspection_trajectory(learned_system)
-        target_trajectory = geometry_inspection_traj
-        prediction_trajectory = geometry_inspection_traj
-        visualization_trajectory = torch.cat(
-            (space.q(target_trajectory), space.q(prediction_trajectory),
-             space.v(target_trajectory), space.v(prediction_trajectory)), -1)
-        video, framerate = vis_utils.visualize_trajectory(
-            visualization_system, visualization_trajectory)
-        videos['geometry_inspection'] = (video, framerate)
+        if self.config.generate_video_geometries_throughout or \
+            force_generate_videos:
+            geometry_inspection_traj = \
+                vis_utils.get_geometry_inspection_trajectory(learned_system)
+            target_trajectory = geometry_inspection_traj
+            prediction_trajectory = geometry_inspection_traj
+            visualization_trajectory = torch.cat(
+                (space.q(target_trajectory), space.q(prediction_trajectory),
+                space.v(target_trajectory), space.v(prediction_trajectory)), -1)
+            video, framerate = vis_utils.visualize_trajectory(
+                visualization_system, visualization_trajectory)
+            videos['geometry_inspection'] = (video, framerate)
 
         return SystemSummary(scalars={}, videos=videos, meshes={})
 

@@ -294,12 +294,13 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         # To save space on W&B storage, only generate comparison videos at first
         # and best epoch, the latter of which is implemented in
         # :meth:`_evaluation`.
-        skip_videos = not self.config.generate_videos_throughout
-        # skip_videos = False #if epoch==0 else True
+        force_generate_videos = True if epoch == 0 else False
 
         epoch_vars, learned_system_summary = \
-            self.build_epoch_vars_and_system_summary(statistics, learned_system,
-                                                     skip_videos=skip_videos)
+            self.build_epoch_vars_and_system_summary(
+                statistics, learned_system,
+                force_generate_videos=force_generate_videos
+            )
 
         # Start computing individual loss components.
         # First get a batch sized portion of the shuffled training set.
