@@ -54,7 +54,8 @@ class MultibodyLearnableSystem(System):
                  dt: float,
                  loss_weights_dict: dict,
                  output_urdfs_dir: Optional[str] = None,
-                 pretrained_icnn_weights_filepath: Optional[str] = None) -> None:
+                 pretrained_icnn_weights_filepath: Optional[str] = None,
+                 learn_inertia: str = 'all') -> None:
         """Inits :py:class:`MultibodyLearnableSystem` with provided model URDFs.
 
         Implementation is primarily based on Drake. Bodies are modeled via
@@ -73,10 +74,13 @@ class MultibodyLearnableSystem(System):
                 written to.
             pretrained_icnn_weights_filepath: Filepath of a set of pretrained
                 ICNN weights.
+            learn_inertia: Which inertia parameters to learn in the system
+                (all or none).  Note that 'all' excludes mass.
         """
         multibody_terms = MultibodyTerms(
             init_urdfs,
-            pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath
+            pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
+            learn_inertia=learn_inertia
         )
         space = multibody_terms.plant_diagram.space
         integrator = VelocityIntegrator(space, self.sim_step, dt)

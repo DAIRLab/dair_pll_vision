@@ -111,12 +111,15 @@ class LagrangianTerms(Module):
     lagrangian_forces: Optional[StateInputInertialCallback]
     inertial_parameters: Parameter
 
-    def __init__(self, plant_diagram: MultibodyPlantDiagram) -> None:
+    def __init__(self, plant_diagram: MultibodyPlantDiagram,
+                 learn_inertia: str = 'all') -> None:
         """Inits :py:class:`LagrangianTerms` with prescribed parameters and
         functional forms.
 
         Args:
             plant_diagram: Drake MultibodyPlant diagram to extract terms from.
+            learn_inertia: Which inertia parameters to learn in the system
+                (all or none).  Note that 'all' excludes mass.
         """
         super().__init__()
 
@@ -152,10 +155,51 @@ class LagrangianTerms(Module):
             body_variables,
             simplify_computation=DEFAULT_SIMPLIFIER)
 
-        # NOTE:  Manually turned off inertia learning by setting requires_grad=False
         # pylint: disable=E1103
         self.inertial_parameters = Parameter(body_parameters,
-                                             requires_grad=False)
+                                             requires_grad=True)
+
+        # Store the original inertial parameters to later implement learning
+        # portions of the inertial parameters.
+        self.original_pi_cm_parameters = \
+            InertialParameterConverter.theta_to_pi_cm(
+                self.inertial_parameters.detach().clone())
+        self.learn_inertia = learn_inertia
+
+    def get_inertial_parameters(self):
+        """Always access the inertial parameters through this method instead of
+        the class variable self.inertial_parameters.  This allows us to create
+        different inertial learning modes that can allow for overwriting some of
+        the inertial parameters while still maintaining the regressible theta
+        parameters.
+
+        Reminder:  pi_cm format is:
+            [m, m*p_x, m*p_y, m*p_z, I_xx, I_yy, I_zz, I_xy, I_xz, I_yz]
+        """
+        curr_pi_cm = InertialParameterConverter.theta_to_pi_cm(
+            self.inertial_parameters)
+
+        # Since the overall mass is unobservable, the only learnable parameters
+        # here should be the relative distribution of mass among all links.
+        original_mass = self.original_pi_cm_parameters[:, 0].sum()
+        curr_m_total = curr_pi_cm[:, 0].sum()
+        curr_pi_cm[:, 0] *= original_mass/curr_m_total
+
+        # Overwrite any other variables.
+        if self.learn_inertia == 'all':
+            # Nothing to do here.
+            pass
+
+        elif self.learn_inertia == 'none':
+            # Overwrite all the inertia parameters.
+            curr_pi_cm[:, 1:] = self.original_pi_cm_parameters[:, 1:]
+
+        else:
+            raise NotImplementedError(
+                f'Inertia learning mode {self.learn_inertia} not implemented.')
+
+        # Return the parameters in theta format.
+        return InertialParameterConverter.pi_cm_to_theta(curr_pi_cm)
 
     # noinspection PyUnresolvedReferences
     @staticmethod
@@ -210,7 +254,8 @@ class LagrangianTerms(Module):
     def pi_cm(self) -> Tensor:
         """Returns inertial parameters in human-understandable ``pi_cm``-
         format"""
-        return InertialParameterConverter.theta_to_pi_cm(self.inertial_parameters)
+        return InertialParameterConverter.theta_to_pi_cm(
+            self.get_inertial_parameters())
 
     def forward(self, q: Tensor, v: Tensor, u: Tensor) -> Tuple[Tensor, Tensor]:
         """Evaluates Lagrangian dynamics terms at given state and input.
@@ -629,7 +674,8 @@ class MultibodyTerms(Module):
         return delassus, M, J, phi, non_contact_acceleration, p_BiBc_B
 
     def __init__(self, urdfs: Dict[str, str],
-                 pretrained_icnn_weights_filepath: str) -> None:
+                 pretrained_icnn_weights_filepath: str,
+                 learn_inertia: str = 'all') -> None:
         """Inits :py:class:`MultibodyTerms` for system described in URDFs
 
         Interpretation is performed as a thin wrapper around
@@ -646,6 +692,8 @@ class MultibodyTerms(Module):
                 description of multibody system.
             pretrained_icnn_weights_filepath: Filepath to a set of
                 pretrained ICNN weights.
+            learn_inertia: Which inertia parameters to learn in the system
+                (all or none).  Note that 'all' excludes mass.
         """
         super().__init__()
 
@@ -672,7 +720,7 @@ class MultibodyTerms(Module):
                 geometry_index)
 
         # setup parameterization
-        self.lagrangian_terms = LagrangianTerms(plant_diagram)
+        self.lagrangian_terms = LagrangianTerms(plant_diagram, learn_inertia)
         self.contact_terms = ContactTerms(plant_diagram)
         self.geometry_body_assignment = geometry_body_assignment
         self.plant_diagram = plant_diagram

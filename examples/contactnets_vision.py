@@ -70,6 +70,8 @@ PATIENCE = 100 #EPOCHS
 WANDB_PROJECT = 'dair_pll-vision'
 
 SKIP_VIDEO_OPTIONS = ['none', 'all', 'geometry', 'rollout']
+LEARN_INERTIA_OPTIONS = ['none', 'all']     # May want to add more cases, e.g.
+                                            # learn CoM only.
 
 # Loss term weights.
 DEFAULT_W_PRED = 1.0
@@ -137,6 +139,7 @@ def main(pll_run_id: str = "",
          contactnets: bool = True,
          regenerate: bool = False,
          pretrained_icnn_weights_filepath: str = None,
+         learn_inertia: str = 'all',
          skip_videos: str = 'rollout',
          clear_data: bool = False,
          w_pred: float = DEFAULT_W_PRED,
@@ -155,6 +158,10 @@ def main(pll_run_id: str = "",
         regenerate: Whether save updated URDF's each epoch.
         pretrained_icnn_weights_filepath: Filepath to set of pretrained
           ICNN weights.
+        learn_inertia: What inertia parameters to learn (none, all); more
+          options to be implemented.  Also note that 'all' actually means 9
+          parameters (6 moments/products of inertia, CoM location) and excludes
+          the mass itself, which is unobservable.
         skip_videos: What videos to skip generating at every epoch; can be
           'none', 'all', 'rollout' (default), or 'geometry'.  Skipping
           generating all of these saves a lot of time (10x or more speedup).
@@ -181,6 +188,7 @@ def main(pll_run_id: str = "",
          + f'\n\tregenerate: {regenerate}' \
          + f'\n\twith pretrained ICNN weights at: ' \
          + f'{pretrained_icnn_weights_filepath}' \
+         + f'\n\tlearning inertia: {learn_inertia}' \
          + f'\n\tclear_data: {clear_data}' \
          + f'\n\tw_pred: {w_pred}' \
          + f'\n\tw_comp: {w_comp}' \
@@ -233,7 +241,8 @@ def main(pll_run_id: str = "",
     learnable_config = MultibodyLearnableSystemConfig(
       urdfs=urdfs, loss=loss,
       pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
-      w_pred=w_pred, w_comp=w_comp, w_diss=w_diss, w_pen=w_pen, w_bsdf=w_bsdf
+      w_pred=w_pred, w_comp=w_comp, w_diss=w_diss, w_pen=w_pen, w_bsdf=w_bsdf,
+      learn_inertia=learn_inertia
     )
 
     # How to slice trajectories into training datapoints.
@@ -326,6 +335,10 @@ def main(pll_run_id: str = "",
               type=str,
               default=None,
               help='pretrained weights of Homonogeneous ICNN')
+@click.option('--learn-inertia',
+              type=click.Choice(LEARN_INERTIA_OPTIONS),
+              default='all',
+              help="what inertia parameters to learn (none, all).")
 @click.option('--skip-videos',
               type=click.Choice(SKIP_VIDEO_OPTIONS),
               default='rollout',
@@ -357,9 +370,9 @@ def main(pll_run_id: str = "",
 
 def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
                  bundlesdf_id: str, contactnets: bool, regenerate: bool,
-                 pretrained: str, skip_videos: str, clear_data: bool,
-                 w_pred: float, w_comp: float, w_diss: float, w_pen: float,
-                 w_bsdf: float):
+                 pretrained: str, learn_inertia: str, skip_videos: str,
+                 clear_data: bool, w_pred: float, w_comp: float, w_diss: float,
+                 w_pen: float, w_bsdf: float):
     # First decode the system and start/end tosses from the provided asset
     # directory.
     assert '_' in vision_asset, f'Invalid asset directory: {vision_asset}.'
@@ -373,8 +386,8 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
         f'-{end_toss} inferred from {vision_asset=}.'
 
     main(run_name, system, start_toss, end_toss, cycle_iteration, bundlesdf_id,
-         contactnets, regenerate, pretrained, skip_videos, clear_data, w_pred,
-         w_comp, w_diss, w_pen, w_bsdf)
+         contactnets, regenerate, pretrained, learn_inertia, skip_videos,
+         clear_data, w_pred, w_comp, w_diss, w_pen, w_bsdf)
 
 
 

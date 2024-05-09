@@ -36,6 +36,8 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """Whether to use ContactNets or prediction loss."""
     pretrained_icnn_weights_filepath: str = None
     """If provided, filepath to pretrained ICNN weights."""
+    learn_inertia: str = 'all'
+    """Which inertia parameters to learn in the system ('all' excludes mass)."""
     w_pred: float = 1.0
     """Weight of prediction term in ContactNets loss (suggested keep at 1.0)."""
     w_comp: float = 1.0
@@ -236,7 +238,8 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
              'w_bsdf': self.config.learnable_config.w_bsdf},
             output_urdfs_dir=output_dir,
             pretrained_icnn_weights_filepath = \
-                learnable_config.pretrained_icnn_weights_filepath
+                learnable_config.pretrained_icnn_weights_filepath,
+            learn_inertia = learnable_config.learn_inertia
         )
 
     def visualizer_regeneration_is_required(self) -> bool:
