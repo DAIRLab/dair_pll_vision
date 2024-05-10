@@ -268,8 +268,8 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         random_indices = torch.randperm(n_points)[:n_random_points]
         dirs, pts = bsdf_dirs[random_indices], bsdf_pts[random_indices]
 
-        # Finally, compute the loss.
-        loss = torch.linalg.norm(pts - deep_support_network(dirs), dim=1)**2
+        # Finally, compute the loss as L1 norm.
+        loss = torch.linalg.norm(pts - deep_support_network(dirs), dim=1)
         loss = loss.mean()
         return loss
 

@@ -78,7 +78,7 @@ DEFAULT_W_PRED = 1.0
 DEFAULT_W_COMP = 1.0
 DEFAULT_W_DISS = 1.0
 DEFAULT_W_PEN = 20.0
-DEFAULT_W_BSDF = 1.0
+DEFAULT_W_BSDF = 0.02
 
 
 def get_storage_names(system: str, start_toss: int, end_toss: int,
