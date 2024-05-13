@@ -258,7 +258,7 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         deep_support_network = deep_support_geom.network
 
         # Next load a random subset of the BundleSDF data.
-        bsdf_dirs, bsdf_pts = file_utils.get_bundlesdf_geometry_data(
+        bsdf_dirs, bsdf_pts, bsdf_ds = file_utils.get_bundlesdf_geometry_data(
             self.config.data_config.asset_subdirectories,
             self.config.data_config.bundlesdf_id,
             iteration = int(self.config.data_config.tracker.split('_')[-1])
@@ -266,9 +266,14 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         n_points = bsdf_pts.shape[0]
         n_random_points = min(1000, n_points)
         random_indices = torch.randperm(n_points)[:n_random_points]
-        dirs, pts = bsdf_dirs[random_indices], bsdf_pts[random_indices]
+        dirs = bsdf_dirs[random_indices]
+        pts = bsdf_pts[random_indices]
+        scalars = bsdf_ds[random_indices]
 
-        # Finally, compute the loss as L1 norm.
+        # # Compute the loss as absolute value difference on the scalar outputs.
+        # loss = (scalars - deep_support_network.get_output(dirs)).abs()
+
+        # Finally, compute the loss as L1 norm on the point locations.
         loss = torch.linalg.norm(pts - deep_support_network(dirs), dim=1)
         loss = loss.mean()
         return loss

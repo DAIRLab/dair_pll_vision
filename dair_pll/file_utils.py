@@ -38,6 +38,7 @@ BSDF_FROM_SUPPORT_SUBSUBFOLDER_NAME = 'from_support_points'
 BSDF_FROM_MESH_SUBSUBFOLDER_NAME = 'from_mesh_surface'
 BSDF_SUPPORT_DIRECTIONS_NAME = 'support_directions.pt'
 BSDF_SUPPORT_POINTS_NAME = 'support_points.pt'
+BSDF_SUPPORT_SCALARS_NAME = 'support_scalars.pt'
 BSDF_MESH_FILENAME = 'mesh.obj'
 BSDF_SUBFOLDER_NAME = 'geom_for_bsdf'
 EXPORT_POINTS_DEFAULT_NAME = 'support_points.pt'
@@ -369,16 +370,22 @@ def get_bundlesdf_geometry_data(asset_subdirs: str, bundlesdf_id: str,
     bsdf_dirs = torch.load(path.join(geom_input_dir,
                                      BSDF_SUPPORT_DIRECTIONS_NAME))
     bsdf_pts = torch.load(path.join(geom_input_dir, BSDF_SUPPORT_POINTS_NAME))
+    bsdf_ds = torch.load(path.join(geom_input_dir, BSDF_SUPPORT_SCALARS_NAME))
 
     assert bsdf_dirs.shape == bsdf_pts.shape, f'Expected BundleSDF support ' + \
         f'directions and points to have same shape, got {bsdf_dirs.shape} ' + \
         f'and {bsdf_pts.shape} respectively.'
     assert bsdf_dirs.ndim == 2, f'Expected BundleSDF support directions ' + \
         f'and points to be (N, 3) but got shape {bsdf_dirs.shape}.'
+    assert bsdf_ds.ndim == 1, f'Expected BundleSDF support scalars to be ' + \
+        f'(N,) but got shape {bsdf_ds.shape}.'
+    assert bsdf_ds.shape[0] == bsdf_dirs.shape[0], f'Expected BundleSDF ' + \
+        f'support directions/scalars/points to have same length, got ' + \
+        f'{bsdf_dirs.shape[0]=}, {bsdf_ds.shape[0]=}, {bsdf_pts.shape[0]=}.'
     assert bsdf_dirs.shape[1] == 3, f'Expected BundleSDF support ' + \
         f'directions and points to be (N, 3) but got shape {bsdf_dirs.shape}.'
 
-    return bsdf_dirs, bsdf_pts
+    return bsdf_dirs, bsdf_pts, bsdf_ds
 
 
 def get_mesh_from_bundlesdf(asset_subdirs: str, bundlesdf_id: str,

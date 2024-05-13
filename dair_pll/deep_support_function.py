@@ -240,6 +240,18 @@ class HomogeneousICNN(Module):
         output = pbmm(hiddens[-1], output_wt)
         return hiddens, output.squeeze(-1)
 
+    def get_output(self, directions: Tensor) -> Tensor:
+        """Evaluates the network output at provided inputs.
+
+        Args:
+            directions: ``(*, 3)`` network inputs.
+
+        Returns:
+            ``(*,)`` network output.
+        """
+        _, output = self.network_activations(directions)
+        return output
+
     def forward(self, directions: Tensor) -> Tensor:
         """Evaluates support function Jacobian at provided inputs.
 
