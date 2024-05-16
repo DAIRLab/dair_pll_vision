@@ -235,8 +235,7 @@ def main(pll_run_id: str = "",
 
     # Describes the learnable system. The MultibodyLearnableSystem type learns
     # a multibody system, which is initialized as the system in the given URDFs.
-    loss = MultibodyLosses.CONTACTNETS_LOSS \
-        if contactnets else \
+    loss = MultibodyLosses.VISION_LOSS if contactnets else \
         MultibodyLosses.PREDICTION_LOSS
     learnable_config = MultibodyLearnableSystemConfig(
       urdfs=urdfs, loss=loss,

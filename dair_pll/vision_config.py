@@ -15,7 +15,7 @@ from dair_pll import file_utils
 from dair_pll.data_config import DataConfig
 from dair_pll.dataset_management import ExperimentDataManager, TrajectorySet
 from dair_pll.drake_experiment import DrakeMultibodyLearnableExperimentConfig, \
-    DrakeMultibodyLearnableExperiment
+    DrakeMultibodyLearnableExperiment, MultibodyLosses
 from dair_pll.experiment import LossCallbackCallable, TrainingState, \
     LOGGING_DURATION
 from dair_pll.geometry import DeepSupportConvex
@@ -197,7 +197,8 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
 
     def __init__(self, config: VisionExperimentConfig) -> None:
         super().__init__(config)
-        self.loss_callback = self.vision_loss
+        if config.learnable_config.loss == MultibodyLosses.VISION_LOSS:
+            self.loss_callback = self.vision_loss
         file_utils.save_configuration(config.storage, config.run_name, config,
                                       human_readable=True)
 

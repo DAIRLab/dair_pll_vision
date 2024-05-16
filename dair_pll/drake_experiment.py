@@ -28,6 +28,7 @@ class DrakeSystemConfig(SystemConfig):
 class MultibodyLosses(Enum):
     PREDICTION_LOSS = 1
     CONTACTNETS_LOSS = 2
+    VISION_LOSS = 3
 
 
 @dataclass
@@ -223,6 +224,11 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
                                 self.config.learnable_config)
         if learnable_config.loss == MultibodyLosses.CONTACTNETS_LOSS:
             self.loss_callback = self.contactnets_loss
+        elif learnable_config.loss == MultibodyLosses.VISION_LOSS:
+            # For DrakeMultibodyLearnableExperiment, cannot handle using vision
+            # loss, so default to prediction.  This can get overwritten in the
+            # VisionExperiment extension of this class.
+            self.loss_callback = self.prediction_loss
 
     def get_learned_system(self, _: Tensor) -> MultibodyLearnableSystem:
         learnable_config = cast(MultibodyLearnableSystemConfig,
