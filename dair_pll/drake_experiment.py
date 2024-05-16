@@ -268,6 +268,7 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
             Representations," Conference on Robotic Learning, 2020,
             https://proceedings.mlr.press/v155/pfrommer21a.html
         """
+        system = cast(MultibodyLearnableSystem, system)
         assert isinstance(system, MultibodyLearnableSystem)
         x = x_past[..., -1, :]
         # pylint: disable=E1103

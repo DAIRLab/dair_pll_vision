@@ -229,6 +229,8 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
     ) -> Tensor:
         """Loss function for vision experiments includes both ContactNets loss
         and an additional loss from BundleSDF's shape supervision."""
+        system = cast(MultibodyLearnableSystem, system)
+
         contactnets_loss = self.contactnets_loss(
             x_past, x_future, system, keep_batch)
         bundlesdf_loss = self.bundlesdf_geometry_loss(system)
