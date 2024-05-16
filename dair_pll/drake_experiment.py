@@ -268,13 +268,13 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
             Representations," Conference on Robotic Learning, 2020,
             https://proceedings.mlr.press/v155/pfrommer21a.html
         """
-        cast_system = cast(MultibodyLearnableSystem, system)
-        assert isinstance(cast_system, MultibodyLearnableSystem)
+        assert isinstance(system, MultibodyLearnableSystem), f'Expected ' + \
+            f'MultibodyLearnableSystem, got {type(system)}.'
         x = x_past[..., -1, :]
         # pylint: disable=E1103
         u = torch.zeros(x.shape[:-1] + (0,))
         x_plus = x_future[..., 0, :]
-        loss = cast_system.contactnets_loss(x, u, x_plus)
+        loss = system.contactnets_loss(x, u, x_plus)
         if not keep_batch:
             loss = loss.mean()
         return loss

@@ -229,11 +229,14 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
     ) -> Tensor:
         """Loss function for vision experiments includes both ContactNets loss
         and an additional loss from BundleSDF's shape supervision."""
-        cast_system = cast(MultibodyLearnableSystem, system)
+        if not isinstance(system, MultibodyLearnableSystem):
+            print(f'Warning: vision loss requires a MultibodyLearnableSystem' +\
+                  f' but got {type(system)} instead; skipping and returning 0.')
+            return Tensor([0.0])
 
         contactnets_loss = self.contactnets_loss(
-            x_past, x_future, cast_system, keep_batch)
-        bundlesdf_loss = self.bundlesdf_geometry_loss(cast_system)
+            x_past, x_future, system, keep_batch)
+        bundlesdf_loss = self.bundlesdf_geometry_loss(system)
 
         # Combine the two terms.  The ContactNets loss is already scaled by the
         # appropriate weights, so only need to scale the BundleSDF loss.
