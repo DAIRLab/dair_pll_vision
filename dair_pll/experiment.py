@@ -74,7 +74,8 @@ BASE_SYSTEM_NAME = 'base'
 ORACLE_SYSTEM_NAME = 'oracle'
 LEARNED_SYSTEM_NAME = 'model'
 
-LOSS_NAME = 'loss'
+LOSS_NAME = 'train_loss'
+PRED_LOSS_NAME = 'pred_loss'
 TRAJECTORY_ERROR_NAME = 'trajectory_mse'
 PREDICTED_VELOCITY_SIZE = 'v_plus_squared'
 DELTA_VELOCITY_SIZE = 'delta_v_squared'
@@ -820,8 +821,20 @@ class SupervisedLearningExperiment(ABC):
                     model_loss_list.append(
                         self.prediction_loss(batch_x, batch_y, system, True))
                 model_loss = torch.cat(model_loss_list)
-                loss_name = f'{set_name}_{system_name}_{LOSS_NAME}'
+                loss_name = f'{set_name}_{system_name}_{PRED_LOSS_NAME}'
                 stats[loss_name] = to_json(model_loss)
+
+                # The training loss on the training set will get added to the
+                # stats dictionary in per_epoch_evaluation.  The below computes
+                # the same loss metric but for the other sets (val/test).
+                if set_name != TRAIN_SET:
+                    model_loss_list = []
+                    for batch_x, batch_y in slices_loader:
+                        model_loss_list.append(
+                            self.loss_callback(batch_x, batch_y, system, True))
+                    model_loss = torch.cat(model_loss_list)
+                    loss_name = f'{set_name}_{system_name}_{LOSS_NAME}'
+                    stats[loss_name] = to_json(model_loss)
 
                 if system_name == LEARNED_SYSTEM_NAME:
                     trajectories = [t.unsqueeze(0) for t in trajectories]
