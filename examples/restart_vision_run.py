@@ -74,6 +74,11 @@ def main(pll_run_id: str = "",
     learned_system.generate_updated_urdfs('best')
     print(f'Done!')
 
+    # Export BundleSDF training data.
+    print(f'Saving points and directions...', end=' ')
+    experiment.generate_bundlesdf_data(learned_system)
+    print(f'Done!')
+
 
 
 @click.command()

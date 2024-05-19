@@ -55,7 +55,11 @@ MILK_LR = 1e-3
 LRS = {VISION_CUBE_SYSTEM: CUBE_LR,
        VISION_PRISM_SYSTEM: PRISM_LR,
        VISION_TOBLERONE_SYSTEM: TOBLERONE_LR,
-       VISION_MILK_SYSTEM: MILK_LR}
+       VISION_MILK_SYSTEM: MILK_LR, 
+       'vision_bottle': 1e-3,
+       'vision_half': 1e-3,
+       'vision_egg': 1e-3,
+       'vision_napkin': 1e-3,}
 CUBE_WD = 0.0
 PRISM_WD = 0.0
 TOBLERONE_WD = 0.0
@@ -63,7 +67,11 @@ MILK_WD = 0.0
 WDS = {VISION_CUBE_SYSTEM: CUBE_WD,
        VISION_PRISM_SYSTEM: PRISM_WD,
        VISION_TOBLERONE_SYSTEM: TOBLERONE_WD,
-       VISION_MILK_SYSTEM: MILK_WD}
+       VISION_MILK_SYSTEM: MILK_WD,
+       'vision_bottle': 0.0,
+       'vision_half': 0.0,
+       'vision_egg': 0.0,
+       'vision_napkin': 0.0,}
 EPOCHS = 200 #500
 PATIENCE = 100 #EPOCHS
 

@@ -725,6 +725,11 @@ class SupervisedLearningExperiment(ABC):
                 training_state.optimizer_state = optimizer.state_dict()
                 training_state.epoch += 1
 
+                if training_state.epoch % 10 == 0:
+                    torch.save(dataclasses.asdict(training_state),
+                               checkpoint_filename)
+                    print("Saved training state.")
+
             # Mark training as completed, whether by early stopping or by
             # reaching the epoch limit.
             training_state.finished_training = True
