@@ -19,21 +19,23 @@ general purpose converter is implemented in
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Tuple, Dict, cast
+from typing import Tuple, Dict, cast, Union
 
 import fcl  # type: ignore
 import numpy as np
 import pywavefront  # type: ignore
 import torch
+import trimesh
 from pydrake.geometry import Box as DrakeBox  # type: ignore
 from pydrake.geometry import HalfSpace as DrakeHalfSpace  # type: ignore
 from pydrake.geometry import Mesh as DrakeMesh  # type: ignore
 from pydrake.geometry import Shape  # type: ignore
 from torch import Tensor
 from torch.nn import Module, Parameter
-import torch.optim as optim
+from scipy.spatial import ConvexHull
 
-from dair_pll.deep_support_function import HomogeneousICNN, extract_mesh
+from dair_pll.deep_support_function import HomogeneousICNN, \
+    extract_mesh_from_support_function
 from dair_pll.tensor_utils import pbmm, tile_dim, \
     rotation_matrix_from_one_vector
 
@@ -238,7 +240,11 @@ class Polygon(SparseVertexConvexCollisionGeometry):
             n_query: number of vertices to return in witness point set.
         """
         super().__init__(n_query)
-        self.vertices = Parameter(vertices.clone(), requires_grad=True)
+
+        mesh = trimesh.Trimesh(vertices.numpy(), [])
+        hull = mesh.convex_hull
+        hull_vertices = Tensor(hull.vertices)
+        self.vertices = Parameter(hull_vertices.clone(), requires_grad=True)
 
     def get_vertices(self, directions: Tensor) -> Tensor:
         """Return batched view of static vertex set"""
@@ -358,7 +364,7 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
             :py:mod:`fcl` bounding volume hierarchy for mesh.
         """
         if self.training:
-            mesh = extract_mesh(self.network)
+            mesh = extract_mesh_from_support_function(self.network)
             vertices = mesh.vertices.numpy()
             faces = mesh.faces.numpy()
             self.fcl_geometry = fcl.BVHModel()
@@ -477,7 +483,8 @@ class PydrakeToCollisionGeometryFactory:
     ``CollisionGeometry`` instances."""
 
     @staticmethod
-    def convert(drake_shape: Shape) -> CollisionGeometry:
+    def convert(drake_shape: Shape, force_mesh_to_be_polygon: bool = False
+                ) -> CollisionGeometry:
         """Converts abstract ``pydrake.geometry.shape`` to
         ``CollisionGeometry``.
 
@@ -495,7 +502,8 @@ class PydrakeToCollisionGeometryFactory:
         if isinstance(drake_shape, DrakeHalfSpace):
             return PydrakeToCollisionGeometryFactory.convert_plane()
         if isinstance(drake_shape, DrakeMesh):
-            return PydrakeToCollisionGeometryFactory.convert_mesh(drake_shape)
+            return PydrakeToCollisionGeometryFactory.convert_mesh(
+                drake_shape, force_mesh_to_be_polygon=force_mesh_to_be_polygon)
         raise TypeError(
             "Unsupported type for drake Shape() to"
             "CollisionGeometry() conversion:", type(drake_shape))
@@ -512,11 +520,17 @@ class PydrakeToCollisionGeometryFactory:
         return Plane()
 
     @staticmethod
-    def convert_mesh(drake_mesh: DrakeMesh) -> DeepSupportConvex:
+    def convert_mesh(
+            drake_mesh: DrakeMesh, force_mesh_to_be_polygon: bool = False
+    ) -> Union[DeepSupportConvex | Polygon]:
         """Converts ``pydrake.geometry.Mesh`` to ``DeepSupportConvex``."""
         filename = drake_mesh.filename()
         mesh = pywavefront.Wavefront(filename)
         vertices = Tensor(mesh.vertices)
+
+        if force_mesh_to_be_polygon:
+            return Polygon(vertices)
+
         return DeepSupportConvex(vertices)
 
 

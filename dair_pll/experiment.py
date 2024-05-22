@@ -844,7 +844,7 @@ class SupervisedLearningExperiment(ABC):
                 if system_name == LEARNED_SYSTEM_NAME:
                     trajectories = [t.unsqueeze(0) for t in trajectories]
                 traj_pred, traj_target = self.trajectory_predict(
-                    trajectories, system, True)
+                    trajectories, system, do_detach=True)
                 if system_name == LEARNED_SYSTEM_NAME:
                     traj_target = [t.squeeze(0) for t in traj_target]
                     traj_pred = [t.squeeze(0) for t in traj_pred]

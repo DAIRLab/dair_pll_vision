@@ -48,12 +48,13 @@ from torch import Tensor
 from torch.nn import Module, ModuleList, Parameter
 
 from dair_pll import drake_utils
-from dair_pll.deep_support_function import extract_mesh
+from dair_pll.deep_support_function import extract_mesh_from_support_function, \
+    get_mesh_summary_from_polygon
 from dair_pll.drake_state_converter import DrakeStateConverter
 from dair_pll.drake_utils import MultibodyPlantDiagram
 from dair_pll.geometry import GeometryCollider, \
     PydrakeToCollisionGeometryFactory, \
-    CollisionGeometry, DeepSupportConvex
+    CollisionGeometry, DeepSupportConvex, Polygon
 from dair_pll.inertia import InertialParameterConverter
 from dair_pll.system import MeshSummary
 from dair_pll.tensor_utils import (pbmm, deal, spatial_to_point_jacobian)
@@ -310,7 +311,8 @@ class ContactTerms(Module):
     friction_params: Parameter
     collision_candidates: Tensor
 
-    def __init__(self, plant_diagram: MultibodyPlantDiagram) -> None:
+    def __init__(self, plant_diagram: MultibodyPlantDiagram,
+                 force_mesh_to_be_polygon: bool = False) -> None:
         """Inits :py:class:`ContactTerms` with prescribed kinematics and
         geometries.
 
@@ -333,9 +335,9 @@ class ContactTerms(Module):
 
         # sweep over collision elements
         geometries, rotations, translations, drake_spatial_jacobians = \
-            ContactTerms.extract_geometries_and_kinematics(plant, inspector,
-                                                           geometry_ids,
-                                                           context)
+            ContactTerms.extract_geometries_and_kinematics(
+                plant, inspector, geometry_ids, context,
+                force_mesh_to_be_polygon=force_mesh_to_be_polygon)
 
         for geometry_index, geometry_pair in enumerate(collision_candidates):
             if geometries[geometry_pair[0]] > geometries[geometry_pair[1]]:
@@ -373,7 +375,8 @@ class ContactTerms(Module):
     @staticmethod
     def extract_geometries_and_kinematics(
         plant: MultibodyPlant_[Expression], inspector: SceneGraphInspector,
-        geometry_ids: List[GeometryId], context: Context
+        geometry_ids: List[GeometryId], context: Context,
+        force_mesh_to_be_polygon: bool = False
     ) -> Tuple[List[CollisionGeometry], List[np.ndarray], List[np.ndarray],
                List[np.ndarray]]:
         """Extracts modules and kinematics of list of geometries G.
@@ -423,7 +426,8 @@ class ContactTerms(Module):
 
             geometries.append(
                 PydrakeToCollisionGeometryFactory.convert(
-                    inspector.GetShape(geometry_id)))
+                    inspector.GetShape(geometry_id),
+                    force_mesh_to_be_polygon=force_mesh_to_be_polygon))
 
         return geometries, rotations, translations, drake_spatial_jacobians
 
@@ -616,13 +620,20 @@ class MultibodyTerms(Module):
                 scalars[f'{body_id}_mu'] = \
                     friction_coefficients[geometry_index].item()
 
+                geometry_mesh = None
                 if isinstance(geometry, DeepSupportConvex):
                     # print('>>>>>>>>>>>>', self.pretrained_icnn_weights_filepath)
                     # if self.pretrained_icnn_weights_filepath is not None:
                     #     print(f'Loading pretrained ICNN weight from ' \
                     #           + f'{self.pretrained_icnn_weights_filepath}')
                     #     geometry.load_weights(self.pretrained_icnn_weights_filepath)
-                    geometry_mesh = extract_mesh(geometry.network)
+                    geometry_mesh = extract_mesh_from_support_function(
+                        geometry.network)
+
+                elif isinstance(geometry, Polygon):
+                    geometry_mesh = get_mesh_summary_from_polygon(geometry)
+
+                if geometry_mesh is not None:
                     meshes[body_id] = geometry_mesh
                     vertices = geometry_mesh.vertices
                     diameters = vertices.max(dim=0).values - vertices.min(
@@ -675,7 +686,8 @@ class MultibodyTerms(Module):
 
     def __init__(self, urdfs: Dict[str, str],
                  pretrained_icnn_weights_filepath: str,
-                 learn_inertia: str = 'all') -> None:
+                 learn_inertia: str = 'all',
+                 force_mesh_to_be_polygon: bool = False) -> None:
         """Inits :py:class:`MultibodyTerms` for system described in URDFs
 
         Interpretation is performed as a thin wrapper around
@@ -721,7 +733,8 @@ class MultibodyTerms(Module):
 
         # setup parameterization
         self.lagrangian_terms = LagrangianTerms(plant_diagram, learn_inertia)
-        self.contact_terms = ContactTerms(plant_diagram)
+        self.contact_terms = ContactTerms(
+            plant_diagram, force_mesh_to_be_polygon=force_mesh_to_be_polygon)
         self.geometry_body_assignment = geometry_body_assignment
         self.plant_diagram = plant_diagram
         self.urdfs = urdfs

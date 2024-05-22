@@ -53,6 +53,7 @@ class MultibodyLearnableSystem(System):
                  init_urdfs: Dict[str, str],
                  dt: float,
                  loss_weights_dict: dict,
+                 force_mesh_to_be_polygon: bool = False,
                  output_urdfs_dir: Optional[str] = None,
                  pretrained_icnn_weights_filepath: Optional[str] = None,
                  learn_inertia: str = 'all') -> None:
@@ -80,7 +81,8 @@ class MultibodyLearnableSystem(System):
         multibody_terms = MultibodyTerms(
             init_urdfs,
             pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
-            learn_inertia=learn_inertia
+            learn_inertia=learn_inertia,
+            force_mesh_to_be_polygon=force_mesh_to_be_polygon
         )
         space = multibody_terms.plant_diagram.space
         integrator = VelocityIntegrator(space, self.sim_step, dt)

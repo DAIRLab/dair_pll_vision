@@ -16,7 +16,8 @@ from xml.etree.ElementTree import register_namespace
 from torch import Tensor
 
 from dair_pll import drake_utils, file_utils
-from dair_pll.deep_support_function import extract_obj
+from dair_pll.deep_support_function import extract_obj_from_support_function, \
+    extract_obj_from_mesh_summary, get_mesh_summary_from_polygon
 from dair_pll.geometry import CollisionGeometry, Box, Sphere, Polygon, \
     DeepSupportConvex
 from dair_pll.inertia import InertialParameterConverter
@@ -207,7 +208,8 @@ class UrdfGeometryRepresentationFactory:
             URDF tag and attributes.
         """
         if isinstance(geometry, Polygon):
-            return UrdfGeometryRepresentationFactory.polygon_representation()
+            return UrdfGeometryRepresentationFactory.polygon_representation(
+                geometry, output_dir)
         if isinstance(geometry, Box):
             return UrdfGeometryRepresentationFactory.box_representation(
                 geometry)
@@ -222,10 +224,18 @@ class UrdfGeometryRepresentationFactory:
             "URDF representation conversion:", type(geometry))
 
     @staticmethod
-    def polygon_representation() -> Tuple[str, Dict[str, str]]:
-        """Todo: implement representation for ``Polygon``"""
-        raise NotImplementedError("Polygon URDF representation not yet "
-                                  "implemented.")
+    def polygon_representation(polygon: Polygon, output_dir: str,
+                               ) -> Tuple[str, Dict[str, str]]:
+        """Returns URDF representation as ``mesh`` tag with name of saved
+        mesh file."""
+        mesh_name = "test.obj"
+        mesh_path = os.path.join(output_dir, mesh_name)
+        mesh_summary = get_mesh_summary_from_polygon(polygon)
+        file_utils.save_string(
+            mesh_path,
+            extract_obj_from_mesh_summary(mesh_summary))
+
+        return _MESH, {_FILENAME: mesh_name}
 
     @staticmethod
     def box_representation(box: Box) -> Tuple[str, Dict[str, str]]:
@@ -247,7 +257,7 @@ class UrdfGeometryRepresentationFactory:
         mesh file."""
         mesh_name = "test.obj"
         mesh_path = os.path.join(output_dir, mesh_name)
-        file_utils.save_string(mesh_path, extract_obj(convex.network))
+        file_utils.save_string(mesh_path, extract_obj_from_support_function(convex.network))
 
         return _MESH, {_FILENAME: mesh_name}
 

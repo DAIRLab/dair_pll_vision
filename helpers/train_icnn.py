@@ -1,6 +1,6 @@
 import numpy as np
 import trimesh
-from dair_pll.deep_support_function import extract_obj
+from dair_pll.deep_support_function import extract_obj_from_support_function
 from dair_pll.geometry import HomogeneousICNN
 import torch
 import torch.nn as nn
@@ -142,7 +142,7 @@ def pretrain_icnn(path, gt_dirs, gt_pts):
     mesh_name = f"{filename}_icnn.obj"
     mesh_path = os.path.join(OUTPUT_DIR, mesh_name)
     with open(mesh_path, 'w', encoding="utf8") as new_obj_file:
-        new_obj_file.write(extract_obj(network))
+        new_obj_file.write(extract_obj_from_support_function(network))
     torch.save(best_state, f'icnn_weight_try.pth')
 
 def visualize_dirs_and_pts(directions, support_points):

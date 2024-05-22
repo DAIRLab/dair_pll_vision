@@ -7,6 +7,7 @@ summary information about the content of this directory.
 import glob
 import json
 import os
+import numpy as np
 import pickle
 import random
 from copy import deepcopy

@@ -17,7 +17,36 @@ _SURFACE = _SURFACE / _SURFACE.norm(dim=-1, keepdim=True)
 _SURFACE = _SURFACE.to(torch.float64)
 _SURFACE_ROTATIONS = rotation_matrix_from_one_vector(_SURFACE, 2)
 
-def extract_obj(support_function: Callable[[Tensor], Tensor]) -> str:
+
+def get_mesh_summary_from_polygon(polygon) -> MeshSummary:
+    """Assuming a standard ordering of vertices for a ``Polygon``
+    representation, produce a ``MeshSummary`` of this sparse mesh.
+
+    Note:
+        This is a hack since it only works for ``Polygon``\s of a particular
+        structure.  That structure matches that provided in the example assets
+        ``contactnets_cube.obj`` and ``contactnets_elbow_half.obj``.
+
+    Args:
+        polygon: A ``Polygon`` ``CollisionGeometry``.
+
+    Returns:
+        A ``MeshSummary`` of the polygon.
+    """
+    # Use arbitrary direction to query the Polygon's vertices (value does not
+    # matter).
+    arbitrary_direction = torch.ones((1,3))
+    vertices = polygon.get_vertices(
+        arbitrary_direction).squeeze(0).clone().detach()
+
+    hull = ConvexHull(vertices.numpy())
+    faces = Tensor(hull.simplices).to(torch.long)  # type: ignore
+
+    return MeshSummary(vertices=vertices, faces=faces)
+
+
+def extract_obj_from_support_function(
+    support_function: Callable[[Tensor], Tensor]) -> str:
     """Given a support function, extracts a Wavefront obj representation.
 
     Args:
@@ -26,7 +55,20 @@ def extract_obj(support_function: Callable[[Tensor], Tensor]) -> str:
     Returns:
         Wavefront .obj string
     """
-    mesh_summary = extract_mesh(support_function)
+    mesh_summary = extract_mesh_from_support_function(support_function)
+    return extract_obj_from_mesh_summary(mesh_summary)
+
+
+def extract_obj_from_mesh_summary(mesh_summary: MeshSummary) -> str:
+    """Given a mesh summary, extracts a Wavefront obj representation.
+
+    Args:
+        mesh_summary: Object vertices and face indices in the form of a
+          ``MeshSummary``.
+
+    Returns:
+        Wavefront .obj string
+    """
     normals = extract_outward_normal_hyperplanes(
         mesh_summary.vertices.unsqueeze(0),
         mesh_summary.faces.unsqueeze(0)
@@ -39,7 +81,6 @@ def extract_obj(support_function: Callable[[Tensor], Tensor]) -> str:
 
     obj_string += '\n\n'
 
-    #pdb.set_trace()
     for normal in normals:
         normal_string = " ".join([str(n_i.item()) for n_i in normal])
         obj_string += f'vn {normal_string}\n'
@@ -51,7 +92,6 @@ def extract_obj(support_function: Callable[[Tensor], Tensor]) -> str:
         obj_string += f'f {face_string}\n'
 
     return obj_string
-
 
 
 def extract_outward_normal_hyperplanes(vertices: Tensor, faces: Tensor):
@@ -76,17 +116,13 @@ def extract_outward_normal_hyperplanes(vertices: Tensor, faces: Tensor):
         ``(*, M)`` whether each face is in counter-clockwise order.
         ``(*, M)`` face hyperplane intercepts.
     """
-    if vertices.ndim == 2:
-        vertices = vertices.unsqueeze(0)
-        faces = faces.unsqueeze(0)
-
     batch_range = torch.arange(vertices.shape[0]).unsqueeze(1).repeat(
         (1, faces.shape[-2]))
     centroids = vertices.mean(dim=-2, keepdim=True)
     v_a = vertices[batch_range, faces[..., 0]]
     v_b = vertices[batch_range, faces[..., 1]]
     v_c = vertices[batch_range, faces[..., 2]]
-    outward_normals = torch.cross(v_b - v_a, v_c - v_a)
+    outward_normals = torch.cross(v_b - v_a, v_c - v_a, dim=-1)
     outward_normals /= outward_normals.norm(dim=-1, keepdim=True)
     backwards = (outward_normals * (v_a - centroids)).sum(dim=-1) < 0.
     outward_normals[backwards] *= -1
@@ -94,7 +130,8 @@ def extract_outward_normal_hyperplanes(vertices: Tensor, faces: Tensor):
     return outward_normals, backwards, extents
 
 
-def extract_mesh(support_function: Callable[[Tensor], Tensor]) -> MeshSummary:
+def extract_mesh_from_support_function(
+    support_function: Callable[[Tensor], Tensor]) -> MeshSummary:
     """Given a support function, extracts a vertex/face mesh.
 
     Args:
@@ -124,7 +161,7 @@ def extract_mesh(support_function: Callable[[Tensor], Tensor]) -> MeshSummary:
     backwards = backwards.squeeze(0)
     faces[backwards] = faces[backwards].flip(-1)
 
-    return MeshSummary(vertices=vertices, faces=faces)
+    return MeshSummary(vertices=support_points, faces=faces)
 
 
 class HomogeneousICNN(Module):
