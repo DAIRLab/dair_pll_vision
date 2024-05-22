@@ -1,5 +1,6 @@
 """Functionality related to connecting ContactNets to BundleSDF."""
 
+import click
 import os.path as op
 import pdb
 from typing import Tuple
@@ -23,9 +24,9 @@ from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
     EXPORT_FORCES_DEFAULT_NAME
 
 
-TEST_RUN_NAME = 'pll_id_00'  #'test_004'
-SYSTEM_NAME = 'vision_bakingbox'  #'bundlesdf_cube'
-ASSET_NAME = 'bakingbox_1-2'
+TEST_RUN_NAME = 'test_004'
+SYSTEM_NAME = 'bundlesdf_cube'
+ASSET_NAME = 'cube_2'
 STORAGE_NAME = op.join(file_utils.RESULTS_DIR, SYSTEM_NAME, ASSET_NAME,
                        'bundlesdf_iteration_1')
     # file_utils.assure_created(op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
@@ -1303,9 +1304,45 @@ def load_deep_support_convex_network(run_name: str, system: str
 
 # ======================== End of Function Definitions ======================= #
 
-if __name__ == '__main__':
-    # pdb.set_trace()
+@click.command()
+@click.option('--vision-asset',
+              type=str,
+              default=None,
+              help="directory of the asset folder e.g. cube_2; encodes " + \
+                "system and tosses.")
+@click.option('--pll-id',
+              type=str,
+              default=None,
+              help="what PLL run ID associated with geometry outputs to use.")
+@click.option('--cycle-iteration',
+              type=int,
+              default=1,
+              help="BundleSDF cycle iteration number.")
+def main_command(vision_asset: str, pll_id: str, cycle_iteration: int):
+     # First decode the system and start/end tosses from the provided asset
+    # directory.
+    assert '_' in vision_asset, f'Invalid asset directory: {vision_asset}.'
+    system = f"vision_{vision_asset.split('_')[0]}"
 
+    start_toss = int(vision_asset.split('_')[1].split('-')[0])
+    end_toss = start_toss if '-' not in vision_asset else \
+        int(vision_asset.split('-')[1])
+    assert start_toss <= end_toss, f'Invalid toss range: {start_toss} ' + \
+        f'-{end_toss} inferred from {vision_asset=}.'
+    
+    if not pll_id.startswith('pll_id_'):
+        pll_id = f'pll_id_{pll_id}'
+
+    storage_name = op.join(file_utils.RESULTS_DIR, system, vision_asset,
+                           f'bundlesdf_iteration_{cycle_iteration}')
+    output_dir = file_utils.geom_for_bsdf_dir(storage_name, pll_id)
+
+    # Generate training data for run.
+    generate_training_data_for_run(pll_id, storage_name)
+    print(f'Finished generating training data in {output_dir}.')
+
+
+if __name__ == '__main__':
     # Tests.
     if DO_SMALL_FILTERING_AND_VISUALIZATION_TEST:
         print('Performing small filtering and visualization test.')
@@ -1700,5 +1737,7 @@ if __name__ == '__main__':
 
         pdb.set_trace()
 
-    # Generate training data for run.
-    generate_training_data_for_run(TEST_RUN_NAME, STORAGE_NAME)
+    # # Generate training data for run.
+    # generate_training_data_for_run(TEST_RUN_NAME, STORAGE_NAME)
+
+    main_command()  # pylint: disable=no-value-for-parameter
