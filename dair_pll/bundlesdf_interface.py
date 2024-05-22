@@ -11,6 +11,7 @@ import numpy as np
 from dair_pll.system import MeshSummary
 import torch
 from torch import Tensor
+import trimesh
 from scipy.spatial import ConvexHull  # type: ignore
 
 from dair_pll import deep_support_function, file_utils
@@ -22,9 +23,9 @@ from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
     EXPORT_FORCES_DEFAULT_NAME
 
 
-TEST_RUN_NAME = 'pll_id_p02'  #'test_004'
-SYSTEM_NAME = 'vision_cube'  #'bundlesdf_cube'
-ASSET_NAME = 'cube_2'
+TEST_RUN_NAME = 'pll_id_00'  #'test_004'
+SYSTEM_NAME = 'vision_bakingbox'  #'bundlesdf_cube'
+ASSET_NAME = 'bakingbox_1-2'
 STORAGE_NAME = op.join(file_utils.RESULTS_DIR, SYSTEM_NAME, ASSET_NAME,
                        'bundlesdf_iteration_1')
     # file_utils.assure_created(op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
@@ -85,6 +86,7 @@ DO_UNIQUENESS_SCORE_TEST = False
 DO_DOUBLE_UNIQUENESS_SCORE_TEST = False
 DO_SUPPORT_POINT_SNAPPING_TEST = False
 DO_ALL_VISUALIZATIONS_FOR_RUN_TEST = False
+DO_HYPERPLANE_CONSTRAINED_DEBUGGING = False
 
 
 # ========================= Data Generation Helpers ========================== #
@@ -180,6 +182,10 @@ def filter_mesh_samples_based_on_supports(
     assert sample_points.ndim == contact_points.ndim == 2
     assert sample_points.shape[1] == contact_points.shape[1] == 3
 
+    # Ensure the direction vectors are unit normal.
+    sample_normals = torch.nn.functional.normalize(sample_normals, dim=1)
+    support_directions = torch.nn.functional.normalize(support_directions, dim=1)
+
     # Use 3D arrays with indexing [sample_i, support_i, x/y/z].
     n_samples = sample_points.shape[0]
     n_supports = contact_points.shape[0]
@@ -198,10 +204,20 @@ def filter_mesh_samples_based_on_supports(
     # Samples should be kept if their minimum distance to the hyperplanes is
     # less than the threshold.
     within_threshold = torch.abs(hyperplane_distances) < threshold
-    sample_mask = torch.sum(within_threshold, dim=1) > 0
+    close_to_hyperplane_mask = torch.sum(within_threshold, dim=1) > 0
+
+    # Second filtering step:  Ensure the sample point's outward normal is mostly
+    # in alignment with its closest hyperplane's outward support direction.
+    nearest_hplane_idx = torch.argmin(torch.abs(hyperplane_distances), dim=1)
+    nearest_hplane_normals = support_directions[nearest_hplane_idx]
+    direction_aligned_mask = torch.sum(sample_normals * nearest_hplane_normals,
+                                       dim=1) > 0.0
+
+    # Combine masks.
+    mask = close_to_hyperplane_mask & direction_aligned_mask
 
     # Return the filtered sample points and directions.
-    return sample_points[sample_mask], sample_normals[sample_mask]
+    return sample_points[mask], sample_normals[mask]
 
 
 def create_mesh_from_deep_support(deep_support: HomogeneousICNN) -> MeshSummary:
@@ -214,89 +230,108 @@ def create_mesh_from_deep_support(deep_support: HomogeneousICNN) -> MeshSummary:
         A MeshSummary with vertices and faces attributes.  The vertices are
             already listed in counter-clockwise order.
     """
-    return deep_support_function.extract_mesh(deep_support)
+    return deep_support_function.extract_mesh_from_support_function(deep_support)
 
-
+# TODO changed to trimesh
 def create_mesh_from_set_of_points(points: Tensor) -> MeshSummary:
-    """Given a set of points, extracts a vertex/face mesh.
+    """Given a set of points, creates a Trimesh mesh."""
+    mesh = trimesh.Trimesh(vertices=points, faces=None)
+    hull = mesh.convex_hull
 
-    Args:
-        points (N, 3):  set of 3D points.
+    hull.process()
 
-    Returns:
-        A mesh summary.
-    """
-    support_points = points
-    support_point_hashes = set()
-    unique_support_points = []
+    return hull
 
-    # remove duplicate vertices
-    for vertex in support_points:
-        vertex_hash = hash(vertex.numpy().tobytes())
-        if vertex_hash in support_point_hashes:
-            continue
-        support_point_hashes.add(vertex_hash)
-        unique_support_points.append(vertex)
+    # """Given a set of points, extracts a vertex/face mesh.
 
-    vertices = torch.stack(unique_support_points)
-    hull = ConvexHull(vertices.numpy())
-    faces = Tensor(hull.simplices).to(torch.long)  # type: ignore
+    # Args:
+    #     points (N, 3):  set of 3D points.
 
-    _, backwards, _ = deep_support_function.extract_outward_normal_hyperplanes(
-        vertices.unsqueeze(0), faces.unsqueeze(0))
-    backwards = backwards.squeeze(0)
-    faces[backwards] = faces[backwards].flip(-1)
+    # Returns:
+    #     A mesh summary.
+    # """
+    # support_points = points
+    # support_point_hashes = set()
+    # unique_support_points = []
 
-    return MeshSummary(vertices=vertices, faces=faces)
+    # # remove duplicate vertices
+    # for vertex in support_points:
+    #     vertex_hash = hash(vertex.numpy().tobytes())
+    #     if vertex_hash in support_point_hashes:
+    #         continue
+    #     support_point_hashes.add(vertex_hash)
+    #     unique_support_points.append(vertex)
+
+    # vertices = torch.stack(unique_support_points)
+    # hull = ConvexHull(vertices.numpy())
+    # faces = Tensor(hull.simplices).to(torch.long)  # type: ignore
+
+    # _, backwards, _ = deep_support_function.extract_outward_normal_hyperplanes(
+    #     vertices.unsqueeze(0), faces.unsqueeze(0))
+    # backwards = backwards.squeeze(0)
+    # faces[backwards] = faces[backwards].flip(-1)
+
+    # return MeshSummary(vertices=vertices, faces=faces)
 
 
-def sample_on_mesh(mesh: MeshSummary, n_sample: int,
-                   weighted_by_area: bool = True) -> Tuple[Tensor, Tensor]:
+# TODO changed to trimesh
+def sample_on_mesh(mesh: trimesh.Trimesh, n_sample: int
+                   ) -> Tuple[Tensor, Tensor]:
     """Sample points that are on the mesh and store their corresponding outward
-    normal.
+    normal."""
+    mesh.process()
+    points, face_idx = trimesh.sample.sample_surface(mesh, n_sample)
+    normals = mesh.face_normals[face_idx]
 
-    Args:
-        mesh:  a MeshSummary.
-        n_sample:  number of points to sample.
-        weighted_by_area:  whether to select a mesh triangle with probability
-            proportional to its area or to give every mesh triangle the same
-            likelihood of selection.
+    return Tensor(points), Tensor(normals)
 
-    Outputs:
-        surface_points (N, 3):  points strictly on mesh surface.
-        surface_normals (N, 3):  outward surface normals.
-    """
-    # Get a probability distribution.
-    n_faces = mesh.faces.shape[0]
-    probabilities = np.ones(n_faces) / n_faces
-    if weighted_by_area:
-        face_verts = mesh.vertices[mesh.faces]
-        vecs_1 = face_verts[:, 1] - face_verts[:, 0]
-        vecs_2 = face_verts[:, 2] - face_verts[:, 1]
-        face_areas = torch.linalg.norm(torch.cross(vecs_1, vecs_2), dim=1) / 2
-        probabilities = face_areas / torch.sum(face_areas)
+    # def sample_on_mesh(mesh: MeshSummary, n_sample: int,
+    #                    weighted_by_area: bool = True) -> Tuple[Tensor, Tensor]:
+    #     """Sample points that are on the mesh and store their corresponding outward
+    #     normal.
 
-    # Randomly select faces.  Index into vertices via [face_i, vertex_i, x/y/z].
-    indices = torch.multinomial(probabilities, n_sample, replacement=True)
-                                                            # (n_sample,)
-    faces = mesh.faces[indices]                             # (n_sample, 3)
-    vertices = mesh.vertices[faces]                         # (n_sample, 3, 3)
+    #     Args:
+    #         mesh:  a MeshSummary.
+    #         n_sample:  number of points to sample.
+    #         weighted_by_area:  whether to select a mesh triangle with probability
+    #             proportional to its area or to give every mesh triangle the same
+    #             likelihood of selection.
 
-    # Store the faces' outward normals.
-    all_surface_normals, _, _ = \
-        deep_support_function.extract_outward_normal_hyperplanes(
-            mesh.vertices, mesh.faces
-        )
-    surface_normals = all_surface_normals.squeeze(0)[indices]
+    #     Outputs:
+    #         surface_points (N, 3):  points strictly on mesh surface.
+    #         surface_normals (N, 3):  outward surface normals.
+    #     """
+    #     # Get a probability distribution.
+    #     n_faces = mesh.faces.shape[0]
+    #     probabilities = np.ones(n_faces) / n_faces
+    #     if weighted_by_area:
+    #         face_verts = mesh.vertices[mesh.faces]
+    #         vecs_1 = face_verts[:, 1] - face_verts[:, 0]
+    #         vecs_2 = face_verts[:, 2] - face_verts[:, 1]
+    #         face_areas = torch.linalg.norm(torch.cross(vecs_1, vecs_2), dim=1) / 2
+    #         probabilities = face_areas / torch.sum(face_areas)
 
-    # Generate points randomly interpolated inside selected vertices.
-    abcs = torch.rand((n_sample, 3))
-    abcs /= torch.sum(abcs, dim=1).unsqueeze(1).tile(1,3)   # (n_sample, 3)
-    abcs = abcs.unsqueeze(2).tile(1,1,3)                    # (n_sample, 3, 3)
-    vert_pieces = vertices * abcs
-    surface_points = torch.sum(vert_pieces, dim=1)          # (n_sample, 3)
+    #     # Randomly select faces.  Index into vertices via [face_i, vertex_i, x/y/z].
+    #     indices = torch.multinomial(probabilities, n_sample, replacement=True)
+    #                                                             # (n_sample,)
+    #     faces = mesh.faces[indices]                             # (n_sample, 3)
+    #     vertices = mesh.vertices[faces]                         # (n_sample, 3, 3)
 
-    return surface_points, surface_normals
+    #     # Store the faces' outward normals.
+    #     all_surface_normals, _, _ = \
+    #         deep_support_function.extract_outward_normal_hyperplanes(
+    #             mesh.vertices, mesh.faces
+    #         )
+    #     surface_normals = all_surface_normals.squeeze(0)[indices]
+
+    #     # Generate points randomly interpolated inside selected vertices.
+    #     abcs = torch.rand((n_sample, 3))
+    #     abcs /= torch.sum(abcs, dim=1).unsqueeze(1).tile(1,3)   # (n_sample, 3)
+    #     abcs = abcs.unsqueeze(2).tile(1,1,3)                    # (n_sample, 3, 3)
+    #     vert_pieces = vertices * abcs
+    #     surface_points = torch.sum(vert_pieces, dim=1)          # (n_sample, 3)
+
+    #     return surface_points, surface_normals
     
 
 def compute_position_and_direction_uniquenesses(
@@ -1180,6 +1215,45 @@ def visualize_force_distribution(
     plt.show()
 
 
+def visualize_original_data(
+        support_points: Tensor, support_directions: Tensor,
+        normal_forces: Tensor, sample_points: Tensor = None,
+        sample_normals: Tensor = None, contact_points: Tensor = None,
+        sample_points_cf: Tensor = None) -> None:
+    plt.ion()
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(support_points[:, 0], support_points[:, 1], support_points[:, 2],
+               label='support points')
+    for i in range(normal_forces.shape[0]):
+        ax.quiver(support_points[i, 0], support_points[i, 1],
+                  support_points[i, 2], support_directions[i, 0],
+                  support_directions[i, 1], support_directions[i, 2],
+                  length=normal_forces[i].item()/50+0.005)
+
+    if sample_points is not None:
+        ax.scatter(sample_points[:, 0], sample_points[:, 1],
+                   sample_points[:, 2], color='orange', label='sample points')
+        for i in range(sample_normals.shape[0]):
+            ax.quiver(sample_points[i, 0], sample_points[i, 1],
+                      sample_points[i, 2], sample_normals[i, 0],
+                      sample_normals[i, 1], sample_normals[i, 2],
+                      length=0.01, color='orange')
+
+    if contact_points is not None:
+        ax.scatter(contact_points[:, 0], contact_points[:, 1],
+                   contact_points[:, 2], s=80, color='red',
+                   label='contact points')
+
+        ax.scatter(sample_points_cf[:, 0], sample_points_cf[:, 1],
+                   sample_points_cf[:, 2], s=80, color='green',
+                   label='contact-filtered samples')
+
+    ax.legend()
+
+    return ax
+
+
 # ============================ Loading Management ============================ #
 def load_run_data(run_name: str, system: str) -> None:
     storage_name = file_utils.assure_created(
@@ -1598,6 +1672,33 @@ if __name__ == '__main__':
             del cont_pos_uniq, cont_dir_uniq, bal_pos_uniq, bal_dir_uniq
         print('Done with all visualizations for run test.')
 
+    if DO_HYPERPLANE_CONSTRAINED_DEBUGGING:
+        pdb.set_trace()
+        output_dir = file_utils.geom_for_bsdf_dir(STORAGE_NAME, TEST_RUN_NAME)
+        normal_forces = torch.load(
+            op.join(output_dir, EXPORT_FORCES_DEFAULT_NAME)).detach()
+        support_points = torch.load(
+            op.join(output_dir, EXPORT_POINTS_DEFAULT_NAME)).detach()
+        support_directions = torch.load(
+            op.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME)).detach()
+
+        mesh = create_mesh_from_set_of_points(support_points)
+        sample_points, sample_normals = sample_on_mesh(mesh, 400)
+
+        contact_points, contact_directions = \
+            filter_points_and_directions_based_on_contact(
+                support_points, support_directions, normal_forces)
+        sample_points_cf, sample_normals_cf = \
+            filter_mesh_samples_based_on_supports(
+                sample_points, sample_normals, contact_points,
+                contact_directions)
+
+        ax = visualize_original_data(
+            support_points, support_directions, normal_forces,
+            sample_points=sample_points, sample_normals=sample_normals,
+            contact_points=contact_points, sample_points_cf=sample_points_cf)
+
+        pdb.set_trace()
 
     # Generate training data for run.
     generate_training_data_for_run(TEST_RUN_NAME, STORAGE_NAME)
