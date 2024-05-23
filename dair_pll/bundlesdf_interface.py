@@ -13,6 +13,7 @@ from dair_pll.system import MeshSummary
 import torch
 from torch import Tensor
 import trimesh
+import shutil
 from scipy.spatial import ConvexHull  # type: ignore
 
 from dair_pll import deep_support_function, file_utils
@@ -63,11 +64,11 @@ GRADIENT_DEPTH_FAR_OUTSIDE = 0.1
 
 # Hyperparameters for querying around an object with SDF minimum bounds.
 BOUNDED_NEARBY_DEPTH = 0.005
-BOUNDED_NEARBY_RADIUS = 0.05
+BOUNDED_NEARBY_RADIUS = 0.05 #0.02
 BOUNDED_FAR_DEPTH = 0.1
-BOUNDED_FAR_RADIUS = 0.1
-BOUNDED_FAR_N_QUERY = 100
-BOUNDED_NEARBY_OUTSIDE_N_QUERY = 100
+BOUNDED_FAR_RADIUS = 0.1 #0.04
+BOUNDED_FAR_N_QUERY = 100 #40
+BOUNDED_NEARBY_OUTSIDE_N_QUERY = 100 #40
 # Make the inside queried points equal to all queried outside.
 BOUNDED_NEARBY_INSIDE_N_QUERY = BOUNDED_FAR_N_QUERY + \
     BOUNDED_NEARBY_OUTSIDE_N_QUERY
@@ -1417,13 +1418,13 @@ def localize_toss_and_frame_from_states(storage_name: str, run_name: str
     for i, state in enumerate(states):
         toss = -1
         for toss_i, traj_i in toss_trajs.items():
-            if state in traj_i:
+            if torch.where((traj_i == state).all(dim=1))[0].shape[0] >= 1:
                 assert toss == -1, f'Found multiple tosses for state ' + \
                     f'{state}: {toss_i} and {toss}.'
                 toss = toss_i
         assert toss != -1, f'Could not find toss for state {state}.'
 
-        frame_in_toss = torch.where((traj_i == state).all(dim=1))[0]
+        frame_in_toss = torch.where((toss_trajs[toss] == state).all(dim=1))[0]
         assert frame_in_toss.shape[0] == 1, f'Found {frame_in_toss.shape} ' + \
             f'frames for state {state} in toss {toss}.'
         tosses_frames[i] = torch.tensor([toss, frame_in_toss.item()])
@@ -1446,11 +1447,15 @@ def localize_toss_and_frame_from_states(storage_name: str, run_name: str
               type=str,
               default=None,
               help="what PLL run ID associated with geometry outputs to use.")
+@click.option('--pll-id-output',
+              type=str,
+              default=None,
+              help="what PLL run ID associated with geometry outputs to save to.")
 @click.option('--cycle-iteration',
               type=int,
               default=1,
               help="BundleSDF cycle iteration number.")
-def main_command(vision_asset: str, pll_id: str, cycle_iteration: int):
+def main_command(vision_asset: str, pll_id: str, pll_id_output: str, cycle_iteration: int):
      # First decode the system and start/end tosses from the provided asset
     # directory.
     assert '_' in vision_asset, f'Invalid asset directory: {vision_asset}.'
@@ -1464,13 +1469,27 @@ def main_command(vision_asset: str, pll_id: str, cycle_iteration: int):
     
     if not pll_id.startswith('pll_id_'):
         pll_id = f'pll_id_{pll_id}'
+        
+    if pll_id_output is None:
+        pll_id_output = pll_id
+    else:
+        if not pll_id_output.startswith('pll_id_'):
+            pll_id_output = f'pll_id_{pll_id_output}'
 
     storage_name = op.join(file_utils.RESULTS_DIR, system, vision_asset,
                            f'bundlesdf_iteration_{cycle_iteration}')
-    output_dir = file_utils.geom_for_bsdf_dir(storage_name, pll_id)
+    input_dir = file_utils.geom_for_bsdf_dir(storage_name, pll_id)
+    output_dir = file_utils.geom_for_bsdf_dir(storage_name, pll_id_output)
+
+    # copy the input data to the output directory
+    if output_dir != input_dir:
+        run_dir_in = file_utils.run_dir(storage_name, pll_id)
+        run_dir_out = file_utils.run_dir(storage_name, pll_id_output)
+        shutil.copytree(run_dir_in, run_dir_out, dirs_exist_ok=True)
+        print(f'Copied input data from {run_dir_in} to {run_dir_out}.')
 
     # Generate training data for run.
-    generate_training_data_for_run(pll_id, storage_name)
+    generate_training_data_for_run(pll_id_output, storage_name)
     print(f'Finished generating training data in {output_dir}.')
 
 

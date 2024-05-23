@@ -29,8 +29,13 @@ VISION_TOBLERONE_SYSTEM = 'vision_toblerone'
 VISION_MILK_SYSTEM = 'vision_milk'
 VISION_SYSTEMS = ['vision_bottle', VISION_CUBE_SYSTEM, 'vision_egg',
                   'vision_half', VISION_MILK_SYSTEM, 'vision_napkin',
-                  VISION_PRISM_SYSTEM, VISION_TOBLERONE_SYSTEM,
-                  'vision_bakingbox']
+                  VISION_PRISM_SYSTEM, VISION_TOBLERONE_SYSTEM, 
+                  'vision_bakingbox', 'vision_burger', 'vision_cardboard',
+                  'vision_chocolate', 'vision_cream', 'vision_croc',
+                  'vision_crushedcan', 'vision_duck', 'vision_gallon',
+                  'vision_greencan', 'vision_hotdog', 'vision_icetray',
+                  'vision_mug', 'vision_oatly', 'vision_pinkcan', 'vision_stapler',
+                  'vision_styrofoam', 'vision_toothpaste']
 
 
 @dataclass
