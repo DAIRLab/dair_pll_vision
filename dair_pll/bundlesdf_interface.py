@@ -26,9 +26,9 @@ from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
     EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME
 
 
-TEST_RUN_NAME = 'pll_id_p15'  #'test_004'
-SYSTEM_NAME = 'vision_cube'  #'bundlesdf_cube'
-ASSET_NAME = 'cube_1'  #'cube_2'
+TEST_RUN_NAME = 'pll_id_00' #'pll_id_p15'  #'test_004'
+SYSTEM_NAME = 'vision_bakingbox' #'vision_cube'  #'bundlesdf_cube'
+ASSET_NAME = 'bakingbox_1-2' #'cube_1'  #'cube_2'
 STORAGE_NAME = op.join(file_utils.RESULTS_DIR, SYSTEM_NAME, ASSET_NAME,
                        'bundlesdf_iteration_1')
     # file_utils.assure_created(op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
@@ -775,6 +775,10 @@ def generate_point_sdf_gradient_pairs(
 
 
 def generate_training_data_for_run(run_name: str, storage_name: str):
+    # First make sure the toss and frame indices are available.
+    localize_toss_and_frame_from_states(
+        storage_name=storage_name, run_name=run_name)
+
     # Load the exported outputs from the experiment run.
     output_dir = file_utils.geom_for_bsdf_dir(storage_name, run_name)
     normal_forces = torch.load(
@@ -1316,6 +1320,30 @@ def visualize_original_data(
     return ax
 
 
+def visualize_toss_frame_idx(storage_name: str, run_name: str) -> None:
+    """Visualize the forces associated with their identified toss and frame
+    indices."""
+    output_dir = file_utils.geom_for_bsdf_dir(storage_name, run_name)
+    toss_frame_idx = torch.load(
+        op.join(output_dir, EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME)).detach()
+    forces = torch.load(
+        op.join(output_dir, EXPORT_FORCES_DEFAULT_NAME)).detach()
+
+    tosses = torch.unique(toss_frame_idx[:, 0])
+    pdb.set_trace()
+    plt.ion()
+    for toss in tosses:
+        plt.figure()
+        plt.scatter(toss_frame_idx[toss_frame_idx[:, 0] == toss][:, 1],
+                    forces[toss_frame_idx[:, 0] == toss], label='forces')
+        plt.xlabel('Frame index')
+        plt.ylabel('Normal forces [N]')
+        plt.title(f'Exported Forces for Toss {toss}')
+        pdb.set_trace()
+
+    pdb.set_trace()
+
+
 # ============================ Loading Management ============================ #
 def load_run_data(run_name: str, system: str) -> None:
     storage_name = file_utils.assure_created(
@@ -1369,7 +1397,7 @@ def localize_toss_and_frame_from_states(storage_name: str, run_name: str
     to localize which toss and which frame within the toss the data comes from.
     Identify these indices and store to file, if not found already."""
     # First check to see if this has been done before.
-    output_dir = file_utils.geom_for_bsdf_dir(STORAGE_NAME, TEST_RUN_NAME)
+    output_dir = file_utils.geom_for_bsdf_dir(storage_name, run_name)
     filepath = op.join(output_dir, EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME)
     if op.exists(filepath):
         print(f'Already found {filepath}; not regenerating.')
@@ -1381,7 +1409,7 @@ def localize_toss_and_frame_from_states(storage_name: str, run_name: str
 
     # Get the trajectories.
     toss_trajs = file_utils.get_trajectory_assets_from_config(
-        STORAGE_NAME, TEST_RUN_NAME)
+        storage_name, run_name)
 
     tosses_frames = torch.zeros((states.shape[0], 2), dtype=torch.int)
 
@@ -1390,8 +1418,9 @@ def localize_toss_and_frame_from_states(storage_name: str, run_name: str
         toss = -1
         for toss_i, traj_i in toss_trajs.items():
             if state in traj_i:
+                assert toss == -1, f'Found multiple tosses for state ' + \
+                    f'{state}: {toss_i} and {toss}.'
                 toss = toss_i
-                break
         assert toss != -1, f'Could not find toss for state {state}.'
 
         frame_in_toss = torch.where((traj_i == state).all(dim=1))[0]
@@ -1401,7 +1430,7 @@ def localize_toss_and_frame_from_states(storage_name: str, run_name: str
 
     # Save the tosses and frames.
     torch.save(tosses_frames, filepath)
-    pdb.set_trace()
+    print(f'Localized tosses and frames in {filepath}.')
 
 
 
@@ -1842,6 +1871,7 @@ if __name__ == '__main__':
 
     if FRAME_BY_FRAME_DEV:
         localize_toss_and_frame_from_states(STORAGE_NAME, TEST_RUN_NAME)
+        visualize_toss_frame_idx(STORAGE_NAME, TEST_RUN_NAME)
         pdb.set_trace()
 
     # # Generate training data for run.
