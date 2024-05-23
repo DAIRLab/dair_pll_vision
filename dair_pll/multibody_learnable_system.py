@@ -411,8 +411,8 @@ class MultibodyLearnableSystem(System):
         dt = self.dt
         eps = 1e-3
 
-        delassus, M, J, phi, non_contact_acceleration, p_BiBc_B = self.multibody_terms(
-            q_plus, v_plus, u)
+        delassus, M, J, phi, non_contact_acceleration, p_BiBc_B = \
+            self.multibody_terms(q_plus, v_plus, u)
 
         n_contacts = phi.shape[-1]
         reorder_mat = tensor_utils.sappy_reorder_mat(n_contacts)
@@ -472,7 +472,7 @@ class MultibodyLearnableSystem(System):
         force[invalid.expand(force.shape)] = 0.
 
         # Get the normal forces
-        normal_impulses = force[:, :n_contacts].reshape(-1,n_contacts)
+        normal_impulses = force[:, :n_contacts].reshape(-1, n_contacts)
         orientation = q_plus[..., :4]
 
         # Get the contact points that correspond to high normal forces
@@ -487,19 +487,22 @@ class MultibodyLearnableSystem(System):
         
         points, directions = torch.zeros((0,3)), torch.zeros((0,3))
         impulses_flat = torch.zeros((0))
+        states = torch.zeros((0, self.space.n_x))
         n_lambda = normal_impulses.shape[1]
         
         orientation = torch.tile(orientation.unsqueeze(1), (1, n_lambda, 1))
-        for force_i, points_i, orientation_i in \
-            zip(normal_impulses, p_BiBc_B, orientation):
+        state = torch.tile(x_plus.unsqueeze(1), (1, n_lambda, 1))
+        for force_i, points_i, orientation_i, state_i in \
+            zip(normal_impulses, p_BiBc_B, orientation, state):
             
             support_points = points_i
             orientation_i = ground_orientation_in_body_frame(orientation_i,
                                                              n_lambda)
             support_function = orientation_i
-            points = torch.cat((points, support_points),dim=0)
-            directions = torch.cat((directions, support_function),dim=0)
-            impulses_flat = torch.cat((impulses_flat, force_i),dim=0)
+            points = torch.cat((points, support_points), dim=0)
+            directions = torch.cat((directions, support_function), dim=0)
+            impulses_flat = torch.cat((impulses_flat, force_i), dim=0)
+            states = torch.cat((states, state_i), dim=0)
 
-        return points, directions, impulses_flat/self.dt
+        return points, directions, impulses_flat/self.dt, states
     

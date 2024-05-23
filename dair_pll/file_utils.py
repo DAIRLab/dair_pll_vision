@@ -45,6 +45,8 @@ BSDF_SUBFOLDER_NAME = 'geom_for_bsdf'
 EXPORT_POINTS_DEFAULT_NAME = 'support_points.pt'
 EXPORT_DIRECTIONS_DEFAULT_NAME = 'support_directions.pt'
 EXPORT_FORCES_DEFAULT_NAME = 'support_point_normal_forces.pt'
+EXPORT_STATES_DEFAULT_NAME = 'support_point_states.pt'
+EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME = 'tosses_and_frames.pt'
 EXPORT_POINTS_WITH_SDF_DEFAULT_NAME = 'ps.pt'
 EXPORT_SDFS_FOR_POINTS_DEFAULT_NAME = 'sdfs.pt'
 EXPORT_POINTS_WITH_SDF_BOUND_DEFAULT_NAME = 'vs.pt'
@@ -412,12 +414,14 @@ def geom_for_bsdf_dir(storage_name: str, run_name: str) -> str:
 
 
 def store_geom_for_bsdf(storage_name: str, run_name: str, points: Tensor,
-                        directions: Tensor, normal_forces: Tensor) -> None:
+                        directions: Tensor, normal_forces: Tensor,
+                        states: Tensor) -> None:
     """Store geometry-related data exports for BundleSDF."""
     output_dir = geom_for_bsdf_dir(storage_name, run_name)
     torch.save(points, path.join(output_dir, EXPORT_POINTS_DEFAULT_NAME))
     torch.save(directions, path.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME))
     torch.save(normal_forces, path.join(output_dir, EXPORT_FORCES_DEFAULT_NAME))
+    torch.save(states, path.join(output_dir, EXPORT_STATES_DEFAULT_NAME))
 
 
 def store_sdf_for_bsdf(storage_name: str, run_name: str,
@@ -444,6 +448,23 @@ def store_sdf_for_bsdf(storage_name: str, run_name: str,
         torch.save(w_normals,
                    path.join(output_dir,
                              EXPORT_SDF_GRADIENTS_FOR_POINTS_DEFAULT_NAME))
+
+
+def get_trajectory_assets_from_config(storage_name: str, run_name: str) -> str:
+    """NOTE: This only works for vision experiments since
+    `full_asset_directory_path` is an attribute in VisionDataConfig."""
+    config = load_configuration(storage_name, run_name)
+    traj_dir = config.data_config.full_asset_directory_path
+
+    toss_trajs = {}
+
+    for file in os.listdir(traj_dir):
+        if file.endswith('.pt'):
+            toss = int(file.split('.')[0])
+            traj = torch.load(path.join(traj_dir, file))
+            toss_trajs[toss] = traj
+
+    return toss_trajs
 
 
 def get_evaluation_filename(storage_name: str, run_name: str) -> str:

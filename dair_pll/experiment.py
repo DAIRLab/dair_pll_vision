@@ -965,14 +965,14 @@ class SupervisedLearningExperiment(ABC):
         # Points and directions are 3D while forces are 1D for a given point.
         points, directions = torch.zeros((0,3)), torch.zeros((0,3))
         normal_forces = torch.zeros((0))
+        states = torch.zeros((0, learned_system.space.n_x))
 
         training_set, validation_set, _ = \
             self.learning_data_manager.get_updated_trajectory_sets()
         
         for data_set in [training_set, validation_set]:
-            slices_loader = DataLoader(data_set.slices,
-                                        batch_size=128,
-                                        shuffle=False)
+            slices_loader = DataLoader(
+                data_set.slices, batch_size=128, shuffle=False)
 
             # Iterate over all the training data.
             for batch_x, batch_y in slices_loader:
@@ -982,19 +982,20 @@ class SupervisedLearningExperiment(ABC):
 
                 # The bulk of the computation is done in the like-named method
                 # of the associated learned system for a single batch of data.
-                points_i, directions_i, normal_forces_i = \
+                points_i, directions_i, normal_forces_i, states_i = \
                     learned_system.bundlesdf_data_generation_from_cnets(
                         x, u, x_plus)
                 
                 # Store the results in a growing tensor.
                 points = torch.cat((points, points_i), dim=0)
-                directions = torch.cat((directions,directions_i), dim=0)
+                directions = torch.cat((directions, directions_i), dim=0)
                 normal_forces = torch.cat((normal_forces,normal_forces_i),dim=0)
+                states = torch.cat((states, states_i), dim=0)
 
         # Store the results to file.
         file_utils.store_geom_for_bsdf(
             self.config.storage, self.config.run_name, points, directions,
-            normal_forces
+            normal_forces, states
         )
 
         # Generate some BundleSDF training data based on the above results.

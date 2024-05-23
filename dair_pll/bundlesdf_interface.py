@@ -21,12 +21,14 @@ from dair_pll.geometry import _DEEP_SUPPORT_DEFAULT_DEPTH, \
 from dair_pll.deep_support_function import HomogeneousICNN
 from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
     EXPORT_DIRECTIONS_DEFAULT_NAME, \
-    EXPORT_FORCES_DEFAULT_NAME
+    EXPORT_FORCES_DEFAULT_NAME, \
+    EXPORT_STATES_DEFAULT_NAME, \
+    EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME
 
 
-TEST_RUN_NAME = 'test_004'
-SYSTEM_NAME = 'bundlesdf_cube'
-ASSET_NAME = 'cube_2'
+TEST_RUN_NAME = 'pll_id_p15'  #'test_004'
+SYSTEM_NAME = 'vision_cube'  #'bundlesdf_cube'
+ASSET_NAME = 'cube_1'  #'cube_2'
 STORAGE_NAME = op.join(file_utils.RESULTS_DIR, SYSTEM_NAME, ASSET_NAME,
                        'bundlesdf_iteration_1')
     # file_utils.assure_created(op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
@@ -88,6 +90,7 @@ DO_DOUBLE_UNIQUENESS_SCORE_TEST = False
 DO_SUPPORT_POINT_SNAPPING_TEST = False
 DO_ALL_VISUALIZATIONS_FOR_RUN_TEST = False
 DO_HYPERPLANE_CONSTRAINED_DEBUGGING = False
+FRAME_BY_FRAME_DEV = True
 
 
 # ========================= Data Generation Helpers ========================== #
@@ -1302,6 +1305,48 @@ def load_deep_support_convex_network(run_name: str, system: str
     return deep_support
 
 
+def localize_toss_and_frame_from_states(storage_name: str, run_name: str
+                                        ) -> None:
+    """The states associated with contact points/directions/forces can be used
+    to localize which toss and which frame within the toss the data comes from.
+    Identify these indices and store to file, if not found already."""
+    # First check to see if this has been done before.
+    output_dir = file_utils.geom_for_bsdf_dir(STORAGE_NAME, TEST_RUN_NAME)
+    filepath = op.join(output_dir, EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME)
+    if op.exists(filepath):
+        print(f'Already found {filepath}; not regenerating.')
+        return
+
+    # Otherwise, generate it.
+    states = torch.load(
+        op.join(output_dir, EXPORT_STATES_DEFAULT_NAME)).detach()
+
+    # Get the trajectories.
+    toss_trajs = file_utils.get_trajectory_assets_from_config(
+        STORAGE_NAME, TEST_RUN_NAME)
+
+    tosses_frames = torch.zeros((states.shape[0], 2), dtype=torch.int)
+
+    # Iterate over every state to find which trajectory it's from.
+    for i, state in enumerate(states):
+        toss = -1
+        for toss_i, traj_i in toss_trajs.items():
+            if state in traj_i:
+                toss = toss_i
+                break
+        assert toss != -1, f'Could not find toss for state {state}.'
+
+        frame_in_toss = torch.where((traj_i == state).all(dim=1))[0]
+        assert frame_in_toss.shape[0] == 1, f'Found {frame_in_toss.shape} ' + \
+            f'frames for state {state} in toss {toss}.'
+        tosses_frames[i] = torch.tensor([toss, frame_in_toss.item()])
+
+    # Save the tosses and frames.
+    torch.save(tosses_frames, filepath)
+    pdb.set_trace()
+
+
+
 # ======================== End of Function Definitions ======================= #
 
 @click.command()
@@ -1735,6 +1780,11 @@ if __name__ == '__main__':
             sample_points=sample_points, sample_normals=sample_normals,
             contact_points=contact_points, sample_points_cf=sample_points_cf)
 
+        pdb.set_trace()
+
+    if FRAME_BY_FRAME_DEV:
+        pdb.set_trace()
+        localize_toss_and_frame_from_states(STORAGE_NAME, TEST_RUN_NAME)
         pdb.set_trace()
 
     # # Generate training data for run.
