@@ -90,13 +90,14 @@ DO_DOUBLE_UNIQUENESS_SCORE_TEST = False
 DO_SUPPORT_POINT_SNAPPING_TEST = False
 DO_ALL_VISUALIZATIONS_FOR_RUN_TEST = False
 DO_HYPERPLANE_CONSTRAINED_DEBUGGING = False
-FRAME_BY_FRAME_DEV = True
+FRAME_BY_FRAME_DEV = False
 
 
 # ========================= Data Generation Helpers ========================== #
+# TODO changed to keep track of indices
 def filter_points_and_directions_based_on_contact(
         contact_points: Tensor, directions: Tensor, normal_forces: Tensor,
-        use_adaptive_threshold: bool = True
+        toss_frames: Tensor, use_adaptive_threshold: bool = True
 ) -> Tuple[Tensor, Tensor]:
     """Filter out points that are likely not in contact with the ground during
     the data captured by the normal_forces tensor.
@@ -107,6 +108,8 @@ def filter_points_and_directions_based_on_contact(
         directions (M, 3):  associated support directions.
         normal_forces (M,):  normal forces associated with the contact points
             during one timestep of PLL training.
+        toss_frames (M, 2):  the toss and frame indices associated with each
+            contact point.
         use_adaptive_threshold:  whether to use an adaptive threshold based on
             the normal forces observed during training.
 
@@ -114,11 +117,14 @@ def filter_points_and_directions_based_on_contact(
         filtered_points (N, 3):  N support points that experienced a normal
             force greater than force_threshold.
         filtered_directions (N, 3):  the corresponding normal directions.
+        filtered_toss_frames (N, 2):  the corresponding toss and frame indices.
     """
     assert normal_forces.ndim == 1
-    assert contact_points.ndim == directions.ndim == 2
-    assert normal_forces.shape[0]==contact_points.shape[0]==directions.shape[0]
+    assert contact_points.ndim == directions.ndim == toss_frames.ndim == 2
+    assert normal_forces.shape[0] == contact_points.shape[0] == \
+        directions.shape[0] == toss_frames.shape[0]
     assert contact_points.shape[1] == directions.shape[1] == 3
+    assert toss_frames.shape[1] == 2
 
     if use_adaptive_threshold:
         # Adaptively find a force threshold based on the normal forces observed.
@@ -130,8 +136,10 @@ def filter_points_and_directions_based_on_contact(
     mask = normal_forces > force_threshold
     filtered_points = contact_points[mask]
     filtered_directions = directions[mask]
+    filtered_toss_frames = toss_frames[mask]
 
-    return filtered_points.detach(), filtered_directions.detach()
+    return filtered_points.detach(), filtered_directions.detach(), \
+        filtered_toss_frames.detach()
 
 
 def find_adaptive_force_threshold(normal_forces: Tensor,
@@ -158,10 +166,11 @@ def find_adaptive_force_threshold(normal_forces: Tensor,
 
     return threshold
 
-
+# TODO changed to keep track of indices
 def filter_mesh_samples_based_on_supports(
         sample_points: Tensor, sample_normals: Tensor, contact_points: Tensor,
-        support_directions: Tensor, threshold: float = HULL_PROXIMITY_THRESH
+        support_directions: Tensor, contact_toss_frames: Tensor,
+        threshold: float = HULL_PROXIMITY_THRESH
 ) -> Tuple[Tensor, Tensor]:
     """Given a set of points sampled on the convex hull mesh and their outward
     normal directions, filter out any that are located beyond a threshold away
@@ -172,6 +181,7 @@ def filter_mesh_samples_based_on_supports(
         sample_normals (N, 3)
         contact_points (M, 3)
         support_directions (M, 3)
+        contact_toss_frames (M, 2)
         threshold:  maximum distance threshold in meters permissible between 
             sample point and the nearest hyperplane defined by contact_points
             and support_directions.
@@ -179,12 +189,15 @@ def filter_mesh_samples_based_on_supports(
     Outputs:
         filtered_sample_points (K, 3)
         filtered_sample_directions (K, 3)
+        filtered_toss_frames (K, 2)
     """
     # Do some input checking.
     assert sample_points.shape == sample_normals.shape
     assert contact_points.shape == support_directions.shape
-    assert sample_points.ndim == contact_points.ndim == 2
+    assert sample_points.ndim == contact_points.ndim == \
+        contact_toss_frames.ndim == 2
     assert sample_points.shape[1] == contact_points.shape[1] == 3
+    assert contact_toss_frames.shape[1] == 2
 
     # Ensure the direction vectors are unit normal.
     sample_normals = torch.nn.functional.normalize(sample_normals, dim=1)
@@ -200,10 +213,9 @@ def filter_mesh_samples_based_on_supports(
     # Get distances from hyperplanes by projecting sample points onto hyperplane
     # normal axis.
     support_to_sample_vec = sample_points_expanded - support_points_expanded
-    hyperplane_distances = torch.einsum('ijk,ijk->ij',
-                                        support_to_sample_vec,
-                                        support_dirs_expanded
-                                        )   # (n_samples, n_supports)
+    hyperplane_distances = torch.einsum(
+        'ijk,ijk->ij', support_to_sample_vec, support_dirs_expanded
+    )   # (n_samples, n_supports)
     
     # Samples should be kept if their minimum distance to the hyperplanes is
     # less than the threshold.
@@ -220,8 +232,10 @@ def filter_mesh_samples_based_on_supports(
     # Combine masks.
     mask = close_to_hyperplane_mask & direction_aligned_mask
 
-    # Return the filtered sample points and directions.
-    return sample_points[mask], sample_normals[mask]
+    # Return the filtered sample points, directions, and their associated toss
+    # and frame indices.
+    return sample_points[mask], sample_normals[mask], \
+        contact_toss_frames[nearest_hplane_idx][mask]
 
 
 def create_mesh_from_deep_support(deep_support: HomogeneousICNN) -> MeshSummary:
@@ -449,9 +463,10 @@ def identify_nearest_support_point(support_points: Tensor, sample_points: Tensor
 
     return nearest_support_idx, nearest_support_dists
 
-
+# TODO changed to keep track of indices
 def rebalance_contact_points(
         mesh: MeshSummary, contact_points: Tensor, contact_directions: Tensor,
+        contact_toss_frames: Tensor,
         snapping_threshold: float = SUPPORT_POINT_DISTANCE_THRESHOLD
 ) -> Tuple[Tensor, Tensor]:
     """The contact points may overrepresent certain corners/portions of the
@@ -473,6 +488,7 @@ def rebalance_contact_points(
         mesh
         contact_points (N, 3)
         contact_directions (N, 3)
+        contact_toss_frames (N, 2)
         snapping_threshold
 
     Outputs:
@@ -491,13 +507,15 @@ def rebalance_contact_points(
     good_idxs = snapping_idxs[snap_dists < snapping_threshold]
     balanced_contacts = contact_points[good_idxs]
     balanced_directions = contact_directions[good_idxs]
+    balanced_toss_frames = contact_toss_frames[good_idxs]
 
-    return balanced_contacts, balanced_directions
+    return balanced_contacts, balanced_directions, balanced_toss_frames
 
 
 # ============================= Data Generation ============================== #
+# TODO changed to keep track of indices
 def generate_point_sdf_pairs(
-        points: Tensor, directions: Tensor,
+        points: Tensor, directions: Tensor, toss_frames: Tensor,
         n_nearby_inside: int = N_QUERY_INSIDE,
         n_nearby_outside: int = N_QUERY_OUTSIDE,
         n_far_outside: int = N_QUERY_OUTSIDE_FAR,
@@ -513,6 +531,7 @@ def generate_point_sdf_pairs(
         point (N, 3):  N support points of the object geometry for the given
             support directions.
         direction (N, 3):  associated support directions.
+        toss_frames (N, 2):  associated toss and frame indices.
         n_nearby_inside (optional):  number of points to query inside geometry
             at a nearby range.
         n_nearby_outside (optional):  number of points to query outside
@@ -533,15 +552,20 @@ def generate_point_sdf_pairs(
             Here M = n_nearby_inside + n_nearby_outside + n_far_outside.
         signed_distances (N*M,):  signed distances associated with the points,
             in the same order as points_on_axis.
+        repeated_toss_frames (N*M, 2):  the toss and frame indices associated
+            with each point, in the same order as points_on_axis.
     """
     # Perform input checks.
-    assert points.ndim == directions.ndim == 2, f'Expected 2-dimensional ' \
-        f'shapes for {points.shape=} and {directions.shape=}.'
+    assert points.ndim == directions.ndim == toss_frames.ndim == 2, \
+        f'Expected 2-dimensional shapes for {points.shape=} and ' + \
+        f'{directions.shape=}.'
     n_points = points.shape[0]
     assert points.shape == (n_points, 3), f'Expected {points.shape=} to ' \
         + 'be (n_points, 3).'
     assert directions.shape == (n_points, 3), f'Expected {directions.shape=} ' \
         + 'to be (n_points, 3).'
+    assert toss_frames.shape == (n_points, 2), f'Expected {toss_frames.shape=}' \
+        + ' to be (n_points, 2).'
     
     # The signed distances will be tiled such that the first N correspond to
     # point 1, the next N correspond to point 2, etc.
@@ -555,20 +579,23 @@ def generate_point_sdf_pairs(
     n_per_point = n_nearby_inside + n_nearby_outside + n_far_outside
 
     # Get N repeated for first point, then N repeated for second point, etc.
-    repeated_points = points.unsqueeze(1).repeat(1, n_per_point, 1
-                                                 ).reshape(-1,3)
-    repeated_directions = directions.unsqueeze(1).repeat(1, n_per_point, 1
-                                                         ).reshape(-1,3)
+    repeated_points = points.unsqueeze(1).repeat(
+        1, n_per_point, 1).reshape(-1,3)
+    repeated_directions = directions.unsqueeze(1).repeat(
+        1, n_per_point, 1).reshape(-1,3)
+    repeated_toss_frames = toss_frames.unsqueeze(1).repeat(
+        1, n_per_point, 1).reshape(-1,2)
 
     # Get the 3D points corresponding to the generated signed distances.
     points_on_axis = repeated_points + \
         signed_distances.unsqueeze(1).repeat(1,3)*repeated_directions
 
-    return points_on_axis, signed_distances
+    return points_on_axis, signed_distances, repeated_toss_frames
 
-
-def generate_point_sdf_bound_pairs(points: Tensor, directions: Tensor
-                                   ) -> Tuple[Tensor, Tensor]:
+# TODO changed to keep track of indices
+def generate_point_sdf_bound_pairs(
+        points: Tensor, directions: Tensor, toss_frames: Tensor
+) -> Tuple[Tensor, Tensor]:
     """Generate pairs of 3D points and their associated minimum signed distance
     bounds, given a list of points with known signed distance of zero and
     directions associated with those points' contact directions.
@@ -577,6 +604,7 @@ def generate_point_sdf_bound_pairs(points: Tensor, directions: Tensor
         points (M, 3):  M support points of the object geometry for the given
             support directions.
         directions (M, 3):  associated support directions.
+        toss_frames (N, 2):  associated toss and frame indices.
 
     Outputs:
         points_in_space (M*N, 3):  N 3D points generated randomly, associated
@@ -584,15 +612,20 @@ def generate_point_sdf_bound_pairs(points: Tensor, directions: Tensor
             followed by N 3D points w.r.t. the second point and direction, etc.
         min_signed_distances (M*N,):  minimum signed distance bounds associated
             with the points, in the same order as points_in_space.
+        repeated_toss_frames (M*N, 2):  the toss and frame indices associated
+            with each point, in the same order as points_in_space.
     """
     # Perform input checks.
-    assert points.ndim == directions.ndim == 2, f'Expected 2-dimensional ' \
-        f'shapes for {points.shape=} and {directions.shape=}.'
+    assert points.ndim == directions.ndim == toss_frames.ndim == 2, \
+        f'Expected 2-dimensional shapes for {points.shape=} and ' + \
+        f'{directions.shape=}.'
     n_points = points.shape[0]
     assert points.shape == (n_points, 3), f'Expected {points.shape=} to ' \
         + 'be (n_points, 3).'
     assert directions.shape == (n_points, 3), f'Expected {directions.shape=} ' \
         + 'to be (n_points, 3).'
+    assert toss_frames.shape == (n_points, 2), f'Expected {toss_frames.shape=}' \
+        + ' to be (n_points, 2).'
     
     # Get one unit vector orthogonal to the provided direction vector.  Can use
     # an intermediate random vector, then cross with `direction` to get an
@@ -631,6 +664,8 @@ def generate_point_sdf_bound_pairs(points: Tensor, directions: Tensor
                                                 ).reshape(-1, 3)
     repeated_zs = directions.unsqueeze(1).repeat(1, n_per_point, 1
                                                 ).reshape(-1, 3)
+    repeated_toss_frames = toss_frames.unsqueeze(1).repeat(1, n_per_point, 1
+                                                ).reshape(-1, 2)
     repeated_xs = orth_dir_x.unsqueeze(1).repeat(1, n_per_point, 1
                                                 ).reshape(-1, 3)
     repeated_ys = orth_dir_y.unsqueeze(1).repeat(1, n_per_point, 1
@@ -647,40 +682,52 @@ def generate_point_sdf_bound_pairs(points: Tensor, directions: Tensor
 
     min_signed_distances = heights
 
-    return points_in_space, min_signed_distances
+    return points_in_space, min_signed_distances, repeated_toss_frames
 
-
-def generate_training_data(points: Tensor, directions: Tensor) -> None:
+# TODO changed to keep track of indices
+def generate_training_data(
+        points: Tensor, directions: Tensor, toss_frames: Tensor) -> None:
     """Given points and directions, create points with SDF values or bounds for
     training BundleSDF.
     
     Args:
         points (N, 3):  observed support points from ContactNets.
         directions (N, 3):  directions associated with the provided points.
+        toss_frames (N, 2):  toss/frame indices associated with the provided
+            points.
 
     Outputs:
         ps (M, 3):  new points generated along rays through support points along
             the provided directions.
         sdfs (M,):  signed distances associated with the generated ps.
+        p_toss_frames (M, 2):  the toss and frame indices associated with the
+            generated ps.
         vs (L, 3):  new points generated randomly in the neighborhood around
             support points.
         sdf_bounds (L,):  minimum signed distance bounds associated with the
             generated vs.
+        v_toss_frames (L, 2):  the toss and frame indices associated with the
+            generated vs.
     """
     # Do some input checking.
     assert points.shape == directions.shape
-    assert points.ndim == directions.ndim == 2
+    assert points.ndim == directions.ndim == toss_frames.ndim == 2
     assert points.shape[1] == directions.shape[1] == 3
+    assert toss_frames.shape[1] == 2
+    assert points.shape[0] == toss_frames.shape[0]
 
     # Compute the outputs.
-    ps, sdfs = generate_point_sdf_pairs(points, directions)
-    vs, sdf_bounds = generate_point_sdf_bound_pairs(points, directions)
+    ps, sdfs, p_toss_frames = \
+        generate_point_sdf_pairs(points, directions, toss_frames)
+    vs, sdf_bounds, v_toss_frames = \
+        generate_point_sdf_bound_pairs(points, directions, toss_frames)
 
-    return ps, sdfs, vs, sdf_bounds
+    return ps, sdfs, p_toss_frames, vs, sdf_bounds, v_toss_frames
 
-
-def generate_point_sdf_gradient_pairs(points: Tensor, normals: Tensor
-                                      ) -> Tuple[Tensor, Tensor]:
+# TODO changed to keep track of indices
+def generate_point_sdf_gradient_pairs(
+        points: Tensor, normals: Tensor, toss_frames: Tensor
+) -> Tuple[Tensor, Tensor]:
     """Given a set of points and their associated outward normals, generate an
     sampled set of points and their associated outward normals.  These (point,
     normal) pairs are to be used in BundleSDF loss that enforces the SDF should
@@ -690,6 +737,7 @@ def generate_point_sdf_gradient_pairs(points: Tensor, normals: Tensor
     Args:
         points (N, 3):  points on the surface of the geometry's convex hull.
         normals (N, 3):  outward normals associated with the points.
+        toss_frames (N, 2):  associated toss and frame indices.
 
     Outputs:
         extended_points (N*M, 3):  a set of points obtained by walking along the
@@ -698,10 +746,12 @@ def generate_point_sdf_gradient_pairs(points: Tensor, normals: Tensor
             into generate_point_sdf_pairs.
         extended_normals (N*M, 3):  the normals associated with the
             extended_points.
+        extended_toss_frames (M*N, 2):  the toss and frame indices associated
+            with each point, in the same order as points_in_space.
     """
     # Can generate points in the same way as generating the (point, SDF) pairs.
-    extended_points, _ = generate_point_sdf_pairs(
-        points, normals,
+    extended_points, _, extended_toss_frames = generate_point_sdf_pairs(
+        points, normals, toss_frames,
         n_nearby_inside=GRADIENT_N_QUERY_INSIDE,
         n_nearby_outside=GRADIENT_N_QUERY_OUTSIDE,
         n_far_outside=GRADIENT_N_QUERY_OUTSIDE_FAR,
@@ -721,7 +771,7 @@ def generate_point_sdf_gradient_pairs(points: Tensor, normals: Tensor
     assert extended_points.shape == extended_normals.shape == \
         (n_samples_per_point*n_points, 3)
     
-    return extended_points, extended_normals
+    return extended_points, extended_normals, extended_toss_frames
 
 
 def generate_training_data_for_run(run_name: str, storage_name: str):
@@ -733,6 +783,8 @@ def generate_training_data_for_run(run_name: str, storage_name: str):
         op.join(output_dir, EXPORT_POINTS_DEFAULT_NAME)).detach()
     support_directions = torch.load(
         op.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME)).detach()
+    toss_frames = torch.load(
+        op.join(output_dir, EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME)).detach()
 
     # Sample points on the support point mesh surface.
     mesh = create_mesh_from_set_of_points(support_points)
@@ -740,17 +792,19 @@ def generate_training_data_for_run(run_name: str, storage_name: str):
 
     # Filter support points via simple thresholding of normal forces, then
     # filter the sample points based on this contact knowledge.
-    contact_points, contact_directions = \
+    contact_points, contact_directions, contact_toss_frames = \
         filter_points_and_directions_based_on_contact(
-            support_points, support_directions, normal_forces
+            support_points, support_directions, normal_forces, toss_frames
         )
-    sample_points_cf, sample_normals_cf = filter_mesh_samples_based_on_supports(
-        sample_points, sample_normals, contact_points, contact_directions
-    )
+    sample_points_cf, sample_normals_cf, sample_toss_frames = \
+        filter_mesh_samples_based_on_supports(
+            sample_points, sample_normals, contact_points, contact_directions,
+            contact_toss_frames
+        )
 
     # Generate training data for the mesh sample points.
-    mesh_ps, mesh_sdfs = generate_point_sdf_pairs(
-        sample_points_cf, sample_normals_cf,
+    mesh_ps, mesh_sdfs, mesh_p_idx = generate_point_sdf_pairs(
+        sample_points_cf, sample_normals_cf, sample_toss_frames,
         n_nearby_inside=MESH_N_QUERY_INSIDE,
         n_nearby_outside=MESH_N_QUERY_OUTSIDE,
         n_far_outside=MESH_N_QUERY_OUTSIDE_FAR,
@@ -758,42 +812,46 @@ def generate_training_data_for_run(run_name: str, storage_name: str):
         depth_outside=MESH_DEPTH_OUTSIDE,
         depth_far_outside=MESH_DEPTH_FAR_OUTSIDE
     )
-    mesh_vs, mesh_sdf_bounds = generate_point_sdf_bound_pairs(
-        sample_points_cf, sample_normals_cf
+    mesh_vs, mesh_sdf_bounds, mesh_v_idx = generate_point_sdf_bound_pairs(
+        sample_points_cf, sample_normals_cf, sample_toss_frames
     )
 
     # Generate SDF gradient training data from the mesh sample points.
-    mesh_ws, mesh_w_normals = generate_point_sdf_gradient_pairs(
-        sample_points_cf, sample_normals_cf
+    mesh_ws, mesh_w_normals, mesh_w_idx = generate_point_sdf_gradient_pairs(
+        sample_points_cf, sample_normals_cf, sample_toss_frames
     )
 
     if DO_SUPPORT_POINT_REBALANCING:
         # Redistribute the contact points to be more geometrically balanced
         # (this will decrease the number of contacts/directions considered).
-        balanced_contacts, balanced_directions = rebalance_contact_points(
-            mesh, contact_points, contact_directions
-        )
+        balanced_contacts, balanced_directions, balanced_toss_frames = \
+            rebalance_contact_points(
+                mesh, contact_points, contact_directions, contact_toss_frames
+            )
     else:
         balanced_contacts = contact_points
         balanced_directions = contact_directions
+        balanced_toss_frames = contact_toss_frames
     
     # Generate training data from the redistributed contact points.
-    contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
-        generate_training_data(balanced_contacts, balanced_directions)
+    contact_ps, contact_sdfs, contact_p_idx, \
+    contact_vs, contact_sdf_bounds, contact_v_idx = \
+        generate_training_data(
+            balanced_contacts, balanced_directions, balanced_toss_frames)
     
     # Save the generated data.
     file_utils.store_sdf_for_bsdf(
         storage_name, run_name,
         from_support_not_mesh=False,
-        ps=mesh_ps, sdfs=mesh_sdfs,
-        vs=mesh_vs, sdf_bounds=mesh_sdf_bounds,
-        ws=mesh_ws, w_normals=mesh_w_normals
+        ps=mesh_ps, sdfs=mesh_sdfs, p_idx=mesh_p_idx,
+        vs=mesh_vs, sdf_bounds=mesh_sdf_bounds, v_idx=mesh_v_idx,
+        ws=mesh_ws, w_normals=mesh_w_normals, w_idx=mesh_w_idx
     )
     file_utils.store_sdf_for_bsdf(
         storage_name, run_name,
         from_support_not_mesh=True,
-        ps=contact_ps, sdfs=contact_sdfs,
-        vs=contact_vs, sdf_bounds=contact_sdf_bounds
+        ps=contact_ps, sdfs=contact_sdfs, p_idx=contact_p_idx,
+        vs=contact_vs, sdf_bounds=contact_sdf_bounds, v_idx=contact_v_idx
     )
 
 
@@ -1783,7 +1841,6 @@ if __name__ == '__main__':
         pdb.set_trace()
 
     if FRAME_BY_FRAME_DEV:
-        pdb.set_trace()
         localize_toss_and_frame_from_states(STORAGE_NAME, TEST_RUN_NAME)
         pdb.set_trace()
 

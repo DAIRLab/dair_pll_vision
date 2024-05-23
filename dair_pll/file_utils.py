@@ -49,10 +49,13 @@ EXPORT_STATES_DEFAULT_NAME = 'support_point_states.pt'
 EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME = 'tosses_and_frames.pt'
 EXPORT_POINTS_WITH_SDF_DEFAULT_NAME = 'ps.pt'
 EXPORT_SDFS_FOR_POINTS_DEFAULT_NAME = 'sdfs.pt'
+EXPORT_PS_TOSS_FRAMES_DEFAULT_NAME = 'p_toss_frames.pt'
 EXPORT_POINTS_WITH_SDF_BOUND_DEFAULT_NAME = 'vs.pt'
 EXPORT_SDF_BOUNDS_FOR_POINTS_DEFAULT_NAME = 'sdf_bounds.pt'
+EXPORT_VS_TOSS_FRAMES_DEFAULT_NAME = 'v_toss_frames.pt'
 EXPORT_POINTS_WITH_SDF_GRADIENT_DEFAULT_NAME = 'ws.pt'
 EXPORT_SDF_GRADIENTS_FOR_POINTS_DEFAULT_NAME = 'w_normals.pt'
+EXPORT_WS_TOSS_FRAMES_DEFAULT_NAME = 'w_toss_frames.pt'
 TRAJECTORY_GIF_DEFAULT_NAME = 'trajectory.gif'
 FINAL_EVALUATION_NAME = f'statistics{STATS_EXTENSION}'
 HYPERPARAMETERS_FILENAME = f'optimal_hyperparameters{HYPERPARAMETERS_EXTENSION}'
@@ -426,8 +429,9 @@ def store_geom_for_bsdf(storage_name: str, run_name: str, points: Tensor,
 
 def store_sdf_for_bsdf(storage_name: str, run_name: str,
                        from_support_not_mesh: bool, ps: Tensor, sdfs: Tensor,
-                       vs: Tensor, sdf_bounds: Tensor, ws: Tensor = None,
-                       w_normals: Tensor = None) -> None:
+                       p_idx: Tensor, vs: Tensor, sdf_bounds: Tensor, 
+                       v_idx: Tensor, ws: Tensor = None,
+                       w_normals: Tensor = None, w_idx: Tensor = None) -> None:
     """Store SDF training data for BundleSDF."""
     bsdf_output_dir = geom_for_bsdf_dir(storage_name, run_name)
     subfolder = BSDF_FROM_SUPPORT_SUBSUBFOLDER_NAME if from_support_not_mesh \
@@ -436,18 +440,24 @@ def store_sdf_for_bsdf(storage_name: str, run_name: str,
 
     torch.save(ps, path.join(output_dir, EXPORT_POINTS_WITH_SDF_DEFAULT_NAME))
     torch.save(sdfs, path.join(output_dir, EXPORT_SDFS_FOR_POINTS_DEFAULT_NAME))
+    torch.save(p_idx, path.join(output_dir, EXPORT_PS_TOSS_FRAMES_DEFAULT_NAME))
     torch.save(vs, path.join(output_dir,
                              EXPORT_POINTS_WITH_SDF_BOUND_DEFAULT_NAME))
     torch.save(sdf_bounds, path.join(output_dir,
                                      EXPORT_SDF_BOUNDS_FOR_POINTS_DEFAULT_NAME))
+    torch.save(v_idx, path.join(output_dir,
+                                     EXPORT_VS_TOSS_FRAMES_DEFAULT_NAME))
     
-    if ws is not None and w_normals is not None:
+    if ws is not None and w_normals is not None and w_idx is not None:
         torch.save(ws,
                    path.join(output_dir,
                              EXPORT_POINTS_WITH_SDF_GRADIENT_DEFAULT_NAME))
         torch.save(w_normals,
                    path.join(output_dir,
                              EXPORT_SDF_GRADIENTS_FOR_POINTS_DEFAULT_NAME))
+        torch.save(w_idx,
+                   path.join(output_dir,
+                             EXPORT_WS_TOSS_FRAMES_DEFAULT_NAME))
 
 
 def get_trajectory_assets_from_config(storage_name: str, run_name: str) -> str:
