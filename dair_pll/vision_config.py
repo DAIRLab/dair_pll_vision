@@ -253,7 +253,7 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         """Loss function for matching vision-informed geometry estimate from
         BundleSDF."""
         # First check if this loss can be computed based on BundleSDF inputs.
-        if self.config.data_config.bundlesdf_id is None:
+        if self.config.data_config.bundlesdf_id is None or system.w_bsdf == 0.0:
             return Tensor([0.0])
 
         # First uncover the deep support convex network.
