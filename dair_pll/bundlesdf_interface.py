@@ -1415,6 +1415,7 @@ def localize_toss_and_frame_from_states(storage_name: str, run_name: str
     tosses_frames = torch.zeros((states.shape[0], 2), dtype=torch.int)
 
     # Iterate over every state to find which trajectory it's from.
+    used_ambiguous_frames = []
     for i, state in enumerate(states):
         toss = -1
         for toss_i, traj_i in toss_trajs.items():
@@ -1425,8 +1426,13 @@ def localize_toss_and_frame_from_states(storage_name: str, run_name: str
         assert toss != -1, f'Could not find toss for state {state}.'
 
         frame_in_toss = torch.where((toss_trajs[toss] == state).all(dim=1))[0]
-        assert frame_in_toss.shape[0] == 1, f'Found {frame_in_toss.shape} ' + \
-            f'frames for state {state} in toss {toss}.'
+        
+        # If there are two states that are exactly the same, it doesn't matter
+        # which is selected, so pick the first.
+        if frame_in_toss.shape[0] != 1:
+            print(f'Found duplicate matching states {frame_in_toss}; using first.')
+            frame_in_toss = frame_in_toss[0]
+
         tosses_frames[i] = torch.tensor([toss, frame_in_toss.item()])
 
     # Save the tosses and frames.

@@ -243,14 +243,14 @@ def main(pll_run_id: str = "",
     # Describes the ground truth system; infers everything from the URDF.
     # This is a configuration for a DrakeSystem, which wraps a Drake simulation
     # for the described URDFs.
-    if use_bundlesdf_mesh and tracker != 'tagslam':
+    if use_bundlesdf_mesh and tracker != 'tagslam' and w_bsdf > 0:
         urdf = make_urdf_with_bundlesdf_mesh(
             system=system, vision_asset=asset_name, bundlesdf_id=bundlesdf_id,
             cycle_iteration=cycle_iteration, storage_name=storage_name,
             pll_id=pll_run_id
         )
     else:
-        urdf_asset = URDFS[system][MESH_TYPE]
+        urdf_asset = URDFS[VISION_CUBE_SYSTEM][MESH_TYPE] #URDFS[system][MESH_TYPE]
         urdf = file_utils.get_asset(urdf_asset)
     urdfs = {system: urdf}
     base_config = DrakeSystemConfig(urdfs=urdfs)
