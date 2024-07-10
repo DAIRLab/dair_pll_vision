@@ -1467,7 +1467,7 @@ def main_command(vision_asset: str, pll_id: str, pll_id_output: str, cycle_itera
     assert '_' in vision_asset, f'Invalid asset directory: {vision_asset}.'
     system = f"vision_{vision_asset.split('_')[0]}"
 
-    start_toss = int(vision_asset.split('_')[1].split('-')[0])
+    start_toss = int(vision_asset.split('_')[-1].split('-')[0])
     end_toss = start_toss if '-' not in vision_asset else \
         int(vision_asset.split('-')[1])
     assert start_toss <= end_toss, f'Invalid toss range: {start_toss} ' + \
