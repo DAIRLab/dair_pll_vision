@@ -194,8 +194,7 @@ def main(storage_folder_name: str = "",
          w_res_w: float = 1e0,
          do_residual: bool = False,
          # TODO: move to new additional_system_builders interface
-         additional_forces: str = None,
-         g_frac: float = 1.0):
+         additional_forces: str = None):
     """Execute ContactNets basic example on a system.
 
     Args:
@@ -218,8 +217,6 @@ def main(storage_folder_name: str = "",
         do_residual: Whether to add residual physics block.
         additional_forces: Optionally provide additional forces to augment any
           generated simulation data.  Is ignored if using real data.
-        g_frac: Fraction of gravity to use with initial model.  Is ignored
-          unless additional_forces == gravity.
     """
     # pylint: disable=too-many-locals, too-many-arguments
 
@@ -238,8 +235,7 @@ def main(storage_folder_name: str = "",
          + f'({w_pred}, {w_comp}, {w_diss}, {w_pen}, {w_res}, {w_res_w})' \
          + f'\n\twith residual: {do_residual}' \
          + f'\n\tand starting with provided true_sys={true_sys}' \
-         + f'\n\tinjecting into dynamics (if sim): {additional_forces}' \
-         + f'\n\twith gravity fraction (if gravity): {g_frac}')
+         + f'\n\tinjecting into dynamics (if sim): {additional_forces}')
 
     simulation = source == SIM_SOURCE
     dynamic = source == DYNAMIC_SOURCE
@@ -298,8 +294,7 @@ def main(storage_folder_name: str = "",
             w_pen = Float(w_pen, log=True, distribution=DEFAULT_WEIGHT_RANGE),
             w_res = Float(w_res, log=True, distribution=DEFAULT_WEIGHT_RANGE),
             w_res_w = Float(w_res_w, log=True, distribution=DEFAULT_WEIGHT_RANGE),
-            do_residual=do_residual, represent_geometry_as=geometry,
-            randomize_initialization = not true_sys, g_frac=g_frac)
+            do_residual=do_residual, represent_geometry_as=geometry)
 
     else:
         learnable_config = DeepLearnableSystemConfig(

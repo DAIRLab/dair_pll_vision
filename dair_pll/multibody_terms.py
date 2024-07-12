@@ -72,6 +72,7 @@ CENTER_OF_MASS_DOF = 3
 INERTIA_TENSOR_DOF = 6
 DEFAULT_SIMPLIFIER = drake_pytorch.Simplifier.QUICKTRIG
 
+
 @dataclass
 class InertiaLearn:
     """Class to specify which inertial parameters to learn"""
@@ -127,14 +128,14 @@ class LagrangianTerms(Module):
     inertial_parameters: Tensor
 
     def __init__(self, plant_diagram: MultibodyPlantDiagram,
-                 inertia_learn: InertiaLearn = InertiaLearn(),
+                 inertia_mode: InertiaLearn = InertiaLearn(),
                  constant_bodies: List[str] = []) -> None:
         """Inits :py:class:`LagrangianTerms` with prescribed parameters and
         functional forms.
 
         Args:
             plant_diagram: Drake MultibodyPlant diagram to extract terms from.
-            inertia_learn: which inertial parameters to learn.
+            inertia_mode: which inertial parameters to learn.
         """
         super().__init__()
 
@@ -177,11 +178,11 @@ class LagrangianTerms(Module):
             learn_body = (body.name() not in constant_bodies)
             body_parameter = [
                 Parameter(body_param_tensor[0],
-                          requires_grad=(learn_body and inertia_learn.mass)),
+                          requires_grad=(learn_body and inertia_mode.mass)),
                 Parameter(body_param_tensor[1:4],
-                          requires_grad=(learn_body and inertia_learn.com)),
+                          requires_grad=(learn_body and inertia_mode.com)),
                 Parameter(body_param_tensor[4:],
-                          requires_grad=(learn_body and inertia_learn.inertia)),
+                          requires_grad=(learn_body and inertia_mode.inertia)),
             ]
             self.body_parameters.extend(body_parameter)
             inertial_parameters.append(torch.hstack(body_parameter))
@@ -596,7 +597,7 @@ class MultibodyTerms(Module):
     geometry_body_assignment: Dict[str, List[int]]
     plant_diagram: MultibodyPlantDiagram
     urdfs: Dict[str, str]
-    inertia_learn: InertiaLearn
+    inertia_mode: InertiaLearn
     pretrained_icnn_weights_filepath: str
 
     def scalars_and_meshes(
@@ -698,12 +699,10 @@ class MultibodyTerms(Module):
             obj_pair_list, R_FW_list
 
     def __init__(self, urdfs: Dict[str, str],
-                 pretrained_icnn_weights_filepath: str,
-                 inertia_learn: InertiaLearn = InertiaLearn(),
+                 inertia_mode: InertiaLearn = InertiaLearn(),
+                 pretrained_icnn_weights_filepath: str = None,
                  constant_bodies: List[str] = [],
-                 represent_geometry_as: str = 'box',
-                 randomize_initialization: bool = False,
-                 g_frac: float = 1.0) -> None:
+                 represent_geometry_as: str = 'box') -> None:
         """Inits :py:class:`MultibodyTerms` for system described in URDFs
 
         Interpretation is performed as a thin wrapper around
@@ -717,17 +716,17 @@ class MultibodyTerms(Module):
 
         Args:
             urdfs: Dictionary of named URDF XML file names, containing
-                  description of multibody system.
+                description of multibody system.
+            inertia_mode: specify which inertial parameters to learn
             pretrained_icnn_weights_filepath: Filepath to a set of
                 pretrained ICNN weights.
-            inertia_learn: specify which inertial parameters to learn
             constant_bodies: list of body names to keep constant / not learn
             represent_geometry_as: String box/mesh/polygon to determine how
               the geometry should be represented.
         """
         super().__init__()
 
-        plant_diagram = MultibodyPlantDiagram(urdfs, g_frac=g_frac)
+        plant_diagram = MultibodyPlantDiagram(urdfs)
         plant = plant_diagram.plant.ToSymbolic()
         inspector = plant_diagram.scene_graph.model_inspector()
 
@@ -751,7 +750,7 @@ class MultibodyTerms(Module):
 
         # setup parameterization
         self.lagrangian_terms = LagrangianTerms(
-            plant_diagram, inertia_learn, constant_bodies)
+            plant_diagram, inertia_mode, constant_bodies)
         self.contact_terms = ContactTerms(
             plant_diagram, represent_geometry_as, constant_bodies)
         self.geometry_body_assignment = geometry_body_assignment

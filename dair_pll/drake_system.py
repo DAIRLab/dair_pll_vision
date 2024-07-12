@@ -38,8 +38,9 @@ class DrakeSystem(System):
                  urdfs: Dict[str, str],
                  dt: float,
                  visualization_file: Optional[str] = "meshcat",
-                 additional_system_builders: List[Callable[[DiagramBuilder, MultibodyPlant], None]] = [],
-                 g_frac: Optional[float] = 1.0) -> None:
+                 additional_system_builders: List[
+                     Callable[[DiagramBuilder, MultibodyPlant], None]] = []
+                ) -> None:
         """Inits ``DrakeSystem`` with provided model URDFs.
 
         Args:
@@ -51,7 +52,7 @@ class DrakeSystem(System):
               Systems to the plant diagram.
         """
         plant_diagram = MultibodyPlantDiagram(urdfs, dt, visualization_file,
-                                              additional_system_builders, g_frac=g_frac)
+                                              additional_system_builders)
 
         space = plant_diagram.generate_state_space()
         integrator = StateIntegrator(space, self.sim_step, dt)

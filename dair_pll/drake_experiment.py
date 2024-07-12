@@ -46,7 +46,7 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """Whether to use ContactNets or prediction loss."""
     pretrained_icnn_weights_filepath: str = None
     """If provided, filepath to pretrained ICNN weights."""
-    inertia_learn: InertiaLearn = field(default_factory=InertiaLearn)
+    inertia_mode: InertiaLearn = field(default_factory=InertiaLearn)
     """What inertial parameters to learn."""
     w_pred: float = 1.0
     """Weight of prediction term in ContactNets loss (suggested keep at 1.0)."""
@@ -60,6 +60,8 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """Weight of BundleSDF matching term in vision experiment loss."""
     represent_geometry_as: str = 'box'
     """How to represent geometry (box, mesh, or polygon)."""
+    randomize_initialization: bool = True
+    """Whether to randomize initialization."""
 
 
 @dataclass
@@ -271,9 +273,14 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
             urdfs = oracle_system.urdfs
 
             self.true_geom_multibody_system = MultibodyLearnableSystem(
-                init_urdfs=urdfs, dt=dt,
-                w_pred=1.0, w_comp=1.0, w_diss=1.0, w_pen=1.0, w_res=1.0,
-                w_res_w=1.0, do_residual=False,
+                init_urdfs=urdfs,
+                dt=dt,
+                loss_weights_dict={
+                    'w_pred': self.config.learnable_config.w_pred,
+                    'w_comp': self.config.learnable_config.w_comp,
+                    'w_diss': self.config.learnable_config.w_diss,
+                    'w_pen': self.config.learnable_config.w_pen,
+                    'w_bsdf': self.config.learnable_config.w_bsdf},
                 represent_geometry_as = \
                     self.config.learnable_config.represent_geometry_as,
                 randomize_initialization = False)
@@ -329,19 +336,17 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
         return MultibodyLearnableSystem(
             learnable_config.urdfs,
             self.config.data_config.dt,
-            inertia_learn = learnable_config.inertia_learn,
+            inertia_mode = learnable_config.inertia_mode,
             constant_bodies = learnable_config.constant_bodies,
-            w_pred = learnable_config.w_pred,
-            w_comp = learnable_config.w_comp.value,
-            w_diss = learnable_config.w_diss.value,
-            w_pen = learnable_config.w_pen.value,
-            w_res = learnable_config.w_res.value,
-            w_res_w = learnable_config.w_res_w.value,
+            loss_weights_dict={
+                'w_pred': learnable_config.w_pred,
+                'w_comp': learnable_config.w_comp,
+                'w_diss': learnable_config.w_diss,
+                'w_pen': learnable_config.w_pen,
+                'w_bsdf': learnable_config.w_bsdf},
             output_urdfs_dir=output_dir,
-            do_residual=learnable_config.do_residual,
             represent_geometry_as=learnable_config.represent_geometry_as,
             randomize_initialization=learnable_config.randomize_initialization,
-            g_frac=learnable_config.g_frac
             pretrained_icnn_weights_filepath = \
                 learnable_config.pretrained_icnn_weights_filepath)
 
@@ -486,7 +491,6 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
     def get_learned_drake_system(
             self, learned_system: System) -> Optional[DrakeSystem]:
         if self.visualizer_regeneration_is_required():
-        if self.visualizer_regeneration_is_required():
             new_urdfs = cast(MultibodyLearnableSystem,
                              learned_system).generate_updated_urdfs('vis')
             return DrakeSystem(new_urdfs, self.get_drake_system().dt,
@@ -533,7 +537,7 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
         system: System) -> Dict[str, Any]:
 
         return {"x": x_past[..., -1, :],
-            "u": torch.zeros(x.shape[:-1] + (0,)),
+            "u": torch.zeros(x_past.shape[:-1] + (0,)),
             "x_plus": x_future[..., 0, :]}
 
     def contactnets_loss(self,
@@ -554,118 +558,6 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
             f'MultibodyLearnableSystem, got {type(system)}.'
         loss = system.contactnets_loss(
             **self.get_loss_args(x_past, x_future, system))
-        if not keep_batch:
-            loss = loss.mean()
-        return loss
-
-
-class DrakeMultibodyLearnableTactileExperiment(DrakeMultibodyLearnableExperiment):
-
-    def __init__(self, config: DrakeMultibodyLearnableTactileExperimentConfig) -> None:
-        # Bypass parent class loss check
-        super(DrakeMultibodyLearnableExperiment, self).__init__(config)
-        self.trajectory_model_name = config.trajectory_model_name
-        self.learnable_config = cast(MultibodyLearnableSystemConfig,
-                                self.config.learnable_config)
-
-        self.loss_callback = self.tactilenet_loss
-
-        if self.learnable_config.loss != MultibodyLosses.TACTILENET_LOSS:
-            raise RuntimeError(f"Loss {self.learnable_config.loss} not " + \
-                               f"recognized for Drake multibody trajectory experiment.")
-
-    def get_learned_system(self, traj: Tensor) -> MultibodyLearnableSystemWithTrajectory:
-        learnable_config = cast(MultibodyLearnableSystemConfig,
-                                self.config.learnable_config)
-        output_dir = file_utils.get_learned_urdf_dir(self.config.storage,
-                                                     self.config.run_name)
-        return MultibodyLearnableSystemWithTrajectory(
-            trajectory_model = self.trajectory_model_name,
-            traj_len = traj.shape[0],
-            init_urdfs = learnable_config.urdfs,
-            dt = self.config.data_config.dt,
-            inertia_mode = learnable_config.inertia_mode,
-            constant_bodies = learnable_config.constant_bodies,
-            w_pred = learnable_config.w_pred,
-            w_comp = learnable_config.w_comp.value,
-            w_diss = learnable_config.w_diss.value,
-            w_pen = learnable_config.w_pen.value,
-            w_res = learnable_config.w_res.value,
-            w_res_w = learnable_config.w_res_w.value,
-            output_urdfs_dir=output_dir,
-            do_residual=learnable_config.do_residual,
-            represent_geometry_as=learnable_config.represent_geometry_as,
-            randomize_initialization=learnable_config.randomize_initialization,
-            g_frac=learnable_config.g_frac)
-
-
-    def get_loss_args(self,
-        x_past: Tensor,
-        x_future: Tensor,
-        system: System) -> Dict[str, Any]:
-
-        # Get last time of past and first of future
-        # Remove extraneous dimensions
-        # TODO: HACK remove squeeze in case batch dim == 1
-        # TODO: Check that 2nd to last is the slice index and not the extraneous 1.
-        past = x_past[..., -1, :].squeeze()
-        plus = x_future[..., 0, :].squeeze()
-
-        # Construct State
-        model_states_past = {}
-        model_states_plus = {}
-        for model, _ in system.model_spaces.items():
-            key = model + "_state"
-            if key in past.keys():
-                model_states_past[model] = past[key]
-                if len(model_states_past[model].shape) == 1:
-                    model_states_past[model] = model_states_past[model].reshape(model_states_past.shape[0], 1)
-            if key in plus.keys():
-                model_states_plus[model] = plus[key]
-                if len(model_states_plus[model].shape) == 1:
-                    model_states_plus[model] = model_states_plus[model].reshape(model_states_plus.shape[0], 1)
-        x_past = system.construct_state_tensor(model_states_past, past["time"].reshape(past["time"].shape[0], 1))
-        x_plus = system.construct_state_tensor(model_states_plus, plus["time"].reshape(plus["time"].shape[0], 1))
-
-        # Actuation
-        control = past["net_actuation"]
-        if len(control.shape) == 1:
-            control = control.reshape(control.shape[0], 1)
-
-        # Construct measured contact forces on obj_b from obj_a
-        # Defined as Dict: {(str(obj_a_name), str(obj_b_name)) -> R^3 force on obj_b in World Frame}
-        # TODO: specify in reference frame
-        # TODO: HACK, hard-coding "cube_body" as obj_a for all robot fingers
-        contact_forces = {}
-        if "contact_forces" in past.keys():
-            for key in past["contact_forces"].keys():
-                contact_forces[("cube_body", key)] = past["contact_forces"][key]
-
-        return {"x": x_past,
-            "u": control,
-            "x_plus": x_plus,
-            "contact_forces": contact_forces}
-
-    def tactilenet_loss(self,
-                         x_past: Tensor,
-                         x_future: Tensor,
-                         system: System,
-                         keep_batch: bool = False) -> Tensor:
-        r""" :py:data:`~dair_pll.experiment.LossCallbackCallable`
-        which applies the ContactNets [1] loss to the system.
-
-        References:
-            [1] S. Pfrommer*, M. Halm*, and M. Posa. "ContactNets: Learning
-            Discontinuous Contact Dynamics with Smooth, Implicit
-            Representations," Conference on Robotic Learning, 2020,
-            https://proceedings.mlr.press/v155/pfrommer21a.html
-        """
-        assert isinstance(system, MultibodyLearnableSystemWithTrajectory)
-        assert isinstance(x_past, TensorDict) or isinstance(x_past, LazyStackedTensorDict)
-        assert isinstance(x_future, TensorDict) or isinstance(x_future, LazyStackedTensorDict)
-
-        # TODO: Pass contact forces
-        loss = system.contactnets_loss(**self.get_loss_args(x_past, x_future, system))
         if not keep_batch:
             loss = loss.mean()
         return loss

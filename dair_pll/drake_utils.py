@@ -301,8 +301,9 @@ class MultibodyPlantDiagram:
                  urdfs: Dict[str, str],
                  dt: float = DEFAULT_DT,
                  visualization_file: Optional[str] = None,
-                 additional_system_builders: List[Callable[[DiagramBuilder, MultibodyPlant], None]] = [],
-                 g_frac: Optional[float] = 1.0) -> None:
+                 additional_system_builders: List[
+                     Callable[[DiagramBuilder, MultibodyPlant], None]] = []
+                ) -> None:
         r"""Initialization generates a world containing each given URDF as a
         model instance, and a corresponding Drake ``Simulator`` set up to
         trigger a state update every ``dt``.
@@ -314,8 +315,8 @@ class MultibodyPlantDiagram:
             dt: Time step of plant in seconds.
             visualization_file: Optional output GIF filename for trajectory
               visualization.
-            additional_system_builders: Optional functions that add additional Drake
-              Systems to the plant diagram.
+            additional_system_builders: Optional functions that add additional
+              Drake Systems to the plant diagram.
         """
         builder = DiagramBuilder()
         model_ids, plant, scene_graph = add_plant_from_urdfs(builder, urdfs, dt)
@@ -335,7 +336,9 @@ class MultibodyPlantDiagram:
             ortho_camera.far = 500
             ortho_camera.zoom = 1
             self.meshcat.SetCamera(ortho_camera)
-            visualizer = MeshcatVisualizer.AddToBuilder(builder, scene_graph, self.meshcat)
+            visualizer = MeshcatVisualizer.AddToBuilder(
+                builder, scene_graph, self.meshcat)
+
         elif visualization_file:
             visualizer = VideoWriter.AddToBuilder(filename=visualization_file,
                                                   builder=builder,
@@ -359,18 +362,17 @@ class MultibodyPlantDiagram:
         self.collision_geometry_set = get_collision_geometry_set(
             scene_graph.model_inspector())
 
-        # Edit the gravitational constant.
-        new_gravity_vector = np.array([0., 0., -9.81*g_frac])
-        plant.mutable_gravity_field().set_gravity_vector(new_gravity_vector)
-
         # TODO: fix contact model
-        plant.set_discrete_contact_approximation(DiscreteContactApproximation.kSap)
+        plant.set_discrete_contact_approximation(
+            DiscreteContactApproximation.kSap)
 
         # TODO: Document Weld World Frame
         for name in urdfs.keys():
             model = plant.GetModelInstanceByName(name)
             if plant.HasFrameNamed("worldfixed", model):
-                plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("worldfixed", model))
+                plant.WeldFrames(
+                    plant.world_frame(),
+                    plant.GetFrameByName("worldfixed", model))
 
         # Gravcomp
         # TODO: this is a HACK, find principled way of doing gravcomp

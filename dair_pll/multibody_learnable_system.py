@@ -68,7 +68,7 @@ class MultibodyLearnableSystem(System):
                  init_urdfs: Dict[str, str],
                  dt: float,
                  loss_weights_dict: dict,
-                 inertia_learn: InertiaLearn = InertiaLearn(),
+                 inertia_mode: InertiaLearn = InertiaLearn(),
                  constant_bodies: List[str] = [],
                  output_urdfs_dir: Optional[str] = None,
                  pretrained_icnn_weights_filepath: Optional[str] = None,
@@ -84,7 +84,7 @@ class MultibodyLearnableSystem(System):
             init_urdfs: Names and corresponding URDFs to model with
                 :py:class:`MultibodyTerms`.
             dt: Time step of system in seconds.
-            inertia_learn: An InertiaLearn() object specifying which inertial
+            inertia_mode: An InertiaLearn() object specifying which inertial
               parameters to learn
             constant_bodies: list of body names whose properties should NOT
               be learned
@@ -99,7 +99,7 @@ class MultibodyLearnableSystem(System):
 
         multibody_terms = MultibodyTerms(
             init_urdfs,
-            inertia_learn=inertia_learn,
+            inertia_mode=inertia_mode,
             constant_bodies=constant_bodies,
             represent_geometry_as=represent_geometry_as,
             pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath)
