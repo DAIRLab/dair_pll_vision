@@ -16,6 +16,7 @@ implemented in :py:class:`MultibodyPlantDiagram`.
 [1] M. Anitescu, “Optimization-based simulation of nonsmooth rigid
 multibody dynamics,” Mathematical Programming, 2006,
 https://doi.org/10.1007/s10107-005-0590-7
+
 [2] S. Pfrommer*, M. Halm*, and M. Posa. "ContactNets: Learning Discontinuous
 Contact Dynamics with Smooth, Implicit Representations," Conference on
 Robotic Learning, 2020, https://proceedings.mlr.press/v155/pfrommer21a.html
@@ -23,21 +24,35 @@ Robotic Learning, 2020, https://proceedings.mlr.press/v155/pfrommer21a.html
 from multiprocessing import pool
 import os
 from os import path
-from typing import Tuple, Optional, Dict, cast
+from typing import List, Tuple, Optional, Dict, cast
 
 import numpy as np
 import torch
 from torch import Tensor
+from torch.nn import Module, ParameterList, Parameter
+import torch.nn as nn
 
 from dair_pll import urdf_utils, tensor_utils, file_utils
 from dair_pll.drake_system import DrakeSystem
 from dair_pll.integrator import VelocityIntegrator
-from dair_pll.multibody_terms import MultibodyTerms
+from dair_pll.multibody_terms import MultibodyTerms, InertiaLearn
 from dair_pll.solvers import DynamicCvxpyLCQPLayer
-from dair_pll.system import System, \
-    SystemSummary
-from dair_pll.tensor_utils import pbmm, broadcast_lorentz
+from dair_pll.state_space import FloatingBaseSpace, StateSpace
+from dair_pll.system import System, SystemSummary
+from dair_pll.tensor_utils import pbmm, broadcast_lorentz, \
+    one_vector_block_diagonal, project_lorentz, reflect_lorentz
+
 from dair_pll import quaternion
+
+# Scaling factors to equalize translation and rotation errors.
+# For rotation versus linear scaling:  penalize 0.1 meters same as 90 degrees.
+ROTATION_SCALING = 0.2/torch.pi
+# For articulation versus linear/rotation scaling:  penalize the scenario where
+# one elbow link is in the right place and the other is 180 degrees flipped the
+# same, whether link 1 or link 2 are in the right place.
+ELBOW_COM_TO_AXIS_DISTANCE = 0.035
+JOINT_SCALING = 2*ELBOW_COM_TO_AXIS_DISTANCE/torch.pi + ROTATION_SCALING
+
 
 class MultibodyLearnableSystem(System):
     """:py:class:`System` interface for dynamics associated with
@@ -53,10 +68,11 @@ class MultibodyLearnableSystem(System):
                  init_urdfs: Dict[str, str],
                  dt: float,
                  loss_weights_dict: dict,
-                 force_mesh_to_be_polygon: bool = False,
+                 inertia_learn: InertiaLearn = InertiaLearn(),
+                 constant_bodies: List[str] = [],
                  output_urdfs_dir: Optional[str] = None,
                  pretrained_icnn_weights_filepath: Optional[str] = None,
-                 learn_inertia: str = 'all') -> None:
+                 represent_geometry_as: str = 'box') -> None:
         """Inits :py:class:`MultibodyLearnableSystem` with provided model URDFs.
 
         Implementation is primarily based on Drake. Bodies are modeled via
@@ -68,6 +84,10 @@ class MultibodyLearnableSystem(System):
             init_urdfs: Names and corresponding URDFs to model with
                 :py:class:`MultibodyTerms`.
             dt: Time step of system in seconds.
+            inertia_learn: An InertiaLearn() object specifying which inertial
+              parameters to learn
+            constant_bodies: list of body names whose properties should NOT
+              be learned
             loss_weights_dict: Dictionary of weights for the vision loss.
                 Requires keys 'w_pred', 'w_comp', 'w_pen', 'w_diss', and
                 'w_bsdf'.
@@ -75,21 +95,23 @@ class MultibodyLearnableSystem(System):
                 written to.
             pretrained_icnn_weights_filepath: Filepath of a set of pretrained
                 ICNN weights.
-            learn_inertia: Which inertia parameters to learn in the system
-                (all or none).  Note that 'all' excludes mass.
         """
+
         multibody_terms = MultibodyTerms(
             init_urdfs,
-            pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
-            learn_inertia=learn_inertia,
-            force_mesh_to_be_polygon=force_mesh_to_be_polygon
-        )
+            inertia_learn=inertia_learn,
+            constant_bodies=constant_bodies,
+            represent_geometry_as=represent_geometry_as,
+            pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath)
+
         space = multibody_terms.plant_diagram.space
         integrator = VelocityIntegrator(space, self.sim_step, dt)
         super().__init__(space, integrator)
+        
+        self.output_urdfs_dir = output_urdfs_dir
         self.multibody_terms = multibody_terms
         self.init_urdfs = init_urdfs
-        self.output_urdfs_dir = output_urdfs_dir
+
         self.visualization_system = None
         self.solver = DynamicCvxpyLCQPLayer(self.space.n_v)
         self.dt = dt
@@ -120,19 +142,21 @@ class MultibodyLearnableSystem(System):
             self.multibody_terms, self.output_urdfs_dir)
         new_urdfs = {}
 
-        # saves new urdfs with identical file basenames to original ones,
-        # but in new folder.
+        # saves new urdfs with original file basenames plus optional suffix in
+        # new folder.
         for urdf_name, new_urdf_string in new_urdf_strings.items():
             old_urdf_filename = path.basename(old_urdfs[urdf_name])
 
             if epoch:
                 # rename test.obj to test_{epoch}.obj
                 obj_file = os.path.join(self.output_urdfs_dir, 'test.obj')
-                new_obj_file = os.path.join(self.output_urdfs_dir, f'test_{epoch}.obj')
+                new_obj_file = os.path.join(
+                    self.output_urdfs_dir, f'test_{epoch}.obj')
                 os.rename(obj_file, new_obj_file)
                 
                 # replace references in the urdf to the new filename
-                new_urdf_string = new_urdf_string.replace('test.obj', f'test_{epoch}.obj')
+                new_urdf_string = new_urdf_string.replace(
+                    'test.obj', f'test_{epoch}.obj')
                 
             new_urdf_path = path.join(self.output_urdfs_dir, old_urdf_filename)
             file_utils.save_string(new_urdf_path, new_urdf_string)
@@ -146,6 +170,9 @@ class MultibodyLearnableSystem(System):
                          x_plus: Tensor,
                          loss_pool: Optional[pool.Pool] = None) -> Tensor:
         r"""Calculate ContactNets [1] loss for state transition.
+
+        Change made to scale this loss to be per kilogram.  This helps prevent
+        sending mass quantities to zero in multibody learning scenarios.
 
         References:
             [1] S. Pfrommer*, M. Halm*, and M. Posa. "ContactNets: Learning
@@ -202,16 +229,37 @@ class MultibodyLearnableSystem(System):
         v = self.space.v(x)
         q_plus, v_plus = self.space.q_v(x_plus)
         dt = self.dt
+        eps = 1e-3
 
-        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B = \
-            self.multibody_terms(q_plus, v_plus, u)
+        # Begin loss calculation.
+        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, \
+            obj_pair_list, R_FW_list = \
+                self.get_multibody_terms(q_plus, v_plus, u)
 
+        # Construct a reordering matrix s.t. lambda_CN = reorder_mat @ f_sappy.
         n_contacts = phi.shape[-1]
         reorder_mat = tensor_utils.sappy_reorder_mat(n_contacts)
         reorder_mat = reorder_mat.reshape((1,) * (delassus.dim() - 2) +
                                           reorder_mat.shape).expand(
                                               delassus.shape)
         J_t = J[..., n_contacts:, :]
+
+        # Construct a diagonal scaling matrix (3*n_contacts, 3*n_contacts) S
+        # s.t. S @ lambda_CN = scaled lambdas in units [m/s] instead of [N s].
+        delassus_diag_vec = torch.diagonal(delassus, dim1=-2, dim2=-1)
+        contact_weights = pbmm(one_vector_block_diagonal(n_contacts, 3).t(),
+                               pbmm(reorder_mat.transpose(-1, -2),
+                                    delassus_diag_vec.unsqueeze(-1)))
+        contact_weights = broadcast_lorentz(contact_weights.squeeze(-1))
+        S = torch.diag_embed(contact_weights)
+
+        # Construct a diagonal scaling matrix (n_velocity, n_velocity) P s.t.
+        # velocity errors are scaled to relate translation and rotation errors
+        # in a thoughful way.
+        P_diag = torch.ones_like(v)
+        P_diag[..., :3] *= ROTATION_SCALING
+        P_diag[..., 6:] *= JOINT_SCALING
+        P = torch.diag_embed(P_diag)
 
         # pylint: disable=E1103
         double_zero_vector = torch.zeros(phi.shape[:-1] + (2 * n_contacts,))
@@ -229,6 +277,8 @@ class MultibodyLearnableSystem(System):
 
         dv = (v_plus - (v + non_contact_acceleration * dt)).unsqueeze(-2)
 
+        # Calculate q vectors
+        # Final Units: Energy -> q units velocity
         q_pred = -pbmm(J, dv.transpose(-1, -2))
         q_comp = torch.abs(phi_then_zero).unsqueeze(-1)
         q_diss = dt * torch.cat((sliding_speeds, sliding_velocities), dim=-2)
@@ -244,8 +294,8 @@ class MultibodyLearnableSystem(System):
         c_pred = 0.5 * pbmm(dv, pbmm(M, dv.transpose(-1, -2)))
 
         # Envelope theorem guarantees that gradient of loss w.r.t. parameters
-        # can ignore the gradient of the force w.r.t. the QCQP parameters.
-        # Therefore, we can detach ``force`` from pytorch's computation graph
+        # can ignore the gradient of the impulses w.r.t. the QCQP parameters.
+        # Therefore, we can detach ``impulses`` from pytorch's computation graph
         # without causing error in the overall loss gradient.
         # pylint: disable=E1103
         force = pbmm(
@@ -255,8 +305,8 @@ class MultibodyLearnableSystem(System):
                 pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1)
             ).detach().unsqueeze(-1))
 
-        # Hack: remove elements of ``force`` where solver likely failed.
-        invalid = torch.any((force.abs() > 1e3) | force.isnan() | force.isinf(),
+        # Hack: remove elements of ``impulses`` where solver likely failed.
+        invalid = torch.any((impulses.abs() > 1e3) | impulses.isnan() | impulses.isinf(),
                             dim=-2,
                             keepdim=True)
 
@@ -280,7 +330,7 @@ class MultibodyLearnableSystem(System):
                          dynamics_pool: Optional[pool.Pool] = None) -> Tensor:
         r"""Calculates delta velocity from current state and input.
 
-        Implement's Anitescu's [1] convex formulation in dual form, derived
+        Implements Anitescu's [1] convex formulation in dual form, derived
         similarly to Tedrake [2] and described here.
 
         Let v_minus be the contact-free next velocity, i.e.::
@@ -318,9 +368,11 @@ class MultibodyLearnableSystem(System):
             [1] M. Anitescu, “Optimization-based simulation of nonsmooth rigid
             multibody dynamics,” Mathematical Programming, 2006,
             https://doi.org/10.1007/s10107-005-0590-7
+
             [2] R. Tedrake. Underactuated Robotics: Algorithms for Walking,
             Running, Swimming, Flying, and Manipulation (Course Notes for MIT
             6.832), https://underactuated.mit.edu
+
             [3] S. Z. N'emeth, G. Zhang, "Conic optimization and
             complementarity problems," arXiv,
             https://doi.org/10.48550/arXiv.1607.05161
@@ -337,7 +389,7 @@ class MultibodyLearnableSystem(System):
         # pylint: disable=too-many-locals
         dt = self.dt
         eps = 1e6
-        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B = \
+        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, _, _ = \
             self.multibody_terms(q, v, u)
         n_contacts = phi.shape[-1]
         contact_filter = (broadcast_lorentz(phi) <= eps).unsqueeze(-1)
@@ -346,8 +398,8 @@ class MultibodyLearnableSystem(System):
         reorder_mat = reorder_mat.reshape((1,) * (delassus.dim() - 2) +
                                           reorder_mat.shape).expand(
                                               delassus.shape)
-        J_M = pbmm(reorder_mat.transpose(-1, -2),
-                   pbmm(J, torch.linalg.cholesky(torch.inverse((M)))))
+
+        Q_delassus = delassus + eps * torch.eye(3 * n_contacts)
 
         # pylint: disable=E1103
         double_zero_vector = torch.zeros(phi.shape[:-1] + (2 * n_contacts,))
@@ -397,7 +449,6 @@ class MultibodyLearnableSystem(System):
         scalars, meshes = self.multibody_terms.scalars_and_meshes()
         videos = cast(Dict[str, Tuple[np.ndarray, int]], {})
 
-        return SystemSummary(scalars=scalars, videos=videos, meshes=meshes)
     
     def bundlesdf_data_generation_from_cnets(self,
                          x: Tensor,
@@ -411,7 +462,7 @@ class MultibodyLearnableSystem(System):
         dt = self.dt
         eps = 1e-3
 
-        delassus, M, J, phi, non_contact_acceleration, p_BiBc_B = \
+        delassus, M, J, phi, non_contact_acceleration, p_BiBc_B, _, _ = \
             self.multibody_terms(q_plus, v_plus, u)
 
         n_contacts = phi.shape[-1]

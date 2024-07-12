@@ -13,7 +13,8 @@ import time
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import List, Tuple, Callable, Optional, Dict, cast, Union
+import pdb
+from typing import Any, List, Tuple, Callable, Optional, Dict, cast, Union
 
 import numpy as np
 import torch
@@ -26,9 +27,22 @@ from dair_pll.dataset_management import ExperimentDataManager, \
     TrajectorySet
 from dair_pll.experiment_config import SupervisedLearningExperimentConfig
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
-from dair_pll.state_space import StateSpace
+from dair_pll.state_space import StateSpace, FloatingBaseSpace
 from dair_pll.system import System, SystemSummary
 from dair_pll.wandb_manager import WeightsAndBiasesManager
+
+# Enable default_collate for TensorDict
+from tensordict.tensordict import TensorDict
+def collate_tensordict_fn(batch, *, collate_fn_map: Optional[Any] = None):
+    out = None
+    if torch.utils.data.get_worker_info() is not None:
+        # If we're in a background process, concatenate directly into a
+        # shared memory tensor to avoid an extra copy
+        numel = sum(x.numel() for x in batch)
+        storage = elem._typed_storage()._new_shared(numel, device=elem.device)
+        out = elem.new(storage).resize_(len(batch), *list(elem.size()))
+    return torch.stack(batch, 0, out=out)
+torch.utils.data._utils.collate.default_collate_fn_map[TensorDict] = collate_tensordict_fn
 
 
 @dataclass
@@ -81,10 +95,20 @@ PREDICTED_VELOCITY_SIZE = 'v_plus_squared'
 DELTA_VELOCITY_SIZE = 'delta_v_squared'
 TARGET_NAME = 'target_sample'
 PREDICTION_NAME = 'prediction_sample'
+TRAJECTORY_POSITION_ERROR_NAME = 'pos_int_traj'
+TRAJECTORY_ROTATION_ERROR_NAME = 'angle_int_traj'
+TRAJECTORY_PENETRATION_NAME = 'penetration_int_traj'
+RESIDUAL_SINGLE_STEP_SIZE_NAME = 'residual_norm_stepwise'
+RESIDUAL_TRAJECTORY_SIZE_MSE_NAME = 'residual_norm_traj_mse'
 
 AVERAGE_TAG = 'mean'
 
-EVALUATION_VARIABLES = [LOSS_NAME, TRAJECTORY_ERROR_NAME]
+EVALUATION_VARIABLES = [LOSS_NAME, TRAJECTORY_ERROR_NAME, 
+    TRAJECTORY_POSITION_ERROR_NAME, TRAJECTORY_ROTATION_ERROR_NAME,
+    TRAJECTORY_PENETRATION_NAME, RESIDUAL_SINGLE_STEP_SIZE_NAME,
+    RESIDUAL_TRAJECTORY_SIZE_MSE_NAME
+]
+
 
 #:
 EpochCallbackCallable = Callable[[int, System, Tensor, Tensor], None]
@@ -159,13 +183,14 @@ class SupervisedLearningExperiment(ABC):
     learning_data_manager: Optional[ExperimentDataManager]
     """Manager of trajectory data used in learning process."""
 
-    def __init__(self, config: SupervisedLearningExperimentConfig) -> \
-            None:
+    def __init__(self, config: SupervisedLearningExperimentConfig) -> None:
         super().__init__()
+
         self.config = config
-        file_utils.assure_created(config.storage)
-        base_system = self.get_base_system()
-        self.space = base_system.space
+        file_utils.assure_storage_tree_created(config.storage)
+        if not hasattr(self, 'space'):
+            base_system = self.get_base_system()
+            self.space = base_system.space
         self.loss_callback = cast(LossCallbackCallable, self.prediction_loss)
         self.learning_data_manager = None
 
@@ -260,16 +285,16 @@ class SupervisedLearningExperiment(ABC):
         each trajectory.
 
         Args:
-            x: List of ``(T, space.n_x)`` trajectories.
+            x: List of ``(*, T, space.n_x)`` trajectories.
             system: System to run prediction on.
             do_detach: Whether to detach each prediction from the computation
               graph; useful for memory management for large groups of
               trajectories.
 
         Returns:
-            List of ``(T - t_skip - 1, space.n_x)`` predicted trajectories.
+            List of ``(*, T - t_skip - 1, space.n_x)`` predicted trajectories.
 
-            List of ``(T - t_skip - 1, space.n_x)`` target trajectories.
+            List of ``(*, T - t_skip - 1, space.n_x)`` target trajectories.
 
         """
         t_skip = self.config.data_config.slice_config.t_skip
@@ -281,14 +306,17 @@ class SupervisedLearningExperiment(ABC):
         assert system.carry_callback is not None
         carry_0 = system.carry_callback()
         predictions = []
-        for x_0_i, horizon_i in zip(x_0, prediction_horizon):
+        for x_0_i, horizon_i, target_i in zip(x_0, prediction_horizon, targets):
+            target_shape = target_i.shape
+
             x_prediction_i, carry_i = system.simulate(x_0_i, carry_0, horizon_i)
             del carry_i
+            to_append = x_prediction_i[..., 1:, :].reshape(target_shape)
             if do_detach:
-                predictions.append(x_prediction_i[..., 1:, :].detach().clone())
+                predictions.append(to_append.detach().clone())
                 del x_prediction_i
             else:
-                predictions.append(x_prediction_i[..., 1:, :])
+                predictions.append(to_append)
         return predictions, targets
 
     def prediction_loss(self,
@@ -347,12 +375,15 @@ class SupervisedLearningExperiment(ABC):
             Scalar average training loss observed during epoch.
         """
         losses = []
+        idx = 0
         for xy_i in data:
             x_i: Tensor = xy_i[0]
             y_i: Tensor = xy_i[1]
 
             if optimizer is not None:
                 optimizer.zero_grad()
+
+            print(f"Index: {idx}")
 
             loss = self.batch_loss(x_i, y_i, system)
             losses.append(loss.clone().detach())
@@ -478,9 +509,11 @@ class SupervisedLearningExperiment(ABC):
         assert self.learning_data_manager is not None
         start_eval_time = time.time()
         statistics = {}
+
         if (epoch % self.config.full_evaluation_period) == 0:
             train_set, valid_set, _ = \
                 self.learning_data_manager.get_updated_trajectory_sets()
+
             n_train_eval = min(len(train_set.trajectories),
                                self.config.full_evaluation_samples)
 
@@ -499,17 +532,21 @@ class SupervisedLearningExperiment(ABC):
                 valid_set.trajectories[:n_valid_eval],
                 valid_set.indices[:n_valid_eval])
 
-            statistics = self.evaluate_systems_on_sets(
+            # TODO: Restart evaluation
+            statistics = {} 
+            """self.evaluate_systems_on_sets(
                 {LEARNED_SYSTEM_NAME: learned_system}, {
                     TRAIN_SET: train_eval_set,
                     VALID_SET: valid_eval_set
-                })
+                })"""
 
         statistics[f'{TRAIN_SET}_{LEARNED_SYSTEM_NAME}_'
                    f'{LOSS_NAME}_{AVERAGE_TAG}'] = float(train_loss.item())
 
         statistics[TRAINING_DURATION] = training_duration
         statistics[EVALUATION_DURATION] = time.time() - start_eval_time
+
+        self.statistics = statistics
 
         if self.wandb_manager is not None:
             self.write_to_wandb(epoch, learned_system, statistics)
@@ -631,11 +668,9 @@ class SupervisedLearningExperiment(ABC):
 
         Returns:
             Final-epoch training loss.
-
             Best-seen validation set loss.
-
             Fully-trained system, with parameters corresponding to best-seen
-            validation loss.
+              validation loss.
         """
         checkpoint_filename = file_utils.get_model_filename(
             self.config.storage, self.config.run_name)
@@ -650,7 +685,7 @@ class SupervisedLearningExperiment(ABC):
         train_dataloader = DataLoader(
             train_set.slices,
             batch_size=self.config.optimizer_config.batch_size.value,
-            shuffle=True)
+            shuffle=self.config.data_config.slice_config.shuffle)
 
         # Calculate the training loss before any parameter updates.  Calls
         # ``train_epoch`` without providing an optimizer, so no gradient steps
@@ -688,7 +723,7 @@ class SupervisedLearningExperiment(ABC):
                         train_set.slices,
                         batch_size=self.config.optimizer_config.batch_size.
                         value,
-                        shuffle=True)
+                        shuffle=self.config.data_config.slice_config.shuffle)
 
                     training_state.trajectory_set_split_indices = \
                         self.learning_data_manager.trajectory_set_indices()
@@ -697,6 +732,7 @@ class SupervisedLearningExperiment(ABC):
                 start_train_time = time.time()
                 training_loss = self.train_epoch(train_dataloader,
                                                  learned_system, optimizer)
+                
                 training_duration = time.time() - start_train_time
                 learned_system.eval()
                 valid_loss = self.per_epoch_evaluation(training_state.epoch,
@@ -713,12 +749,12 @@ class SupervisedLearningExperiment(ABC):
                 else:
                     training_state.epochs_since_best += 1
 
+                epoch_callback(training_state.epoch, learned_system,
+                               training_loss, training_state.best_valid_loss)
+
                 # Decide to early-stop or not.
                 if training_state.epochs_since_best >= patience:
                     break
-
-                epoch_callback(training_state.epoch, learned_system,
-                               training_loss, training_state.best_valid_loss)
 
                 training_state.current_learned_system_state = \
                     learned_system.state_dict()
@@ -740,13 +776,18 @@ class SupervisedLearningExperiment(ABC):
 
             # Stop SIGINT (Ctrl+C) from exiting during saving.
             signal.signal(signal.SIGINT, signal.SIG_IGN)
-            print("Saving training state...")
+            print("Saving training state before exit...")
             torch.save(dataclasses.asdict(training_state), checkpoint_filename)
             signal.signal(signal.SIGINT, signal.SIG_DFL)
 
         # Reload best parameters.
+        print("Loading best parameters...")
         learned_system.load_state_dict(training_state.best_learned_system_state)
+        print("Done loading best parameters.")
         return training_loss, training_state.best_valid_loss, learned_system
+
+    def extra_metrics(self) -> Dict[str, Callable[[Tensor, Tensor], Tensor]]:
+        return {}
 
     def evaluate_systems_on_sets(
             self, systems: Dict[str, System],
@@ -852,14 +893,74 @@ class SupervisedLearningExperiment(ABC):
                         to_json(traj_target[:n_saved_trajectories])
                     stats[f'{set_name}_{system_name}_{PREDICTION_NAME}'] = \
                         to_json(traj_pred[:n_saved_trajectories])
+
                 # pylint: disable=E1103
                 trajectory_mse = torch.stack([
                     space.state_square_error(tp, tt)
                     for tp, tt in zip(traj_pred, traj_target)
                 ])
-
                 stats[f'{set_name}_{system_name}_{TRAJECTORY_ERROR_NAME}'] = \
                     to_json(trajectory_mse)
+
+                # Add position and rotation error over trajectory.  TODO this
+                # could be implemented more elegantly; perhaps somewhere else
+                # like in space.auxiliary_comparisons or a child experiment
+                # class like DrakeMultibodyLearnableExperiment.
+                running_pos_mse = None
+                running_angle_mse = None
+                for space_i in space.spaces:
+                    if isinstance(space_i, FloatingBaseSpace):
+                        pos_mse = torch.stack([
+                            space_i.base_error(tp, tt)
+                            for tp, tt in zip(traj_pred, traj_target)
+                        ])
+                        angle_mse = torch.stack([
+                            space_i.quaternion_error(tp, tt)
+                            for tp, tt in zip(traj_pred, traj_target)
+                        ])
+                        if running_pos_mse == None:
+                            running_pos_mse = pos_mse
+                            running_angle_mse = angle_mse
+                        else:
+                            running_pos_mse += pos_mse
+                            running_angle_mse += angle_mse
+
+                stats[f'{set_name}_{system_name}_' + \
+                      f'{TRAJECTORY_POSITION_ERROR_NAME}'] = \
+                    to_json(running_pos_mse)
+                stats[f'{set_name}_{system_name}_' + \
+                      f'{TRAJECTORY_ROTATION_ERROR_NAME}'] = \
+                    to_json(running_angle_mse)
+
+                # Add residual sizes over trajectory and single steps.
+                if isinstance(system, MultibodyLearnableSystem):
+                    if system.residual_net != None:
+                        residual_mse = torch.stack([
+                            torch.linalg.norm(system.residual_net(tp),
+                                              dim=1).sum()
+                            for tp in traj_pred
+                        ])
+                        stats[f'{set_name}_{system_name}_' + \
+                              f'{RESIDUAL_TRAJECTORY_SIZE_MSE_NAME}'] = \
+                            to_json(residual_mse/len(traj_pred))
+
+                        residual_single_step_mse = torch.stack([
+                            torch.linalg.norm(system.residual_net(x_i),
+                                              dim=1).sum()
+                            for x_i in all_x
+                        ])
+                        stats[f'{set_name}_{system_name}_' + \
+                              f'{RESIDUAL_SINGLE_STEP_SIZE_NAME}'] = \
+                            to_json(residual_mse/len(all_x))
+
+                extra_metrics = self.extra_metrics()
+                for metric_name in extra_metrics:
+                    stats[f'{set_name}_{system_name}_{metric_name}'] = to_json(
+                        Tensor([
+                        extra_metrics[metric_name](tp, tt)
+                        for tp, tt in zip(traj_pred, traj_target)
+                    ]))
+
                 aux_comps = space.auxiliary_comparisons()
                 for comp_name in aux_comps:
                     stats[f'{set_name}_{system_name}_{comp_name}'] = to_json([
@@ -900,6 +1001,7 @@ class SupervisedLearningExperiment(ABC):
             ORACLE_SYSTEM_NAME: self.get_oracle_system(),
             LEARNED_SYSTEM_NAME: learned_system
         }
+
         evaluation = self.evaluate_systems_on_sets(systems, sets)
         file_utils.save_evaluation(self.config.storage, self.config.run_name,
                                    evaluation)
@@ -931,10 +1033,15 @@ class SupervisedLearningExperiment(ABC):
         _, _, learned_system = self.train(epoch_callback)
 
         try:
+            print("Looking for previously generated statistics...")
             statistics = file_utils.load_evaluation(self.config.storage,
                                                     self.config.run_name)
+            print("Done loading statistics.")
         except FileNotFoundError:
+            print("Did not find statistics; generating them... (this could " + \
+                  "take several minutes)")
             statistics = self._evaluation(learned_system)
+            print("Done generating statistics.")
 
         return learned_system, statistics
     

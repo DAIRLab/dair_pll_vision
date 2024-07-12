@@ -23,6 +23,7 @@ from pydrake.geometry import Role, RoleAssign, Rgba  # type: ignore
 from torch import Tensor
 
 from dair_pll.drake_system import DrakeSystem
+from dair_pll import file_utils
 
 RESOLUTION = [640, 480]
 RED = Rgba(0.6, 0.0, 0.0, 0.5)
@@ -121,13 +122,23 @@ def generate_visualization_system(
     # pylint: disable=too-many-locals
     # Start with true base system.
     double_urdfs = deepcopy(base_system.urdfs)
+    double_urdfs.update({
+        k: file_utils.get_geometrically_accurate_urdf(v) for k, v in \
+        double_urdfs.items()
+    })
 
     # Either copy the base system's geometry or optionally use the learned
     # geometry.
-    system_to_add = learned_system if learned_system else base_system
-    double_urdfs.update({
-        (k + LEARNED_TAG): v for k, v in system_to_add.urdfs.items()
-    })
+    if learned_system is None:
+        double_urdfs.update({
+            (k + LEARNED_TAG): file_utils.get_geometrically_accurate_urdf(v) \
+            for k, v in double_urdfs.items()
+        })
+
+    else:
+        double_urdfs.update({
+            (k + LEARNED_TAG): v for k, v in learned_system.urdfs.items()
+        })
 
     visualization_system = DrakeSystem(double_urdfs,
                                        base_system.dt,

@@ -1,6 +1,9 @@
 """Modelling and manipulation of convex support functions."""
 from typing import Callable, Tuple, List
 
+import pdb
+
+import torch
 import torch.nn
 from scipy.spatial import ConvexHull  # type: ignore
 from torch import Tensor
@@ -15,6 +18,7 @@ _GRID = torch.cartesian_prod(_LINEAR_SPACE, _LINEAR_SPACE, _LINEAR_SPACE)
 _SURFACE = _GRID[_GRID.abs().max(dim=-1).values >= 1.0]
 _SURFACE = _SURFACE / _SURFACE.norm(dim=-1, keepdim=True)
 _SURFACE = _SURFACE.to(torch.float64)
+_SURFACE = _SURFACE.to(torch.float64)
 _SURFACE_ROTATIONS = rotation_matrix_from_one_vector(_SURFACE, 2)
 
 
@@ -25,7 +29,7 @@ def get_mesh_summary_from_polygon(polygon) -> MeshSummary:
     Note:
         This is a hack since it only works for ``Polygon``\s of a particular
         structure.  That structure matches that provided in the example assets
-        ``contactnets_cube.obj`` and ``contactnets_elbow_half.obj``.
+        ``contactnets_cube.obj`` and ``contactnets_elbow_half.obj``. 
 
     Args:
         polygon: A ``Polygon`` ``CollisionGeometry``.
@@ -51,6 +55,20 @@ def extract_obj_from_support_function(
 
     Args:
         support_function: Callable support function.
+
+    Returns:
+        Wavefront .obj string
+    """
+    mesh_summary = extract_mesh_from_support_function(support_function)
+    return extract_obj_from_mesh_summary(mesh_summary)
+
+
+def extract_obj_from_mesh_summary(mesh_summary: MeshSummary) -> str:
+    """Given a mesh summary, extracts a Wavefront obj representation.
+
+    Args:
+        mesh_summary: Object vertices and face indices in the form of a
+          ``MeshSummary``.
 
     Returns:
         Wavefront .obj string
@@ -132,6 +150,8 @@ def extract_outward_normal_hyperplanes(vertices: Tensor, faces: Tensor):
 
 def extract_mesh_from_support_function(
     support_function: Callable[[Tensor], Tensor]) -> MeshSummary:
+def extract_mesh_from_support_function(
+    support_function: Callable[[Tensor], Tensor]) -> MeshSummary:
     """Given a support function, extracts a vertex/face mesh.
 
     Args:
@@ -161,7 +181,7 @@ def extract_mesh_from_support_function(
     backwards = backwards.squeeze(0)
     faces[backwards] = faces[backwards].flip(-1)
 
-    return MeshSummary(vertices=support_points, faces=faces)
+    return MeshSummary(vertices=vertices, faces=faces)
 
 
 class HomogeneousICNN(Module):
@@ -194,7 +214,8 @@ class HomogeneousICNN(Module):
                  depth: int,
                  width: int,
                  negative_slope: float = 0.5,
-                 scale=1.0) -> None:
+                 scale=1.0,
+                 learnable: bool = True) -> None:
         r"""
         Args:
             depth: Network depth :math:`D`\ .
@@ -210,7 +231,7 @@ class HomogeneousICNN(Module):
         for _ in range(depth - 1):
             hidden_weight = 2 * (torch.rand((width, width)) - 0.5)
             hidden_weight *= scale_hidden
-            hidden_weights.append(Parameter(hidden_weight, requires_grad=True))
+            hidden_weights.append(Parameter(hidden_weight, requires_grad=learnable))
 
         input_weights = []
         for layer in range(depth):
@@ -218,14 +239,14 @@ class HomogeneousICNN(Module):
             torch.nn.init.kaiming_uniform(input_weight)
             if layer > 0:
                 input_weight *= 2**(-0.5)
-            input_weights.append(Parameter(input_weight, requires_grad=True))
+            input_weights.append(Parameter(input_weight, requires_grad=learnable))
 
         scale_out = scale * 2 * (2.0 / (width * (1 + negative_slope**2)))**0.5
         output_weight = 2 * (torch.rand(width) - 0.5) * scale_out
 
         self.hidden_weights = ParameterList(hidden_weights)
         self.input_weights = ParameterList(input_weights)
-        self.output_weight = Parameter(output_weight, requires_grad=True)
+        self.output_weight = Parameter(output_weight, requires_grad=learnable)
         self.activation = torch.nn.LeakyReLU(negative_slope=negative_slope)
 
     def abs_weights(self) -> Tuple[List[Tensor], Tensor]:

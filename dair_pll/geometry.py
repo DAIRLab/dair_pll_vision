@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Tuple, Dict, cast, Union
+from typing import Tuple, Dict, cast, Union
 
 import fcl  # type: ignore
 import numpy as np
@@ -27,6 +28,7 @@ import pywavefront  # type: ignore
 import torch
 import trimesh
 from pydrake.geometry import Box as DrakeBox  # type: ignore
+from pydrake.geometry import Sphere as DrakeSphere # type: ignore
 from pydrake.geometry import HalfSpace as DrakeHalfSpace  # type: ignore
 from pydrake.geometry import Mesh as DrakeMesh  # type: ignore
 from pydrake.geometry import Shape  # type: ignore
@@ -34,6 +36,8 @@ from torch import Tensor
 from torch.nn import Module, Parameter
 from scipy.spatial import ConvexHull
 
+from dair_pll.deep_support_function import HomogeneousICNN, \
+    extract_mesh_from_support_function
 from dair_pll.deep_support_function import HomogeneousICNN, \
     extract_mesh_from_support_function
 from dair_pll.tensor_utils import pbmm, tile_dim, \
@@ -46,6 +50,8 @@ _UNIT_BOX_VERTICES = Tensor([[0, 0, 0, 0, 1, 1, 1, 1.], [
 _ROT_Z_45 = Tensor([[2**(-0.5), -(2**(-0.5)), 0.], [2**(-0.5), 2**(-0.5), 0.],
                     [0., 0., 1.]])
 
+_NOMINAL_HALF_LENGTH = 0.05   # 10cm is nominal object length
+
 _total_ordering = ['Plane', 'Polygon', 'Box', 'Sphere', 'DeepSupportConvex']
 
 _POLYGON_DEFAULT_N_QUERY = 5
@@ -53,6 +59,7 @@ _DEEP_SUPPORT_DEFAULT_N_QUERY = 5
 _DEEP_SUPPORT_EVAL_N_QUERY = 10
 _DEEP_SUPPORT_DEFAULT_DEPTH = 2
 _DEEP_SUPPORT_DEFAULT_WIDTH = 256
+
 
 
 class CollisionGeometry(ABC, Module):
@@ -66,6 +73,8 @@ class CollisionGeometry(ABC, Module):
     ``GeometryCollider``, their ordering is constrained via a total order on
     collision geometry types, enforced with an overload of the ``>`` operator.
     """
+
+    name: str = ""
 
     def __ge__(self, other) -> bool:
         """Evaluate total ordering of two geometries based on their types."""
@@ -124,7 +133,7 @@ class BoundedConvexCollisionGeometry(CollisionGeometry):
     """
 
     @abstractmethod
-    def support_points(self, directions: Tensor) -> Tensor:
+    def support_points(self, directions: Tensor, hint: Optional[Tensor] = None) -> Tensor:
         """Returns a set of witness points representing contact with another
         shape off in the direction(s) ``directions``.
 
@@ -138,9 +147,19 @@ class BoundedConvexCollisionGeometry(CollisionGeometry):
 
         Args:
             directions: (\*, 3) batch of unit-length directions.
+            hint: (\*, 3) batch of expected contact point
 
         Returns:
             (\*, N, 3) sets of corresponding witness points of cardinality N.
+            If hint is defined, then N == 1.
+        """
+
+    @abstractmethod
+    def get_fcl_geometry(self) -> fcl.CollisionGeometry:
+        """Retrieves :py:mod:`fcl` collision geometry representation.
+
+        Returns:
+            :py:mod:`fcl` bounding volume
         """
 
 
@@ -148,7 +167,7 @@ class SparseVertexConvexCollisionGeometry(BoundedConvexCollisionGeometry):
     """Partial implementation of ``BoundedConvexCollisionGeometry`` when
     witness points are guaranteed to be contained in a small set of vertices.
 
-    An obvious subtype is any sort of Polytope, such as a ``Box``. A less
+    An obvious subtype is any sort of polytope, such as a ``Box``. A less
     obvious subtype are shapes in which a direction-dependent set of vertices
     can be easily calculated. See ``Cylinder``, for instance.
     """
@@ -163,7 +182,7 @@ class SparseVertexConvexCollisionGeometry(BoundedConvexCollisionGeometry):
         super().__init__()
         self.n_query = n_query
 
-    def support_points(self, directions: Tensor) -> Tensor:
+    def support_points(self, directions: Tensor, hint: Optional[Tensor] = None) -> Tensor:
         """Implements ``BoundedConvexCollisionGeometry.support_points()`` via
         brute force optimization over the witness vertex set.
 
@@ -178,7 +197,9 @@ class SparseVertexConvexCollisionGeometry(BoundedConvexCollisionGeometry):
         directions``.
 
         Args:
-            directions: (\*, 3) batch of directions.
+            directions: (\*, 3) batch of directions
+            hint: (\*, 3) expected contact point, should be on convex set
+            of the witness points. Used if n_query > 1
 
         Returns:
             (\*, n_query, 3) sets of corresponding witness points.
@@ -203,7 +224,15 @@ class SparseVertexConvexCollisionGeometry(BoundedConvexCollisionGeometry):
         top_vertices = torch.stack(
             [vertices[batch_range, selection] for selection in selections], -2)
         # reshape to (*, n_query, 3)
-        return top_vertices.view(original_shape[:-1] + (self.n_query, 3))
+        queries = top_vertices.view(original_shape[:-1] + (self.n_query, 3))
+        if self.n_query > 1 and (hint is not None) and hint.shape == directions.shape:
+            # Find linear combination of queries 
+            # Lst Sq: queries (*, 3, n_query) * ? (*, n_query, 1) == hint (*, 1, 3)
+            # TODO: HACK, does this differentiate correctly? Should I attach queries?
+            sol = torch.linalg.lstsq(queries.detach().transpose(-1, -2), hint.unsqueeze(-1)).solution
+            return pbmm(queries.transpose(-1, -2), sol).transpose(-1, -2)
+
+        return queries
 
     @abstractmethod
     def get_vertices(self, directions: Tensor) -> Tensor:
@@ -228,11 +257,12 @@ class Polygon(SparseVertexConvexCollisionGeometry):
     of vertices, where models the underlying shape as all convex combinations
     of the vertices.
     """
-    vertices: Parameter
+    vertices_parameter: Parameter
 
     def __init__(self,
                  vertices: Tensor,
-                 n_query: int = _POLYGON_DEFAULT_N_QUERY) -> None:
+                 n_query: int = _POLYGON_DEFAULT_N_QUERY,
+                 learnable: bool = True) -> None:
         """Inits ``Polygon`` object with initial vertex set.
 
         Args:
@@ -244,17 +274,26 @@ class Polygon(SparseVertexConvexCollisionGeometry):
         mesh = trimesh.Trimesh(vertices.numpy(), [])
         hull = mesh.convex_hull
         hull_vertices = Tensor(hull.vertices)
-        self.vertices = Parameter(hull_vertices.clone(), requires_grad=True)
+        self.vertices = Parameter(
+            hull_vertices.clone(), requires_grad=learnable)
 
     def get_vertices(self, directions: Tensor) -> Tensor:
         """Return batched view of static vertex set"""
-        return self.vertices.expand(directions.shape[:-1] + self.vertices.shape)
+        scaled_vertices = _NOMINAL_HALF_LENGTH * self.vertices_parameter
+        return scaled_vertices.expand(
+            directions.shape[:-1] + scaled_vertices.shape)
 
     def scalars(self) -> Dict[str, float]:
         """Return one scalar for each vertex index."""
         scalars = {}
         axes = ['x', 'y', 'z']
-        for axis, values in zip(axes, self.vertices.t()):
+
+        # Use arbitrary direction to query the Polygon's vertices (value does
+        # not matter).
+        arbitrary_direction = torch.ones((1,3))
+        vertices = self.get_vertices(arbitrary_direction).squeeze(0)
+
+        for axis, values in zip(axes, vertices.t()):
             for vertex_index, value in enumerate(values):
                 scalars[f'v{vertex_index}_{axis}'] = value.item()
         return scalars
@@ -293,7 +332,8 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
                  n_query: int = _DEEP_SUPPORT_DEFAULT_N_QUERY,
                  depth: int = _DEEP_SUPPORT_DEFAULT_DEPTH,
                  width: int = _DEEP_SUPPORT_DEFAULT_WIDTH,
-                 perturbation: float = 0.5) -> None:
+                 perturbation: float = 0.5,
+                 learnable: bool = True) -> None:
         r"""Inits ``DeepSupportConvex`` object with initial vertex set.
 
         When calculating a sparse vertex set with :py:meth:`get_vertices`,
@@ -310,7 +350,7 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         super().__init__(n_query)
         length_scale = (vertices.max(dim=0).values -
                         vertices.min(dim=0).values).norm() / 2
-        self.network = HomogeneousICNN(depth, width, scale=length_scale)
+        self.network = HomogeneousICNN(depth, width, scale=length_scale, learnable=learnable)
         self.perturbations = torch.cat((torch.zeros(
             (1, 3)), perturbation * (torch.rand((n_query - 1, 3)) - 0.5)))
 
@@ -355,7 +395,7 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
             self.fcl_geometry = self.get_fcl_geometry()
         return cast(DeepSupportConvex, super().train(mode))
 
-    def get_fcl_geometry(self) -> fcl.BVHModel:
+    def get_fcl_geometry(self) -> fcl.CollisionGeometry:
         """Retrieves :py:mod:`fcl` mesh collision geometry representation.
 
         If evaluation mode is set, retrieves precalculated version.
@@ -397,7 +437,7 @@ class Box(SparseVertexConvexCollisionGeometry):
     length_params: Parameter
     unit_vertices: Tensor
 
-    def __init__(self, half_lengths: Tensor, n_query: int) -> None:
+    def __init__(self, half_lengths: Tensor, n_query: int, learnable: bool = True) -> None:
         """Inits ``Box`` object with initial size.
 
         Args:
@@ -409,14 +449,15 @@ class Box(SparseVertexConvexCollisionGeometry):
 
         assert half_lengths.numel() == 3
 
-        self.length_params = Parameter(half_lengths.clone().view(1, -1),
-                                       requires_grad=True)
+        scaled_half_lengths = half_lengths.clone()/_NOMINAL_HALF_LENGTH
+        self.length_params = Parameter(scaled_half_lengths.view(1, -1),
+                                       requires_grad=learnable)
         self.unit_vertices = _UNIT_BOX_VERTICES.clone()
 
     def get_half_lengths(self) -> Tensor:
         """From the stored :py:attr:`length_params`, compute the half lengths of
         the box as its absolute value."""
-        return torch.abs(self.length_params)
+        return torch.abs(self.length_params) * _NOMINAL_HALF_LENGTH
 
     def get_vertices(self, directions: Tensor) -> Tensor:
         """Returns view of cuboid's static vertex set."""
@@ -433,6 +474,16 @@ class Box(SparseVertexConvexCollisionGeometry):
         }
         return scalars
 
+    def get_fcl_geometry(self) -> fcl.CollisionGeometry:
+        """Retrieves :py:mod:`fcl` collision geometry representation.
+
+        Returns:
+            :py:mod:`fcl` bounding volume
+        """
+        scalars = self.scalars()
+
+        return fcl.Box(scalars["len_x"], scalars["len_y"], scalars["len_z"])
+
 
 class Sphere(BoundedConvexCollisionGeometry):
     """Implements sphere geometry via its support function.
@@ -447,19 +498,19 @@ class Sphere(BoundedConvexCollisionGeometry):
     """
     length_param: Parameter
 
-    def __init__(self, radius: Tensor) -> None:
+    def __init__(self, radius: Tensor, learnable: bool = True) -> None:
         super().__init__()
-        assert radius.numel == 1
+        assert radius.numel() == 1
 
         self.length_param = Parameter(radius.clone().view(()),
-                                      requires_grad=True)
+                                      requires_grad=learnable)
 
     def get_radius(self) -> Tensor:
         """From the stored :py:attr:`length_param`, compute the radius of the
         sphere as its absolute value."""
         return torch.abs(self.length_param)
 
-    def support_points(self, directions: Tensor) -> Tensor:
+    def support_points(self, directions: Tensor, _: Optional[Tensor] = None) -> Tensor:
         """Implements ``BoundedConvexCollisionGeometry.support_points()``
         via analytic expression::
 
@@ -477,16 +528,32 @@ class Sphere(BoundedConvexCollisionGeometry):
         """Logs radius as a scalar."""
         return {'radius': self.get_radius().item()}
 
+    def get_fcl_geometry(self) -> fcl.CollisionGeometry:
+        """Retrieves :py:mod:`fcl` collision geometry representation.
+
+        Returns:
+            :py:mod:`fcl` bounding volume
+        """
+        scalars = self.scalars()
+
+        return fcl.Sphere(scalars["radius"])
+
 
 class PydrakeToCollisionGeometryFactory:
     """Utility class for converting Drake ``Shape`` instances to
     ``CollisionGeometry`` instances."""
 
     @staticmethod
-    def convert(drake_shape: Shape, force_mesh_to_be_polygon: bool = False
-                ) -> CollisionGeometry:
+    def convert(drake_shape: Shape, represent_geometry_as: str,
+        learnable: bool = True, name: str = ""
+        ) -> CollisionGeometry:
         """Converts abstract ``pydrake.geometry.shape`` to
-        ``CollisionGeometry``.
+        ``CollisionGeometry`` according to the desired ``represent_geometry_as``
+        type.
+
+        Notes:
+            The desired ``represent_geometry_as`` type only will affect
+            ``DrakeBox`` and ``DrakeMesh`` types, not ``DrakeHalfSpace`` types.
 
         Args:
             drake_shape: drake shape type to convert.
@@ -498,21 +565,50 @@ class PydrakeToCollisionGeometryFactory:
             TypeError: When provided object is not a supported Drake shape type.
         """
         if isinstance(drake_shape, DrakeBox):
-            return PydrakeToCollisionGeometryFactory.convert_box(drake_shape)
-        if isinstance(drake_shape, DrakeHalfSpace):
-            return PydrakeToCollisionGeometryFactory.convert_plane()
-        if isinstance(drake_shape, DrakeMesh):
-            return PydrakeToCollisionGeometryFactory.convert_mesh(
-                drake_shape, force_mesh_to_be_polygon=force_mesh_to_be_polygon)
-        raise TypeError(
-            "Unsupported type for drake Shape() to"
-            "CollisionGeometry() conversion:", type(drake_shape))
+            geometry = PydrakeToCollisionGeometryFactory.convert_box(
+                drake_shape, represent_geometry_as, learnable)
+        elif isinstance(drake_shape, DrakeHalfSpace):
+            geometry = PydrakeToCollisionGeometryFactory.convert_plane()
+        elif isinstance(drake_shape, DrakeMesh):
+            geometry = PydrakeToCollisionGeometryFactory.convert_mesh(
+                drake_shape, represent_geometry_as, learnable)
+        elif isinstance(drake_shape, DrakeSphere):
+            geometry = PydrakeToCollisionGeometryFactory.convert_sphere(
+                drake_shape, represent_geometry_as, learnable)
+        else:
+            raise TypeError(
+                "Unsupported type for drake Shape() to"
+                "CollisionGeometry() conversion:", type(drake_shape))
+
+        geometry.name = name
+        return geometry
 
     @staticmethod
-    def convert_box(drake_box: DrakeBox) -> Box:
-        """Converts ``pydrake.geometry.Box`` to ``Box``."""
-        half_widths = 0.5 * Tensor(np.copy(drake_box.size()))
-        return Box(half_widths, 4)
+    def convert_box(drake_box: DrakeBox, represent_geometry_as: str, learnable: bool = True
+        ) -> Union[Box, Polygon]:
+        """Converts ``pydrake.geometry.Box`` to ``Box`` or ``Polygon``."""
+        if represent_geometry_as == 'box':
+            half_widths = 0.5 * Tensor(np.copy(drake_box.size()))
+            return Box(half_widths, 4, learnable)
+
+        if represent_geometry_as == 'polygon':
+            pass # TODO
+
+        raise NotImplementedError(f'Cannot presently represent a DrakeBox()' + \
+            f'as {represent_geometry_as} type.')
+
+    @staticmethod
+    def convert_sphere(drake_sphere: DrakeSphere, represent_geometry_as: str, learnable: bool = True
+        ) -> Union[Sphere, Polygon]:
+        """Converts ``pydrake.geometry.Box`` to ``Box`` or ``Polygon``."""
+        if represent_geometry_as == 'box':
+            return Sphere(torch.tensor([drake_sphere.radius()]), learnable)
+
+        if represent_geometry_as == 'polygon':
+            pass # TODO
+
+        raise NotImplementedError(f'Cannot presently represent a DrakeBox()' + \
+            f'as {represent_geometry_as} type.')
 
     @staticmethod
     def convert_plane() -> Plane:
@@ -521,17 +617,22 @@ class PydrakeToCollisionGeometryFactory:
 
     @staticmethod
     def convert_mesh(
-            drake_mesh: DrakeMesh, force_mesh_to_be_polygon: bool = False
-    ) -> Union[DeepSupportConvex | Polygon]:
-        """Converts ``pydrake.geometry.Mesh`` to ``DeepSupportConvex``."""
+        drake_mesh: DrakeMesh, represent_geometry_as: str,
+        learnable: bool = True) -> Union[DeepSupportConvex, Polygon]:
+        """Converts ``pydrake.geometry.Mesh`` to ``Polygon`` or
+        ``DeepSupportConvex``."""
         filename = drake_mesh.filename()
         mesh = pywavefront.Wavefront(filename)
         vertices = Tensor(mesh.vertices)
 
-        if force_mesh_to_be_polygon:
-            return Polygon(vertices)
+        if represent_geometry_as == 'mesh':
+            return DeepSupportConvex(vertices, learnable=learnable)
 
-        return DeepSupportConvex(vertices)
+        if represent_geometry_as == 'polygon':
+            return Polygon(vertices, learnable)
+
+        raise NotImplementedError(f'Cannot presently represent a ' + \
+            f'DrakeMesh() as {represent_geometry_as} type.')
 
 
 class GeometryCollider:
@@ -566,13 +667,14 @@ class GeometryCollider:
         assert not geometry_a > geometry_b
 
         # case 1: half-space to compact-convex collision
+        # TODO: make function allow planes in general, not just in 1st slot
         if isinstance(geometry_a, Plane) and isinstance(
                 geometry_b, BoundedConvexCollisionGeometry):
             return GeometryCollider.collide_plane_convex(
                 geometry_b, R_AB, p_AoBo_A)
-        if isinstance(geometry_a, DeepSupportConvex) and isinstance(
-                geometry_b, DeepSupportConvex):
-            return GeometryCollider.collide_mesh_mesh(geometry_a, geometry_b,
+        if isinstance(geometry_a, BoundedConvexCollisionGeometry) and isinstance(
+                geometry_b, BoundedConvexCollisionGeometry):
+            return GeometryCollider.collide_convex_convex(geometry_a, geometry_b,
                                                       R_AB, p_AoBo_A)
         raise TypeError(
             "No type-specific implementation for geometry "
@@ -617,12 +719,21 @@ class GeometryCollider:
         return phi, R_AC, p_AoAc_A, p_BoBc_B
 
     @staticmethod
-    def collide_mesh_mesh(
-            geometry_a: DeepSupportConvex, geometry_b: DeepSupportConvex,
+    def collide_convex_convex(
+            geometry_a: BoundedConvexCollisionGeometry, geometry_b: BoundedConvexCollisionGeometry,
             R_AB: Tensor,
             p_AoBo_A: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Implementation of ``GeometryCollider.collide()`` when
-        both geometries are ``DeepSupportConvex``\es."""
+        both geometries are ``BoundedConvexCollisionGeometry``\es."""
+
+        # Call network directly for DeepSupportConvex objects
+        support_fn_a = geometry_a.support_points
+        support_fn_b = geometry_b.support_points
+        if isinstance(geometry_a, DeepSupportConvex):
+            support_fn_a = geometry_a.network
+        if isinstance(geometry_b, DeepSupportConvex):
+            support_fn_b = geometry_b.network
+
         # pylint: disable=too-many-locals
         p_AoBo_A = p_AoBo_A.unsqueeze(-2)
         original_batch_dims = p_AoBo_A.shape[:-2]
@@ -635,6 +746,11 @@ class GeometryCollider:
         # differentiate through it.
         # pylint: disable=E1103
         directions = torch.zeros_like(p_AoBo_A)
+
+        # Used if there are multiple coplanar witness points
+        # To determine the actual contact point in a differentiable manner
+        hints_a = torch.zeros_like(p_AoBo_A)
+        hints_b = torch.zeros_like(p_AoBo_A)
 
         # setup fcl=
         a_obj = fcl.CollisionObject(geometry_a.get_fcl_geometry(),
@@ -655,24 +771,51 @@ class GeometryCollider:
                 # Collision detected.
                 # Assume only 1 contact point.
                 directions[transform_index] += result.contacts[0].normal
+                nearest_points = [result.contacts[0].pos + result.contacts[0].penetration_depth/2.0 * result.contacts[0].normal,
+                    result.contacts[0].pos - result.contacts[0].penetration_depth/2.0 * result.contacts[0].normal]
             else:
                 result = fcl.DistanceResult()
                 fcl.distance(a_obj, b_obj, distance_request, result)
                 directions[transform_index] += Tensor(result.nearest_points[1] -
                                                       result.nearest_points[0])
-        directions /= directions.norm(dim=-1, keepdim=True)
-        R_AC = rotation_matrix_from_one_vector(directions, 2)
-        p_AoAc_A = geometry_a.network(directions)
-        p_BoBc_B = geometry_b.network(
-            -pbmm(directions.unsqueeze(-2), R_AB).squeeze(-2))
-        p_BoBc_A = pbmm(p_BoBc_B.unsqueeze(-2), R_AB.transpose(-1,
-                                                               -2)).squeeze(-2)
-        p_AcBc_A = -p_AoAc_A + p_AoBo_A + p_BoBc_A
 
-        phi = (p_AcBc_A * R_AC[..., 2]).sum(dim=-1)
+                nearest_points = result.nearest_points
 
-        phi = phi.reshape(original_batch_dims + (1,))
-        R_AC = R_AC.reshape(original_batch_dims + (1, 3, 3))
-        p_AoAc_A = p_AoAc_A.reshape(original_batch_dims + (1, 3))
-        p_BoBc_B = p_BoBc_B.reshape(original_batch_dims + (1, 3))
+            # Record Hints == expected contact point in each object's frame
+            hints_a[transform_index] = Tensor(nearest_points[0])
+            hints_b[transform_index] = pbmm(
+                Tensor(nearest_points[1]) - p_AoBo_A[transform_index].detach(), 
+                R_AB[transform_index])
+
+        # Get normal directions in each object frame
+        directions_A = directions / directions.norm(dim=-1, keepdim=True)
+        directions_B = -pbmm(directions_A.unsqueeze(-2), R_AB).squeeze(-2)
+
+        p_AoAc_A = support_fn_a(directions_A, hints_a)
+        p_BoBc_B = support_fn_b(directions_B, hints_b)
+        p_BoBc_A = pbmm(p_BoBc_B, R_AB.transpose(-1,-2))
+        # Check Sanity of autodiff-calculated points relative to FCL
+        assert np.isclose(p_AoAc_A.detach().numpy(), hints_a.unsqueeze(-2).detach().numpy()).all()
+        assert np.isclose(p_BoBc_B.detach().numpy(), hints_b.unsqueeze(-2).detach().numpy()).all()
+
+        p_AcBc_A = -p_AoAc_A + p_AoBo_A.unsqueeze(-2) + p_BoBc_A
+
+        # Unsqueeze # of witness points dimension, default 1
+        R_AC = rotation_matrix_from_one_vector(directions_A, 2).unsqueeze(-3)
+        # Assume same contact frame for all witness points
+        R_AC = R_AC.expand(p_AcBc_A.shape + (3,))
+        # Get length of witness point distance projected onto contact normal
+        phi = (p_AcBc_A * R_AC[..., 2]).sum(dim=-1)       
+        
+        # No longer necessary
+        # phi = phi.reshape(original_batch_dims + (1,))
+        # R_AC = R_AC.reshape(original_batch_dims + (1, 3, 3))
+        # p_AoAc_A = p_AoAc_A.reshape(original_batch_dims + (1, 3))
+        # p_BoBc_B = p_BoBc_B.reshape(original_batch_dims + (1, 3))
+
+        # Check outputs are sane before return
+        assert (phi.shape + (3,3,)) == R_AC.shape
+        assert phi.shape[1] == 1 # TODO: HACK Only supporting 1 contact witness point
+        assert phi.shape[1] == p_AoAc_A.shape[1]
+        assert phi.shape[1] == p_BoBc_B.shape[1]
         return phi, R_AC, p_AoAc_A, p_BoBc_B

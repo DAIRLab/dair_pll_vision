@@ -8,6 +8,7 @@ import glob
 import json
 import os
 import numpy as np
+import random
 import pickle
 import random
 from copy import deepcopy
@@ -82,6 +83,7 @@ def assure_created(directory: str) -> str:
 
 
 MAIN_DIR = path.dirname(path.dirname(__file__))
+LOG_DIR = assure_created(os.path.join(MAIN_DIR, 'logs'))
 ASSETS_DIR = assure_created(os.path.join(MAIN_DIR, 'assets'))
 RESULTS_DIR = assure_created(os.path.join(MAIN_DIR, 'results'))
 # str: locations of key static directories
@@ -494,6 +496,37 @@ def get_configuration_filename(storage_name: str, run_name: str,
 def get_model_filename(storage_name: str, run_name: str) -> str:
     """Absolute path of experiment configuration."""
     return path.join(run_dir(storage_name, run_name), CHECKPOINT_FILENAME)
+
+
+def get_geometrically_accurate_urdf(urdf_name: str) -> str:
+    """Replaces urdf_name with the name of a urdf corresponding to the same
+    system with accurate geometry.
+
+    Args:
+        urdf_name: Name of a URDF file located in ``ASSET_DIR``
+
+    Returns:
+        The name of a URDF file located in ``ASSET_DIR`` that contains the true
+        geometry of the system.
+    """
+    URDF_MAP = {'contactnets_cube_bad_init.urdf': 'contactnets_cube.urdf',
+                'contactnets_cube_small_init.urdf': 'contactnets_cube.urdf',
+                'contactnets_cube.urdf': 'contactnets_cube.urdf',
+                'contactnets_cube_mesh.urdf': 'contactnets_cube_mesh.urdf',
+                'contactnets_elbow_bad_init.urdf': 'contactnets_elbow.urdf',
+                'contactnets_elbow_small_init.urdf': 'contactnets_elbow.urdf',
+                'contactnets_elbow.urdf': 'contactnets_elbow.urdf',
+                'contactnets_elbow_mesh.urdf': 'contactnets_elbow_mesh.urdf',
+                'contactnets_asymmetric.urdf': 'contactnets_asymmetric.urdf',
+                'spherebot.urdf': 'spherebot.urdf'}
+    base_name = urdf_name.split('/')[-1]
+
+    if base_name in URDF_MAP.keys():
+        return get_asset(URDF_MAP[base_name])
+    else:
+        print(f'Could not find geometrically accurate version of {base_name};' +
+              f' defaulting to using it directly.')
+        return get_asset(base_name)
 
 
 def study_dir(storage_name: str, study_name: str) -> str:

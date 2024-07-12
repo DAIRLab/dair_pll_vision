@@ -187,8 +187,8 @@ class UrdfGeometryRepresentationFactory:
     ``CollisionGeometry`` instances."""
 
     @staticmethod
-    def representation(geometry: CollisionGeometry,
-                       output_dir: str) -> Tuple[str, Dict[str, str]]:
+    def representation(geometry: CollisionGeometry, output_dir: str,
+                       link_name: str = None) -> Tuple[str, Dict[str, str]]:
         """Representation of an associated URDF tag that describes the
         properties of this geometry.
 
@@ -203,13 +203,16 @@ class UrdfGeometryRepresentationFactory:
         Args:
             geometry: collision geometry to be represented
             output_dir: File directory to store helper files (e.g., meshes).
+            link_name: name of link.  This only matters for mesh/polygon
+              geometries so their externally stored .obj files have unique
+              names.
 
         Returns:
             URDF tag and attributes.
         """
         if isinstance(geometry, Polygon):
             return UrdfGeometryRepresentationFactory.polygon_representation(
-                geometry, output_dir)
+                geometry, output_dir, link_name)
         if isinstance(geometry, Box):
             return UrdfGeometryRepresentationFactory.box_representation(
                 geometry)
@@ -218,17 +221,17 @@ class UrdfGeometryRepresentationFactory:
                 geometry)
         if isinstance(geometry, DeepSupportConvex):
             return UrdfGeometryRepresentationFactory.mesh_representation(
-                geometry, output_dir)
+                geometry, output_dir, link_name)
         raise TypeError(
             "Unsupported type for CollisionGeometry() to"
             "URDF representation conversion:", type(geometry))
 
     @staticmethod
     def polygon_representation(polygon: Polygon, output_dir: str,
-                               ) -> Tuple[str, Dict[str, str]]:
+                               link_name: str) -> Tuple[str, Dict[str, str]]:
         """Returns URDF representation as ``mesh`` tag with name of saved
         mesh file."""
-        mesh_name = "test.obj"
+        mesh_name = f"{link_name}.obj"
         mesh_path = os.path.join(output_dir, mesh_name)
         mesh_summary = get_mesh_summary_from_polygon(polygon)
         file_utils.save_string(
@@ -251,13 +254,15 @@ class UrdfGeometryRepresentationFactory:
         return _SPHERE, {_RADIUS: str(sphere.get_radius().item())}
 
     @staticmethod
-    def mesh_representation(convex: DeepSupportConvex, output_dir: str) -> \
-            Tuple[str, Dict[str, str]]:
+    def mesh_representation(convex: DeepSupportConvex, output_dir: str,
+                            link_name: str) -> Tuple[str, Dict[str, str]]:
         """Returns URDF representation as ``mesh`` tag with name of saved
         mesh file."""
-        mesh_name = "test.obj"
+        mesh_name = f"{link_name}.obj"
         mesh_path = os.path.join(output_dir, mesh_name)
-        file_utils.save_string(mesh_path, extract_obj_from_support_function(convex.network))
+        file_utils.save_string(
+            mesh_path,
+            extract_obj_from_support_function(convex.network))
 
         return _MESH, {_FILENAME: mesh_name}
 
@@ -265,7 +270,8 @@ class UrdfGeometryRepresentationFactory:
 def fill_link_with_parameterization(element: ElementTree.Element, pi_cm: Tensor,
                                     geometries: List[CollisionGeometry],
                                     friction_coeffs: Tensor,
-                                    output_dir: str) -> None:
+                                    output_dir: str,
+                                    link_name: str = None) -> None:
     """Convert pytorch inertial and geometric representations to URDF elements.
 
     Args:
@@ -313,7 +319,8 @@ def fill_link_with_parameterization(element: ElementTree.Element, pi_cm: Tensor,
 
         (shape_tag, shape_attributes) = \
             UrdfGeometryRepresentationFactory.representation(geometry,
-                                                             output_dir)
+                                                             output_dir,
+                                                             link_name=link_name)
         for geometry_element in geometry_elements:
             shape_element = UrdfFindOrDefault.find(geometry_element, shape_tag)
             shape_element.attrib = shape_attributes
@@ -362,7 +369,9 @@ def represent_multibody_terms_as_urdfs(multibody_terms: MultibodyTerms,
 
         for element in urdf_tree.iter():
             if element.tag == "link":
-                assert element.get("name") is not None
+                link_name = element.get("name")
+                assert link_name is not None
+
                 body_id = drake_utils.unique_body_identifier(
                     multibody_terms.plant_diagram.plant,
                     multibody_terms.plant_diagram.plant.GetBodyByName(
@@ -385,7 +394,8 @@ def represent_multibody_terms_as_urdfs(multibody_terms: MultibodyTerms,
                 fill_link_with_parameterization(element, pi_cm[body_index, :],
                                                 body_geometries,
                                                 body_friction_coeffs,
-                                                output_dir)
+                                                output_dir,
+                                                link_name=link_name)
 
         register_namespace('drake', _DRAKE_URL)
         system_urdf_representation = ElementTree.tostring(
