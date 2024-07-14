@@ -24,6 +24,7 @@ Robotic Learning, 2020, https://proceedings.mlr.press/v155/pfrommer21a.html
 from multiprocessing import pool
 import os
 from os import path
+import pdb
 from typing import List, Tuple, Optional, Dict, cast
 
 import numpy as np
@@ -125,13 +126,13 @@ class MultibodyLearnableSystem(System):
         self.w_diss = loss_weights_dict['w_diss']
         self.w_bsdf = loss_weights_dict['w_bsdf']
 
-    def generate_updated_urdfs(self, epoch: int = None) -> Dict[str, str]:
+    def generate_updated_urdfs(self, suffix: str = None) -> Dict[str, str]:
         """Exports current parameterization as a :py:class:`DrakeSystem`.
 
         Args:
             storage_name: name of file storage location in which to store new
               URDFs for Drake to read.
-            epoch: optionally can include epoch in generated filenames.
+            suffix: optionally can include a suffix for generated filename.
 
         Returns:
             New Drake system instantiated on new URDFs.
@@ -142,21 +143,21 @@ class MultibodyLearnableSystem(System):
             self.multibody_terms, self.output_urdfs_dir)
         new_urdfs = {}
 
-        # saves new urdfs with original file basenames plus optional suffix in
+        # Save new urdfs with original file basenames plus optional suffix in
         # new folder.
         for urdf_name, new_urdf_string in new_urdf_strings.items():
             old_urdf_filename = path.basename(old_urdfs[urdf_name])
 
-            if epoch:
-                # rename test.obj to test_{epoch}.obj
+            if suffix is not None:
+                # Rename test.obj to test_{suffix}.obj.
                 obj_file = os.path.join(self.output_urdfs_dir, 'test.obj')
                 new_obj_file = os.path.join(
-                    self.output_urdfs_dir, f'test_{epoch}.obj')
+                    self.output_urdfs_dir, f'test_{suffix}.obj')
                 os.rename(obj_file, new_obj_file)
                 
-                # replace references in the urdf to the new filename
+                # Replace references in the urdf to the new filename.
                 new_urdf_string = new_urdf_string.replace(
-                    'test.obj', f'test_{epoch}.obj')
+                    'test.obj', f'test_{suffix}.obj')
                 
             new_urdf_path = path.join(self.output_urdfs_dir, old_urdf_filename)
             file_utils.save_string(new_urdf_path, new_urdf_string)
@@ -229,12 +230,13 @@ class MultibodyLearnableSystem(System):
         v = self.space.v(x)
         q_plus, v_plus = self.space.q_v(x_plus)
         dt = self.dt
-        eps = 1e-3
+
+        eps = 1e-8 # TODO: HACK, make a hyperparameter
 
         # Begin loss calculation.
         delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, \
             obj_pair_list, R_FW_list = \
-                self.get_multibody_terms(q_plus, v_plus, u)
+                self.multibody_terms(q_plus, v_plus, u)
 
         # Construct a reordering matrix s.t. lambda_CN = reorder_mat @ f_sappy.
         n_contacts = phi.shape[-1]
@@ -244,36 +246,16 @@ class MultibodyLearnableSystem(System):
                                               delassus.shape)
         J_t = J[..., n_contacts:, :]
 
-        # Construct a diagonal scaling matrix (3*n_contacts, 3*n_contacts) S
-        # s.t. S @ lambda_CN = scaled lambdas in units [m/s] instead of [N s].
-        delassus_diag_vec = torch.diagonal(delassus, dim1=-2, dim2=-1)
-        contact_weights = pbmm(one_vector_block_diagonal(n_contacts, 3).t(),
-                               pbmm(reorder_mat.transpose(-1, -2),
-                                    delassus_diag_vec.unsqueeze(-1)))
-        contact_weights = broadcast_lorentz(contact_weights.squeeze(-1))
-        S = torch.diag_embed(contact_weights)
-
-        # Construct a diagonal scaling matrix (n_velocity, n_velocity) P s.t.
-        # velocity errors are scaled to relate translation and rotation errors
-        # in a thoughful way.
-        P_diag = torch.ones_like(v)
-        P_diag[..., :3] *= ROTATION_SCALING
-        P_diag[..., 6:] *= JOINT_SCALING
-        P = torch.diag_embed(P_diag)
-
         # pylint: disable=E1103
         double_zero_vector = torch.zeros(phi.shape[:-1] + (2 * n_contacts,))
         phi_then_zero = torch.cat((phi, double_zero_vector), dim=-1)
 
         # pylint: disable=E1103
         sliding_velocities = pbmm(J_t, v_plus.unsqueeze(-1))
-        sliding_speeds = sliding_velocities.reshape(phi.shape[:-1] +
-                                                    (n_contacts, 2)).norm(
-                                                        dim=-1, keepdim=True)
+        sliding_speeds = sliding_velocities.reshape(
+            phi.shape[:-1] + (n_contacts, 2)).norm(dim=-1, keepdim=True)
 
-        Q = delassus
-        J_M = pbmm(reorder_mat.transpose(-1, -2),
-                   pbmm(J, torch.linalg.cholesky(torch.inverse((M)))))
+        Q = delassus + eps * torch.eye(3 * n_contacts) # Force PD
 
         dv = (v_plus - (v + non_contact_acceleration * dt)).unsqueeze(-2)
 
@@ -298,27 +280,33 @@ class MultibodyLearnableSystem(System):
         # Therefore, we can detach ``impulses`` from pytorch's computation graph
         # without causing error in the overall loss gradient.
         # pylint: disable=E1103
-        force = pbmm(
-            reorder_mat,
-            self.solver(
-                J_M,
-                pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1)
-            ).detach().unsqueeze(-1))
+        try:
+            impulses = pbmm(
+                reorder_mat,
+                self.solver(
+                    pbmm(reorder_mat.transpose(-1, -2), pbmm(Q, reorder_mat)),
+                    pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1),
+                ).detach().unsqueeze(-1))
+        except:
+            print(f'reordered Q: {pbmm(reorder_mat.transpose(-1,-2),
+                                       pbmm(Q, reorder_mat))}')
+            print(f'reordered q: {pbmm(reorder_mat.transpose(-1, -2), q)}')
+            pdb.set_trace()
 
         # Hack: remove elements of ``impulses`` where solver likely failed.
-        invalid = torch.any((impulses.abs() > 1e3) | impulses.isnan() | impulses.isinf(),
-                            dim=-2,
-                            keepdim=True)
+        invalid = torch.any(
+            (impulses.abs() > 1e3) | impulses.isnan() | impulses.isinf(),
+            dim=-2, keepdim=True)
 
         c_pred[invalid] *= 0.
         c_pen[invalid] *= 0.
-        force[invalid.expand(force.shape)] = 0.
+        impulses[invalid.expand(impulses.shape)] = 0.
 
-        loss_pred = 0.5 * pbmm(force.transpose(-1, -2), pbmm(Q, force)) \
-                    + pbmm(force.transpose(-1, -2), q_pred) + c_pred
-        loss_comp = pbmm(force.transpose(-1, -2), q_comp)
+        loss_pred = 0.5 * pbmm(impulses.transpose(-1, -2), pbmm(Q, impulses)) \
+                    + pbmm(impulses.transpose(-1, -2), q_pred) + c_pred
+        loss_comp = pbmm(impulses.transpose(-1, -2), q_comp)
         loss_pen = c_pen
-        loss_diss = pbmm(force.transpose(-1, -2), q_diss)
+        loss_diss = pbmm(impulses.transpose(-1, -2), q_diss)
 
         return loss_pred.reshape(-1), loss_comp.reshape(-1), \
                loss_pen.reshape(-1), loss_diss.reshape(-1)
@@ -388,18 +376,20 @@ class MultibodyLearnableSystem(System):
         """
         # pylint: disable=too-many-locals
         dt = self.dt
-        eps = 1e6
-        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, _, _ = \
-            self.multibody_terms(q, v, u)
+        phi_eps = 1e6
+        eps = 1e-8 # TODO: HACK make this a hyperparameter
+        delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, \
+            obj_pair_list, R_FW_list = \
+                self.multibody_terms(q, v, u)
         n_contacts = phi.shape[-1]
-        contact_filter = (broadcast_lorentz(phi) <= eps).unsqueeze(-1)
+        contact_filter = (broadcast_lorentz(phi) <= phi_eps).unsqueeze(-1)
 
         reorder_mat = tensor_utils.sappy_reorder_mat(n_contacts)
         reorder_mat = reorder_mat.reshape((1,) * (delassus.dim() - 2) +
                                           reorder_mat.shape).expand(
                                               delassus.shape)
 
-        Q_delassus = delassus + eps * torch.eye(3 * n_contacts)
+        Q = delassus + eps * torch.eye(3 * n_contacts)
 
         # pylint: disable=E1103
         double_zero_vector = torch.zeros(phi.shape[:-1] + (2 * n_contacts,))
@@ -409,12 +399,17 @@ class MultibodyLearnableSystem(System):
         v_minus = v + dt * non_contact_acceleration
         q_full = pbmm(J, v_minus.unsqueeze(-1)) + (1 / dt) * phi_then_zero
 
-        impulse_full = pbmm(
-            reorder_mat,
-            self.solver(
-                J_M,
-                pbmm(reorder_mat.transpose(-1, -2), q_full).squeeze(-1)
-            ).unsqueeze(-1))
+        try:
+            impulse_full = pbmm(
+                reorder_mat,
+                self.solver(
+                    pbmm(reorder_mat.transpose(-1, -2), pbmm(Q, reorder_mat)),
+                    pbmm(reorder_mat.transpose(-1, -2), q_full).squeeze(-1),
+                 ).detach().unsqueeze(-1))
+        except:
+            print(f'Q_delassus: {Q}')
+            print(f'q_full: {q_full}')
+            pdb.set_trace()
 
         impulse = torch.zeros_like(impulse_full)
         impulse[contact_filter] += impulse_full[contact_filter]
@@ -449,21 +444,19 @@ class MultibodyLearnableSystem(System):
         scalars, meshes = self.multibody_terms.scalars_and_meshes()
         videos = cast(Dict[str, Tuple[np.ndarray, int]], {})
 
-    
     def bundlesdf_data_generation_from_cnets(self,
                          x: Tensor,
                          u: Tensor,
                          x_plus: Tensor,
                          loss_pool: Optional[pool.Pool] = None):
-        
-                # pylint: disable-msg=too-many-locals
+        # pylint: disable-msg=too-many-locals
         v = self.space.v(x)
         q_plus, v_plus = self.space.q_v(x_plus)
         dt = self.dt
         eps = 1e-3
 
-        delassus, M, J, phi, non_contact_acceleration, p_BiBc_B, _, _ = \
-            self.multibody_terms(q_plus, v_plus, u)
+        delassus, M, J, phi, non_contact_acceleration, p_BiBc_B, \
+            _obj_pair_list, _R_FW_list = self.multibody_terms(q, v, u)
 
         n_contacts = phi.shape[-1]
         reorder_mat = tensor_utils.sappy_reorder_mat(n_contacts)
@@ -507,23 +500,23 @@ class MultibodyLearnableSystem(System):
         # Therefore, we can detach ``force`` from pytorch's computation graph
         # without causing error in the overall loss gradient.
         # pylint: disable=E1103
-        force = pbmm(
+        impulses = pbmm(
             reorder_mat,
             self.solver(
-                J_M,
+                pbmm(reorder_mat.transpose(-1, -2), pbmm(Q, reorder_mat)),
                 pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1),
             ).detach().unsqueeze(-1))
 
-        # Hack: remove elements of ``force`` where solver likely failed.
-        invalid = torch.any((force.abs() > 1e3) | force.isnan() | force.isinf(),
-                            dim=-2,
-                            keepdim=True)
+        # Hack: remove elements of ``impulses`` where solver likely failed.
+        invalid = torch.any(
+            (impulses.abs() > 1e3) | impulses.isnan() | impulses.isinf(),
+            dim=-2, keepdim=True)
 
         constant[invalid] *= 0.
-        force[invalid.expand(force.shape)] = 0.
+        impulses[invalid.expand(impulses.shape)] = 0.
 
         # Get the normal forces
-        normal_impulses = force[:, :n_contacts].reshape(-1, n_contacts)
+        normal_impulses = impulses[:, :n_contacts].reshape(-1, n_contacts)
         orientation = q_plus[..., :4]
 
         # Get the contact points that correspond to high normal forces

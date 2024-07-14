@@ -21,6 +21,7 @@ from dair_pll.experiment import default_epoch_callback
 from dair_pll.experiment_config import OptimizerConfig
 from dair_pll.hyperparameter import Float, Int
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
+from dair_pll.multibody_terms import InertiaLearn
 from dair_pll.system import System
 
 
@@ -40,6 +41,9 @@ URDFS = {VISION_CUBE_SYSTEM: CUBE_URDFS,
          VISION_PRISM_SYSTEM: PRISM_URDFS,
          VISION_TOBLERONE_SYSTEM: TOBLERONE_URDFS,
          VISION_MILK_SYSTEM: MILK_URDFS}
+
+# TODO
+FRANKA_URDF_ASSET = 'franka_with_ee.urdf'
 
 # Data configuration.
 DT = 0.0333 #0.0068 # 1/frame rate of the camera
@@ -259,11 +263,13 @@ def main(pll_run_id: str = "",
     # a multibody system, which is initialized as the system in the given URDFs.
     loss = MultibodyLosses.VISION_LOSS if contactnets else \
         MultibodyLosses.PREDICTION_LOSS
+    inertia_mode = InertiaLearn(
+        mass=False, com=learn_inertia=='all', inertia=learn_inertia=='all')
     learnable_config = MultibodyLearnableSystemConfig(
       urdfs=urdfs, loss=loss,
       pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
       w_pred=w_pred, w_comp=w_comp, w_diss=w_diss, w_pen=w_pen, w_bsdf=w_bsdf,
-      learn_inertia=learn_inertia
+      inertia_mode=inertia_mode
     )
 
     # How to slice trajectories into training datapoints.

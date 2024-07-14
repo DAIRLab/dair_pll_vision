@@ -13,6 +13,7 @@ _CVXPY_LCQP_EPS = 0.  #1e-7
 _CVXPY_SOLVER_ARGS = {"solve_method": "ECOS", "max_iters": 300,
                       "abstol": 1e-10, "reltol": 1e-10, "feastol": 1e-10}
 
+
 def construct_cvxpy_lcqp_layer(num_contacts: int) -> CvxpyLayer:
     """Constructs a CvxpyLayer for solving a Lorentz cone constrained quadratic
     program.
@@ -55,8 +56,10 @@ class DynamicCvxpyLCQPLayer:
     def get_sized_layer(self, num_contacts: int) -> CvxpyLayer:
         """Returns a ``CvxpyLayer`` for solving a LCQP with ``num_contacts``
         contacts.
+
         Args:
             num_contacts: number of contacts to be considered in the LCQP.
+
         Returns:
             CvxpyLayer for solving a LCQP.
         """

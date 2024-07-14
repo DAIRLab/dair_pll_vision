@@ -1,4 +1,7 @@
-"""Simple ContactNets/differentiable physics learning examples."""
+"""Simple ContactNets/differentiable physics learning examples.
+
+CAUTION:  For the vision project, this file is currently broken.
+"""
 # pylint: disable=E1103
 import os
 import time
@@ -374,7 +377,7 @@ def main(storage_folder_name: str = "",
         default_epoch_callback(epoch, learned_system, train_loss,
                                best_valid_loss)
         cast(MultibodyLearnableSystem, learned_system).generate_updated_urdfs(
-            suffix='progress')
+            suffix=str(epoch))
 
     # Trains system and saves final results.
     print(f'\nTraining the model.')
@@ -464,17 +467,13 @@ def main(storage_folder_name: str = "",
               type = click.Choice(AUGMENTED_FORCE_TYPES),
               default=None,
               help="what kind of additional forces to augment simulation data.")
-@click.option('--g-frac',
-              type=float,
-              default=1e0,
-              help="fraction of gravity constant to use.")
 def main_command(storage_folder_name: str, run_name: str, system: str,
                  source: str, structured: bool, contactnets: bool,
                  geometry: str, regenerate: bool, dataset_size: int,
                  inertia_params: str, loss_variation: str, true_sys: bool,
                  wandb_project: str, w_pred: float, w_comp: float,
                  w_diss: float, w_pen: float, w_res: float, w_res_w: float,
-                 residual: bool, additional_forces: str, g_frac: float):
+                 residual: bool, additional_forces: str):
     """Executes main function with argument interface."""
     assert storage_folder_name is not None
     assert run_name is not None
@@ -482,7 +481,7 @@ def main_command(storage_folder_name: str, run_name: str, system: str,
     main(storage_folder_name, run_name, system, source, structured, contactnets,
          geometry, regenerate, dataset_size, inertia_params, loss_variation,
          true_sys, wandb_project, w_pred, w_comp, w_diss, w_pen, w_res, w_res_w,
-         residual, additional_forces, g_frac)
+         residual, additional_forces)
 
 
 if __name__ == '__main__':

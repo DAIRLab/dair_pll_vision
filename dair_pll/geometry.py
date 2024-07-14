@@ -263,7 +263,9 @@ class Polygon(SparseVertexConvexCollisionGeometry):
                  vertices: Tensor,
                  n_query: int = _POLYGON_DEFAULT_N_QUERY,
                  learnable: bool = True) -> None:
-        """Inits ``Polygon`` object with initial vertex set.
+        """Inits ``Polygon`` object with initial vertex set.  Learns vertex set
+        in normalized space via _NOMINAL_HALF_LENGTH.  The `get_vertices` method
+        returns the vertices in real meter units.
 
         Args:
             vertices: (N, 3) static vertex set.
@@ -273,7 +275,7 @@ class Polygon(SparseVertexConvexCollisionGeometry):
 
         mesh = trimesh.Trimesh(vertices.numpy(), [])
         hull = mesh.convex_hull
-        hull_vertices = Tensor(hull.vertices)
+        hull_vertices = Tensor(hull.vertices)/_NOMINAL_HALF_LENGTH
         self.vertices = Parameter(
             hull_vertices.clone(), requires_grad=learnable)
 

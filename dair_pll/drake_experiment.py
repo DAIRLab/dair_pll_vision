@@ -48,6 +48,8 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """If provided, filepath to pretrained ICNN weights."""
     inertia_mode: InertiaLearn = field(default_factory=InertiaLearn)
     """What inertial parameters to learn."""
+    constant_bodies: List[str] = []
+    """List of body names whose properties should NOT be learned."""
     w_pred: float = 1.0
     """Weight of prediction term in ContactNets loss (suggested keep at 1.0)."""
     w_comp: float = 1.0
@@ -60,8 +62,6 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """Weight of BundleSDF matching term in vision experiment loss."""
     represent_geometry_as: str = 'box'
     """How to represent geometry (box, mesh, or polygon)."""
-    randomize_initialization: bool = True
-    """Whether to randomize initialization."""
 
 
 @dataclass
@@ -271,7 +271,6 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
             oracle_system = self.get_oracle_system()
             dt = oracle_system.dt
             urdfs = oracle_system.urdfs
-
             self.true_geom_multibody_system = MultibodyLearnableSystem(
                 init_urdfs=urdfs,
                 dt=dt,
@@ -281,9 +280,10 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
                     'w_diss': self.config.learnable_config.w_diss,
                     'w_pen': self.config.learnable_config.w_pen,
                     'w_bsdf': self.config.learnable_config.w_bsdf},
+                inertia_mode = self.config.learnable_config.inertia_mode,
+                constant_bodies = self.config.learnable_config.constant_bodies,
                 represent_geometry_as = \
-                    self.config.learnable_config.represent_geometry_as,
-                randomize_initialization = False)
+                    self.config.learnable_config.represent_geometry_as)
             
         return self.true_geom_multibody_system
 
@@ -346,7 +346,6 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
                 'w_bsdf': learnable_config.w_bsdf},
             output_urdfs_dir=output_dir,
             represent_geometry_as=learnable_config.represent_geometry_as,
-            randomize_initialization=learnable_config.randomize_initialization,
             pretrained_icnn_weights_filepath = \
                 learnable_config.pretrained_icnn_weights_filepath)
 
@@ -370,11 +369,12 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
         # To save space on W&B storage, only generate comparison videos at first
         # and best epoch, the latter of which is implemented in
         # :meth:`_evaluation`.
-        skip_videos = False if epoch==0 else True
+        force_generate_videos = True if epoch == 0 else False
 
         epoch_vars, learned_system_summary = \
-            self.build_epoch_vars_and_system_summary(statistics, learned_system,
-                                                     skip_videos=skip_videos)
+            self.build_epoch_vars_and_system_summary(
+                statistics, learned_system,
+                force_generate_videos=force_generate_videos)
 
         # Start computing individual loss components.
         # First get a batch sized portion of the shuffled training set.
@@ -386,29 +386,19 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
             shuffle=True)
 
         # Calculate the average loss components.
-        losses_pred, losses_comp, losses_pen, losses_diss, losses_dev = [], [], [], [], []
-        residual_norm, residual_weight, inertia_cond_num = [], [], []
+        losses_pred, losses_comp, losses_pen, losses_diss = [], [], [], []
         for xy_i in train_dataloader:
             x_i: Tensor = xy_i[0]
             y_i: Tensor = xy_i[1]
 
-            loss_pred, loss_comp, loss_pen, loss_diss, loss_dev = \
-                learned_system.calculate_contactnets_loss_terms(**self.get_loss_args(x_i, y_i, learned_system))
-
-            x = x_i[..., -1, :]
-            x_plus = y_i[..., 0, :]
-            u = torch.zeros(x.shape[:-1] + (0,))
-            regularizers = \
-                learned_system.get_regularization_terms(x, u, x_plus)
+            loss_pred, loss_comp, loss_pen, loss_diss = \
+                learned_system.calculate_contactnets_loss_terms(
+                    **self.get_loss_args(x_i, y_i, learned_system))
 
             losses_pred.append(loss_pred.clone().detach())
             losses_comp.append(loss_comp.clone().detach())
             losses_pen.append(loss_pen.clone().detach())
             losses_diss.append(loss_diss.clone().detach())
-            losses_dev.append(loss_dev.clone().detach())
-            residual_norm.append(regularizers[0].clone().detach())
-            residual_weight.append(regularizers[1].clone().detach())
-            inertia_cond_num.append(regularizers[2].clone().detach())
 
         def really_weird_fix_for_cluster_only(list_of_tensors):
             """For some reason, on the cluster only, the last item in the loss
@@ -427,19 +417,12 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
         losses_comp = really_weird_fix_for_cluster_only(losses_comp)
         losses_pen = really_weird_fix_for_cluster_only(losses_pen)
         losses_diss = really_weird_fix_for_cluster_only(losses_diss)
-        losses_dev = really_weird_fix_for_cluster_only(losses_dev)
-        residual_norm = really_weird_fix_for_cluster_only(residual_norm)
-        residual_weight = really_weird_fix_for_cluster_only(residual_weight)
-        inertia_cond_num = really_weird_fix_for_cluster_only(inertia_cond_num)
 
         # Calculate average and scale by hyperparameter weights.
         w_pred = self.learnable_config.w_pred
         w_comp = self.learnable_config.w_comp.value
         w_diss = self.learnable_config.w_diss.value
         w_pen = self.learnable_config.w_pen.value
-        w_res = self.learnable_config.w_res.value
-        w_res_w = self.learnable_config.w_res_w.value
-        w_dev = learned_system.w_dev # TODO: HACK add to config
 
         avg_loss_pred = w_pred*cast(Tensor, sum(losses_pred) \
                             / len(losses_pred)).mean()
@@ -449,29 +432,15 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
                             / len(losses_pen)).mean()
         avg_loss_diss = w_diss*cast(Tensor, sum(losses_diss) \
                             / len(losses_diss)).mean()
-        avg_loss_dev = w_dev*cast(Tensor, sum(losses_dev) \
-                            / len(losses_dev)).mean()
-        avg_residual_norm = w_res*cast(Tensor, sum(residual_norm) \
-                            / len(residual_norm)).mean()
-        avg_residual_weight = w_res*cast(Tensor, sum(residual_weight) \
-                            / len(residual_weight)).mean()
-        avg_inertia_cond_num = 1e-5 * cast(Tensor, sum(inertia_cond_num) \
-                            / len(inertia_cond_num)).mean()
 
         avg_loss_total = torch.sum(avg_loss_pred + avg_loss_comp + \
-                                   avg_loss_pen + avg_loss_diss + \
-                                   avg_residual_norm + avg_residual_weight + \
-                                   avg_inertia_cond_num)
+                                   avg_loss_pen + avg_loss_diss)
 
         loss_breakdown = {'loss_total': avg_loss_total,
                           'loss_pred': avg_loss_pred,
                           'loss_comp': avg_loss_comp,
                           'loss_pen': avg_loss_pen,
-                          'loss_diss': avg_loss_diss,
-                          'loss_dev': avg_loss_dev,
-                          'loss_res_norm': avg_residual_norm,
-                          'loss_res_weight': avg_residual_weight,
-                          'loss_inertia_cond': avg_inertia_cond_num}
+                          'loss_diss': avg_loss_diss}
 
         # Include the loss components into system summary.
         epoch_vars.update(loss_breakdown)
@@ -493,43 +462,8 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
         if self.visualizer_regeneration_is_required():
             new_urdfs = cast(MultibodyLearnableSystem,
                              learned_system).generate_updated_urdfs('vis')
-            return DrakeSystem(new_urdfs, self.get_drake_system().dt,
-                               g_frac=self.config.learnable_config.g_frac)
+            return DrakeSystem(new_urdfs, self.get_drake_system().dt)
         return None
-
-    def prediction_with_regularization_loss(
-        self, x_past: Tensor, x_future: Tensor, system: System,
-        keep_batch: bool = False) -> Tensor:
-        """Returns prediction loss with possibly some regularization terms,
-        e.g., regularization on the size/weights of a residual network, if there
-        is one.
-        """
-        w_res = self.learnable_config.w_res.value
-        w_res_w = self.learnable_config.w_res_w.value
-
-        prediction_loss = self.prediction_loss(x_past, x_future, system,
-                                               keep_batch)
-
-        x = x_past[..., -1, :]
-        u = torch.zeros(x.shape[:-1] + (0,))
-        x_plus = x_future[..., 0, :]
-
-        regularizers = system.get_regularization_terms(x, u, x_plus)
-        if len(regularizers) > 3:
-            assert NotImplementedError(
-                "Don't recognize more than three regularization terms.")
-        elif len(regularizers) == 3:
-            reg_term = (regularizers[0] * w_res) + \
-                       (regularizers[1] * w_res_w) + \
-                       (regularizers[2] * 1e-5)
-        else:
-            reg_term = torch.zeros_like(prediction_loss)
-
-        if not keep_batch:
-            prediction_loss = prediction_loss.mean()
-            reg_term = reg_term.mean()
-
-        return prediction_loss + reg_term
 
     def get_loss_args(self,
         x_past: Tensor,

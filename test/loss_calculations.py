@@ -387,8 +387,8 @@ def get_terms(x_plus: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     v_plus = x_plus[..., NQ:]
 
 	# Begin loss calculation.
-    delassus, M, J, phi, non_contact_acceleration = self.multibody_terms(
-        q_plus, v_plus, u)
+    delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, \
+        _obj_pair_list, _R_FW_list = self.multibody_terms(q_plus, v_plus, u)
 
 
 def create_pll_experiment():
