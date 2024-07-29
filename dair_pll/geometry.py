@@ -38,8 +38,6 @@ from scipy.spatial import ConvexHull
 
 from dair_pll.deep_support_function import HomogeneousICNN, \
     extract_mesh_from_support_function
-from dair_pll.deep_support_function import HomogeneousICNN, \
-    extract_mesh_from_support_function
 from dair_pll.tensor_utils import pbmm, tile_dim, \
     rotation_matrix_from_one_vector
 

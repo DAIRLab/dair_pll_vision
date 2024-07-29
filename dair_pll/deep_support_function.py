@@ -73,20 +73,6 @@ def extract_obj_from_mesh_summary(mesh_summary: MeshSummary) -> str:
     Returns:
         Wavefront .obj string
     """
-    mesh_summary = extract_mesh_from_support_function(support_function)
-    return extract_obj_from_mesh_summary(mesh_summary)
-
-
-def extract_obj_from_mesh_summary(mesh_summary: MeshSummary) -> str:
-    """Given a mesh summary, extracts a Wavefront obj representation.
-
-    Args:
-        mesh_summary: Object vertices and face indices in the form of a
-          ``MeshSummary``.
-
-    Returns:
-        Wavefront .obj string
-    """
     normals = extract_outward_normal_hyperplanes(
         mesh_summary.vertices.unsqueeze(0),
         mesh_summary.faces.unsqueeze(0)
@@ -148,8 +134,6 @@ def extract_outward_normal_hyperplanes(vertices: Tensor, faces: Tensor):
     return outward_normals, backwards, extents
 
 
-def extract_mesh_from_support_function(
-    support_function: Callable[[Tensor], Tensor]) -> MeshSummary:
 def extract_mesh_from_support_function(
     support_function: Callable[[Tensor], Tensor]) -> MeshSummary:
     """Given a support function, extracts a vertex/face mesh.
