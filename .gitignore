@@ -177,6 +177,7 @@ helpers/*.csv
 
 *.npy
 *.pth
+*.code-workspace
 
 .pylintrc
 
