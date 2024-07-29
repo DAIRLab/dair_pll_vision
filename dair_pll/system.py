@@ -20,6 +20,7 @@ import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import Module
+from tensordict.tensordict import TensorDictBase
 
 from dair_pll import state_space
 from dair_pll.integrator import Integrator
@@ -197,3 +198,19 @@ class System(ABC, Module):
         returns no regularizers.
         """
         return []
+
+    def construct_state_tensor(self, data_state: Tensor) -> Tensor:
+        """
+        Args:
+            data_state: Tensor coming from the TrajectorySet Dataloader, this
+              class expects a TensorDict, shape [batch, ?]
+
+        Returns:
+            Full state tensor (adding traj parameters) shape [batch, n_x_full]
+        """
+
+        # TODO: HACK "state" is hard-coded, switch to local arg
+        if isinstance(data_state, TensorDictBase):
+            return data_state["state"]
+
+        return data_state

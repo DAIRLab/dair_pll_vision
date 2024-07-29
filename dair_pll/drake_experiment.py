@@ -465,14 +465,13 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
             return DrakeSystem(new_urdfs, self.get_drake_system().dt)
         return None
 
-    def get_loss_args(self,
-        x_past: Tensor,
-        x_future: Tensor,
-        system: System) -> Dict[str, Any]:
+    def get_loss_args(self, x_past: Tensor, x_future: Tensor, system: System
+                      ) -> Dict[str, Any]:
+        past = system.construct_state_tensor(x_past[..., -1, :])
+        plus = system.construct_state_tensor(x_future[..., 0, :])
+        control = torch.zeros(past.shape[:-1] + (0,))
 
-        return {"x": x_past[..., -1, :],
-            "u": torch.zeros(x_past.shape[:-1] + (0,)),
-            "x_plus": x_future[..., 0, :]}
+        return {"x": past, "u": control, "x_plus": plus}
 
     def contactnets_loss(self,
                          x_past: Tensor,

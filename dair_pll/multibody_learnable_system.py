@@ -231,11 +231,9 @@ class MultibodyLearnableSystem(System):
         q_plus, v_plus = self.space.q_v(x_plus)
         dt = self.dt
 
-        eps = 1e-8 # TODO: HACK, make a hyperparameter
-
         # Begin loss calculation.
         delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, \
-            obj_pair_list, R_FW_list = \
+            _obj_pair_list, _R_FW_list = \
                 self.multibody_terms(q_plus, v_plus, u)
 
         # Construct a reordering matrix s.t. lambda_CN = reorder_mat @ f_sappy.
@@ -255,12 +253,12 @@ class MultibodyLearnableSystem(System):
         sliding_speeds = sliding_velocities.reshape(
             phi.shape[:-1] + (n_contacts, 2)).norm(dim=-1, keepdim=True)
 
-        Q = delassus + eps * torch.eye(3 * n_contacts) # Force PD
+        Q = delassus
+        J_M = pbmm(reorder_mat.transpose(-1, -2),
+                   pbmm(J, torch.linalg.cholesky(torch.inverse((M)))))
 
         dv = (v_plus - (v + non_contact_acceleration * dt)).unsqueeze(-2)
 
-        # Calculate q vectors
-        # Final Units: Energy -> q units velocity
         q_pred = -pbmm(J, dv.transpose(-1, -2))
         q_comp = torch.abs(phi_then_zero).unsqueeze(-1)
         q_diss = dt * torch.cat((sliding_speeds, sliding_velocities), dim=-2)
@@ -284,13 +282,10 @@ class MultibodyLearnableSystem(System):
             impulses = pbmm(
                 reorder_mat,
                 self.solver(
-                    pbmm(reorder_mat.transpose(-1, -2), pbmm(Q, reorder_mat)),
-                    pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1),
+                    J_M,
+                    pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1)
                 ).detach().unsqueeze(-1))
         except:
-            print(f'reordered Q: {pbmm(reorder_mat.transpose(-1,-2),
-                                       pbmm(Q, reorder_mat))}')
-            print(f'reordered q: {pbmm(reorder_mat.transpose(-1, -2), q)}')
             pdb.set_trace()
 
         # Hack: remove elements of ``impulses`` where solver likely failed.
@@ -377,9 +372,8 @@ class MultibodyLearnableSystem(System):
         # pylint: disable=too-many-locals
         dt = self.dt
         phi_eps = 1e6
-        eps = 1e-8 # TODO: HACK make this a hyperparameter
         delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, \
-            obj_pair_list, R_FW_list = \
+            _obj_pair_list, _R_FW_list = \
                 self.multibody_terms(q, v, u)
         n_contacts = phi.shape[-1]
         contact_filter = (broadcast_lorentz(phi) <= phi_eps).unsqueeze(-1)
@@ -388,8 +382,8 @@ class MultibodyLearnableSystem(System):
         reorder_mat = reorder_mat.reshape((1,) * (delassus.dim() - 2) +
                                           reorder_mat.shape).expand(
                                               delassus.shape)
-
-        Q = delassus + eps * torch.eye(3 * n_contacts)
+        J_M = pbmm(reorder_mat.transpose(-1, -2),
+                   pbmm(J, torch.linalg.cholesky(torch.inverse((M)))))
 
         # pylint: disable=E1103
         double_zero_vector = torch.zeros(phi.shape[:-1] + (2 * n_contacts,))
@@ -399,17 +393,12 @@ class MultibodyLearnableSystem(System):
         v_minus = v + dt * non_contact_acceleration
         q_full = pbmm(J, v_minus.unsqueeze(-1)) + (1 / dt) * phi_then_zero
 
-        try:
-            impulse_full = pbmm(
-                reorder_mat,
-                self.solver(
-                    pbmm(reorder_mat.transpose(-1, -2), pbmm(Q, reorder_mat)),
-                    pbmm(reorder_mat.transpose(-1, -2), q_full).squeeze(-1),
-                 ).detach().unsqueeze(-1))
-        except:
-            print(f'Q_delassus: {Q}')
-            print(f'q_full: {q_full}')
-            pdb.set_trace()
+        impulse_full = pbmm(
+            reorder_mat,
+            self.solver(
+                J_M,
+                pbmm(reorder_mat.transpose(-1, -2), q_full).squeeze(-1)
+            ).unsqueeze(-1))
 
         impulse = torch.zeros_like(impulse_full)
         impulse[contact_filter] += impulse_full[contact_filter]
@@ -444,6 +433,8 @@ class MultibodyLearnableSystem(System):
         scalars, meshes = self.multibody_terms.scalars_and_meshes()
         videos = cast(Dict[str, Tuple[np.ndarray, int]], {})
 
+        return SystemSummary(scalars=scalars, videos=videos, meshes=meshes)
+
     def bundlesdf_data_generation_from_cnets(self,
                          x: Tensor,
                          u: Tensor,
@@ -453,10 +444,9 @@ class MultibodyLearnableSystem(System):
         v = self.space.v(x)
         q_plus, v_plus = self.space.q_v(x_plus)
         dt = self.dt
-        eps = 1e-3
 
         delassus, M, J, phi, non_contact_acceleration, p_BiBc_B, \
-            _obj_pair_list, _R_FW_list = self.multibody_terms(q, v, u)
+            _obj_pair_list, _R_FW_list = self.multibody_terms(q_plus, v_plus, u)
 
         n_contacts = phi.shape[-1]
         reorder_mat = tensor_utils.sappy_reorder_mat(n_contacts)
@@ -475,7 +465,6 @@ class MultibodyLearnableSystem(System):
                                                     (n_contacts, 2)).norm(
                                                         dim=-1, keepdim=True)
 
-        Q = delassus + eps * torch.eye(3 * n_contacts)
         J_M = pbmm(reorder_mat.transpose(-1, -2),
                    pbmm(J, torch.linalg.cholesky(torch.inverse((M)))))
 
@@ -503,7 +492,7 @@ class MultibodyLearnableSystem(System):
         impulses = pbmm(
             reorder_mat,
             self.solver(
-                pbmm(reorder_mat.transpose(-1, -2), pbmm(Q, reorder_mat)),
+                J_M,
                 pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1),
             ).detach().unsqueeze(-1))
 

@@ -271,6 +271,7 @@ class SupervisedLearningExperiment(ABC):
         future = prediction[..., 1:, :]
         return future
 
+    # TODO this should somehow factor in control inputs.
     def trajectory_predict(
             self,
             x: List[Tensor],
@@ -529,13 +530,12 @@ class SupervisedLearningExperiment(ABC):
                 valid_set.trajectories[:n_valid_eval],
                 valid_set.indices[:n_valid_eval])
 
-            # TODO: Restart evaluation
-            statistics = {} 
-            """self.evaluate_systems_on_sets(
+            # Perform evaluation.
+            statistics = self.evaluate_systems_on_sets(
                 {LEARNED_SYSTEM_NAME: learned_system}, {
                     TRAIN_SET: train_eval_set,
                     VALID_SET: valid_eval_set
-                })"""
+                })
 
         statistics[f'{TRAIN_SET}_{LEARNED_SYSTEM_NAME}_'
                    f'{LOSS_NAME}_{AVERAGE_TAG}'] = float(train_loss.item())
