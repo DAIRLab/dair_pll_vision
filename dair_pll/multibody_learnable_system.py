@@ -237,7 +237,7 @@ class MultibodyLearnableSystem(System):
 
         # Begin loss calculation.
         delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, \
-            _obj_pair_list, _R_FW_list = \
+            _obj_pair_list, _R_FW_list, _mu_list = \
                 self.multibody_terms(q_plus, v_plus, u)
 
         # Construct a reordering matrix s.t. lambda_CN = reorder_mat @ f_sappy.
@@ -377,7 +377,7 @@ class MultibodyLearnableSystem(System):
         dt = self.dt
         phi_eps = 1e6
         delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, \
-            _obj_pair_list, _R_FW_list = \
+            _obj_pair_list, _R_FW_list, _mu_list = \
                 self.multibody_terms(q, v, u)
         n_contacts = phi.shape[-1]
         contact_filter = (broadcast_lorentz(phi) <= phi_eps).unsqueeze(-1)
@@ -450,7 +450,8 @@ class MultibodyLearnableSystem(System):
         dt = self.dt
 
         delassus, M, J, phi, non_contact_acceleration, p_BiBc_B, \
-            _obj_pair_list, _R_FW_list = self.multibody_terms(q_plus, v_plus, u)
+            _obj_pair_list, _R_FW_list, _mu_list = \
+                self.multibody_terms(q_plus, v_plus, u)
 
         n_contacts = phi.shape[-1]
         reorder_mat = tensor_utils.sappy_reorder_mat(n_contacts)

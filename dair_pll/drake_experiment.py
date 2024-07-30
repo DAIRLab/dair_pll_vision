@@ -65,8 +65,6 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
 @dataclass
 class DrakeMultibodyLearnableExperimentConfig(SupervisedLearningExperimentConfig
                                              ):
-    visualize_learned_geometry: bool = True
-    """Whether to use learned geometry in trajectory overlay visualization."""
     generate_video_predictions_throughout: bool = True
     """Whether to visualize rollout predictions in W&B gifs throughout training.
     """
@@ -295,7 +293,8 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
 
         n_steps = x_pred.shape[0]
 
-        phi, _, _, _, _ = true_geom_system.multibody_terms.contact_terms(x_pred)
+        phi, _, _, _, _, _ = \
+            true_geom_system.multibody_terms.contact_terms(x_pred)
         phi = phi.detach().clone()
         smallest_phis = phi.min(dim=1).values
         return -smallest_phis[smallest_phis < 0].sum() / n_steps

@@ -73,6 +73,7 @@ class CollisionGeometry(ABC, Module):
     """
 
     name: str = ""
+    learnable: bool = False
 
     def __ge__(self, other) -> bool:
         """Evaluate total ordering of two geometries based on their types."""
@@ -170,7 +171,7 @@ class SparseVertexConvexCollisionGeometry(BoundedConvexCollisionGeometry):
     can be easily calculated. See ``Cylinder``, for instance.
     """
 
-    def __init__(self, n_query: int) -> None:
+    def __init__(self, n_query: int, learnable: bool = True) -> None:
         """Inits ``SparseVertexConvexCollisionGeometry`` with prescribed
         query interface.
 
@@ -179,8 +180,10 @@ class SparseVertexConvexCollisionGeometry(BoundedConvexCollisionGeometry):
         """
         super().__init__()
         self.n_query = n_query
+        self.learnable = learnable
 
-    def support_points(self, directions: Tensor, hint: Optional[Tensor] = None) -> Tensor:
+    def support_points(self, directions: Tensor,
+                       hint: Optional[Tensor] = None) -> Tensor:
         """Implements ``BoundedConvexCollisionGeometry.support_points()`` via
         brute force optimization over the witness vertex set.
 
@@ -350,7 +353,8 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         super().__init__(n_query)
         length_scale = (vertices.max(dim=0).values -
                         vertices.min(dim=0).values).norm() / 2
-        self.network = HomogeneousICNN(depth, width, scale=length_scale, learnable=learnable)
+        self.network = HomogeneousICNN(
+            depth, width, scale=length_scale, learnable=learnable)
         self.perturbations = torch.cat((torch.zeros(
             (1, 3)), perturbation * (torch.rand((n_query - 1, 3)) - 0.5)))
 
@@ -437,7 +441,8 @@ class Box(SparseVertexConvexCollisionGeometry):
     length_params: Parameter
     unit_vertices: Tensor
 
-    def __init__(self, half_lengths: Tensor, n_query: int, learnable: bool = True) -> None:
+    def __init__(self, half_lengths: Tensor, n_query: int,
+                 learnable: bool = True) -> None:
         """Inits ``Box`` object with initial size.
 
         Args:
@@ -504,6 +509,7 @@ class Sphere(BoundedConvexCollisionGeometry):
 
         self.length_param = Parameter(radius.clone().view(()),
                                       requires_grad=learnable)
+        self.learnable = learnable
 
     def get_radius(self) -> Tensor:
         """From the stored :py:attr:`length_param`, compute the radius of the
@@ -584,7 +590,8 @@ class PydrakeToCollisionGeometryFactory:
         return geometry
 
     @staticmethod
-    def convert_box(drake_box: DrakeBox, represent_geometry_as: str, learnable: bool = True
+    def convert_box(drake_box: DrakeBox, represent_geometry_as: str,
+                    learnable: bool = True
         ) -> Union[Box, Polygon]:
         """Converts ``pydrake.geometry.Box`` to ``Box`` or ``Polygon``."""
         if represent_geometry_as == 'box':
@@ -598,7 +605,8 @@ class PydrakeToCollisionGeometryFactory:
             f'as {represent_geometry_as} type.')
 
     @staticmethod
-    def convert_sphere(drake_sphere: DrakeSphere, represent_geometry_as: str, learnable: bool = True
+    def convert_sphere(drake_sphere: DrakeSphere, represent_geometry_as: str,
+                       learnable: bool = True
         ) -> Union[Sphere, Polygon]:
         """Converts ``pydrake.geometry.Box`` to ``Box`` or ``Polygon``."""
         if represent_geometry_as == 'box':
