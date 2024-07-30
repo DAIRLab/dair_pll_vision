@@ -64,12 +64,24 @@ LRS = {VISION_CUBE_SYSTEM: CUBE_LR,
        'vision_half': 1e-3,
        'vision_egg': 1e-3,
        'vision_napkin': 1e-3,
-        'vision_bakingbox': 1e-3, 'vision_burger': 1e-3, 'vision_cardboard': 1e-3,
-        'vision_chocolate': 1e-3, 'vision_cream': 1e-3, 'vision_croc': 1e-3,
-        'vision_crushedcan': 1e-3, 'vision_duck': 1e-3, 'vision_gallon': 1e-3,
-        'vision_greencan': 1e-3, 'vision_hotdog': 1e-3, 'vision_icetray': 1e-3,
-        'vision_mug': 1e-3, 'vision_oatly': 1e-3, 'vision_pinkcan': 1e-3,
-        'vision_stapler': 1e-3, 'vision_styrofoam': 1e-3, 'vision_toothpaste': 1e-3,
+       'vision_bakingbox': 1e-3,
+       'vision_burger': 1e-3,
+       'vision_cardboard': 1e-3,
+       'vision_chocolate': 1e-3,
+       'vision_cream': 1e-3,
+       'vision_croc': 1e-3,
+       'vision_crushedcan': 1e-3,
+       'vision_duck': 1e-3,
+       'vision_gallon': 1e-3,
+       'vision_greencan': 1e-3,
+       'vision_hotdog': 1e-3,
+       'vision_icetray': 1e-3,
+       'vision_mug': 1e-3,
+       'vision_oatly': 1e-3,
+       'vision_pinkcan': 1e-3,
+       'vision_stapler': 1e-3,
+       'vision_styrofoam': 1e-3,
+       'vision_toothpaste': 1e-3,
        }
 CUBE_WD = 0.0
 PRISM_WD = 0.0
@@ -83,12 +95,24 @@ WDS = {VISION_CUBE_SYSTEM: CUBE_WD,
        'vision_half': 0.0,
        'vision_egg': 0.0,
        'vision_napkin': 0.0,
-        'vision_bakingbox': 0.0, 'vision_burger': 0.0, 'vision_cardboard': 0.0,
-        'vision_chocolate': 0.0, 'vision_cream': 0.0, 'vision_croc': 0.0,
-        'vision_crushedcan': 0.0, 'vision_duck': 0.0, 'vision_gallon': 0.0,
-        'vision_greencan': 0.0, 'vision_hotdog': 0.0, 'vision_icetray': 0.0,
-        'vision_mug': 0.0, 'vision_oatly': 0.0, 'vision_pinkcan': 0.0,
-        'vision_stapler': 0.0, 'vision_styrofoam': 0.0, 'vision_toothpaste': 0.0,
+       'vision_bakingbox': 0.0,
+       'vision_burger': 0.0,
+       'vision_cardboard': 0.0,
+       'vision_chocolate': 0.0,
+       'vision_cream': 0.0,
+       'vision_croc': 0.0,
+       'vision_crushedcan': 0.0,
+       'vision_duck': 0.0,
+       'vision_gallon': 0.0,
+       'vision_greencan': 0.0,
+       'vision_hotdog': 0.0,
+       'vision_icetray': 0.0,
+       'vision_mug': 0.0,
+       'vision_oatly': 0.0,
+       'vision_pinkcan': 0.0,
+       'vision_stapler': 0.0,
+       'vision_styrofoam': 0.0,
+       'vision_toothpaste': 0.0,
 }
 EPOCHS = 200 #500
 PATIENCE = 100 #EPOCHS
@@ -254,7 +278,7 @@ def main(pll_run_id: str = "",
             pll_id=pll_run_id
         )
     else:
-        urdf_asset = URDFS[VISION_CUBE_SYSTEM][MESH_TYPE] #URDFS[system][MESH_TYPE]
+        urdf_asset = URDFS[VISION_CUBE_SYSTEM][MESH_TYPE] #[system][MESH_TYPE]
         urdf = file_utils.get_asset(urdf_asset)
     urdfs = {system: urdf}
     base_config = DrakeSystemConfig(urdfs=urdfs)
@@ -269,12 +293,15 @@ def main(pll_run_id: str = "",
       urdfs=urdfs, loss=loss,
       pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
       w_pred=w_pred, w_comp=w_comp, w_diss=w_diss, w_pen=w_pen, w_bsdf=w_bsdf,
-      inertia_mode=inertia_mode
+      inertia_mode=inertia_mode, represent_geometry_as='mesh'
     )
 
-    # How to slice trajectories into training datapoints.
+    # How to slice trajectories into training datapoints.  Use the "state" key
+    # for the past and future information to pass.
     slice_config = TrajectorySliceConfig(
-        t_prediction=1 if contactnets else T_PREDICTION)
+        t_prediction=1 if contactnets else T_PREDICTION,
+        his_state_keys=["state"],
+        pred_state_keys=["state"])
 
     # Describes configuration of the data.
     data_config = VisionDataConfig(

@@ -28,7 +28,8 @@ REPO_DIR = os.path.normpath(
 
 
 
-def main(storage_folder_name: str = "", run_name: str = "", regenerate: bool = True):
+def main(storage_folder_name: str = "", run_name: str = "",
+         regenerate: bool = True):
     """Restart a ContactNets experiment run.
 
     Args:

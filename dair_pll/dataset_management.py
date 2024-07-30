@@ -5,10 +5,12 @@ set of trajectories saved to disk for various tasks encountered during an
 experiment."""
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, cast
+import pdb
 
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
+from tensordict.tensordict import TensorDictBase, TensorDict
 
 from dair_pll import file_utils
 from dair_pll.data_config import TrajectorySliceConfig, DataConfig
@@ -113,6 +115,21 @@ class TrajectorySet:
             trajectory_list: List of new ``(T, *)`` state trajectories.
             indices: indices associated with on-disk filenames.
         """
+        # For backwards compatibility, assume any trajectory that is just a
+        # single tensor is a state trajectory.
+        for i, traj in enumerate(trajectory_list):
+            if not isinstance(traj, TensorDictBase):
+                trajectory_list[i] = TensorDict({
+                    "state": traj}, [traj.shape[0]])
+
+        # Move to default device
+        trajectory_list = [
+            traj.to(torch.get_default_device()) for traj in trajectory_list]
+        for trajectory in trajectory_list:
+            # TODO: HACK add time manually
+            trajectory["time"] = torch.arange(
+                trajectory.shape[0], dtype=torch.int32
+                ).reshape(trajectory.shape + (1,))
         self.trajectories.extend(trajectory_list)
         for trajectory in trajectory_list:
             self.slices.add_slices_from_trajectory(trajectory)
@@ -203,8 +220,9 @@ class ExperimentDataManager:
                                                       index_lists):
             trajectories = [
                 torch.load(
-                    file_utils.trajectory_file(self.trajectory_dir,
-                                               trajectory_index))
+                    file_utils.trajectory_file(
+                        self.trajectory_dir, trajectory_index),
+                    weights_only=True)
                 for trajectory_index in trajectory_indices
             ]
             trajectory_set.add_trajectories(trajectories, trajectory_indices)

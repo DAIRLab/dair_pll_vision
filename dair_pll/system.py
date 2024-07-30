@@ -14,7 +14,7 @@ such as a UKF estimator or an RNN.
 """
 from abc import ABC
 from dataclasses import dataclass, field
-from typing import Tuple, Callable, Optional, Dict, List
+from typing import Tuple, Callable, Optional, Dict, List, Union
 
 import numpy as np
 import torch
@@ -199,7 +199,8 @@ class System(ABC, Module):
         """
         return []
 
-    def construct_state_tensor(self, data_state: Tensor) -> Tensor:
+    def construct_state_tensor(
+            self, data_state: Union[Tensor, TensorDictBase]) -> Tensor:
         """
         Args:
             data_state: Tensor coming from the TrajectorySet Dataloader, this
@@ -208,7 +209,6 @@ class System(ABC, Module):
         Returns:
             Full state tensor (adding traj parameters) shape [batch, n_x_full]
         """
-
         # TODO: HACK "state" is hard-coded, switch to local arg
         if isinstance(data_state, TensorDictBase):
             return data_state["state"]

@@ -215,15 +215,17 @@ class HomogeneousICNN(Module):
         for _ in range(depth - 1):
             hidden_weight = 2 * (torch.rand((width, width)) - 0.5)
             hidden_weight *= scale_hidden
-            hidden_weights.append(Parameter(hidden_weight, requires_grad=learnable))
+            hidden_weights.append(
+                Parameter(hidden_weight, requires_grad=learnable))
 
         input_weights = []
         for layer in range(depth):
             input_weight = torch.empty((3, width))
-            torch.nn.init.kaiming_uniform(input_weight)
+            torch.nn.init.kaiming_uniform_(input_weight)
             if layer > 0:
                 input_weight *= 2**(-0.5)
-            input_weights.append(Parameter(input_weight, requires_grad=learnable))
+            input_weights.append(
+                Parameter(input_weight, requires_grad=learnable))
 
         scale_out = scale * 2 * (2.0 / (width * (1 + negative_slope**2)))**0.5
         output_weight = 2 * (torch.rand(width) - 0.5) * scale_out

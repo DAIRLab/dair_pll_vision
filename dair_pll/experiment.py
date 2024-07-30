@@ -21,6 +21,7 @@ import torch
 from torch import Tensor
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
+from tensordict.tensordict import TensorDict, TensorDictBase
 
 from dair_pll import bundlesdf_interface, file_utils
 from dair_pll.dataset_management import ExperimentDataManager, \
@@ -32,7 +33,6 @@ from dair_pll.system import System, SystemSummary
 from dair_pll.wandb_manager import WeightsAndBiasesManager
 
 # Enable default_collate for TensorDict
-from tensordict.tensordict import TensorDict
 def collate_tensordict_fn(batch, *, collate_fn_map: Optional[Any] = None):
     out = None
     if torch.utils.data.get_worker_info() is not None:
@@ -42,7 +42,8 @@ def collate_tensordict_fn(batch, *, collate_fn_map: Optional[Any] = None):
         storage = elem._typed_storage()._new_shared(numel, device=elem.device)
         out = elem.new(storage).resize_(len(batch), *list(elem.size()))
     return torch.stack(batch, 0, out=out)
-torch.utils.data._utils.collate.default_collate_fn_map[TensorDict] = collate_tensordict_fn
+torch.utils.data._utils.collate.default_collate_fn_map[TensorDict] = \
+    collate_tensordict_fn
 
 
 @dataclass
@@ -251,7 +252,10 @@ class SupervisedLearningExperiment(ABC):
         raise TypeError('Unsupported optimizer type:',
                         config.optimizer.__name__)
 
-    def batch_predict(self, x_past: Tensor, system: System) -> Tensor:
+    # TODO this should somehow factor in control inputs.
+    def batch_predict(self,
+                      x_past: Union[Tensor, TensorDictBase],
+                      system: System) -> Tensor:
         """Predict forward in time from initial conditions.
 
         Args:
@@ -265,8 +269,12 @@ class SupervisedLearningExperiment(ABC):
 
         # pylint: disable=E1103
         assert system.carry_callback is not None
-        carries = torch.stack([system.carry_callback() for _ in x_past])
-        prediction, _ = system.simulate(x_past, carries,
+
+        # Get the state in tensor form.
+        x = system.construct_state_tensor(x_past)
+
+        carries = torch.stack([system.carry_callback() for _ in x])
+        prediction, _ = system.simulate(x, carries,
                                         data_config.slice_config.t_prediction)
         future = prediction[..., 1:, :]
         return future
@@ -274,7 +282,7 @@ class SupervisedLearningExperiment(ABC):
     # TODO this should somehow factor in control inputs.
     def trajectory_predict(
             self,
-            x: List[Tensor],
+            x: List[Union[Tensor, TensorDictBase]],
             system: System,
             do_detach: bool = False) -> Tuple[List[Tensor], List[Tensor]]:
         """Predict from full lists of trajectories.
@@ -295,6 +303,9 @@ class SupervisedLearningExperiment(ABC):
             List of ``(*, T - t_skip - 1, space.n_x)`` target trajectories.
 
         """
+        # Get the state in tensor form.
+        x = [system.construct_state_tensor(xi) for xi in x]
+
         t_skip = self.config.data_config.slice_config.t_skip
         t_begin = t_skip + 1
         x_0 = [x_i[..., :t_begin, :] for x_i in x]
@@ -317,9 +328,10 @@ class SupervisedLearningExperiment(ABC):
                 predictions.append(to_append)
         return predictions, targets
 
+    # TODO BIBIT:  check that this still does what we want it to do.
     def prediction_loss(self,
-                        x_past: Tensor,
-                        x_future: Tensor,
+                        x_past: Union[Tensor, TensorDictBase],
+                        x_future: Union[Tensor, TensorDictBase],
                         system: System,
                         keep_batch: bool = False) -> Tensor:
         r"""Default :py:data:`LossCallbackCallable` which evaluates to system's
@@ -339,7 +351,7 @@ class SupervisedLearningExperiment(ABC):
         """
         space = self.space
         x_predicted = self.batch_predict(x_past, system)
-        v_future = space.v(x_future)
+        v_future = space.v(system.construct_state_tensor(x_future))
         v_predicted = space.v(x_predicted)
         avg_const = v_predicted.nelement() // v_predicted.shape[0]
         if not keep_batch:
@@ -373,15 +385,12 @@ class SupervisedLearningExperiment(ABC):
             Scalar average training loss observed during epoch.
         """
         losses = []
-        idx = 0
         for xy_i in data:
             x_i: Tensor = xy_i[0]
             y_i: Tensor = xy_i[1]
 
             if optimizer is not None:
                 optimizer.zero_grad()
-
-            print(f"Index: {idx}")
 
             loss = self.batch_loss(x_i, y_i, system)
             losses.append(loss.clone().detach())
@@ -846,9 +855,10 @@ class SupervisedLearningExperiment(ABC):
             all_y = cast(List[Tensor], slices[1])
 
             # hack: assume 1-step prediction for now
+            # HACK:  Assumes 'state' key.
             # pylint: disable=E1103
-            v_plus = [space.v(y[:1, :]) for y in all_y]
-            v_minus = [space.v(x[-1:, :]) for x in all_x]
+            v_plus = [space.v(y['state'][:1, ...]) for y in all_y]
+            v_minus = [space.v(x['state'][-1:, ...]) for x in all_x]
             dv2 = torch.stack([
                 space.velocity_square_error(vp, vm)
                 for vp, vm in zip(v_plus, v_minus)
@@ -1020,7 +1030,18 @@ class SupervisedLearningExperiment(ABC):
             print("Done generating statistics.")
 
         return learned_system, statistics
-    
+
+    def get_loss_args(self,
+                      x_past: Union[Tensor, TensorDictBase],
+                      x_future: Union[Tensor, TensorDictBase],
+                      system: System
+                      ) -> Dict[str, Any]:
+        past = system.construct_state_tensor(x_past[..., -1, :])
+        plus = system.construct_state_tensor(x_future[..., 0, :])
+        control = torch.zeros(past.shape[:-1] + (0,))
+
+        return {"x": past, "u": control, "x_plus": plus}
+
     def generate_bundlesdf_data(self, learned_system: System) -> None:
         """Usually called after training, this method generates and saves to
         file data that can be processed later for training BundleSDF's object
@@ -1059,16 +1080,12 @@ class SupervisedLearningExperiment(ABC):
 
             # Iterate over all the training data.
             for batch_x, batch_y in slices_loader:
-                x = batch_x[..., -1, :]
-                u = torch.zeros(x.shape[:-1] + (0,))
-                x_plus = batch_y[..., 0, :]
-
                 # The bulk of the computation is done in the like-named method
                 # of the associated learned system for a single batch of data.
                 points_i, directions_i, normal_forces_i, states_i = \
                     learned_system.bundlesdf_data_generation_from_cnets(
-                        x, u, x_plus)
-                
+                        **self.get_loss_args(batch_x, batch_y, learned_system))
+
                 # Store the results in a growing tensor.
                 points = torch.cat((points, points_i), dim=0)
                 directions = torch.cat((directions, directions_i), dim=0)

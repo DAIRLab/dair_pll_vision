@@ -9,6 +9,7 @@ import json
 import os
 import numpy as np
 import random
+import pdb
 import pickle
 import random
 from copy import deepcopy
@@ -291,6 +292,16 @@ def all_studies_dir(storage_name: str) -> str:
         path.join(storage_dir(storage_name), STUDIES_SUBFOLDER_NAME))
 
 
+def get_obj_name_from_urdf_string(urdf_string: str) -> str:
+    """Get the name of the .obj file referenced in a URDF file."""
+    obj_name_starts = urdf_string.split('<mesh filename="')[1:]
+    obj_names = [obj_name_start.split('"')[0] \
+                 for obj_name_start in obj_name_starts]
+    assert len(obj_names) == 2 and obj_names[0] == obj_names[1], \
+        f'Expected two identical .obj files in URDF string, got {obj_names}.'
+    return obj_names[0]
+
+
 def delete(file_name: str) -> None:
     """Removes file at path specified by ``file_name``"""
     if path.exists(file_name):
@@ -331,8 +342,7 @@ def run_dir(storage_name: str, run_name: str, create: bool = True) -> str:
     """Absolute path of run-specific storage folder."""
     if create:
         return assure_created(path.join(all_runs_dir(storage_name), run_name))
-    else:
-        return path.join(all_runs_dir(storage_name, create=False), run_name)
+    return path.join(all_runs_dir(storage_name, create=False), run_name)
 
 
 def get_trajectory_video_filename(storage_name: str, run_name: str) -> str:
@@ -473,7 +483,7 @@ def get_trajectory_assets_from_config(storage_name: str, run_name: str) -> str:
     for file in os.listdir(traj_dir):
         if file.endswith('.pt'):
             toss = int(file.split('.')[0])
-            traj = torch.load(path.join(traj_dir, file))
+            traj = torch.load(path.join(traj_dir, file), weights_only=True)
             toss_trajs[toss] = traj
 
     return toss_trajs

@@ -783,13 +783,17 @@ def generate_training_data_for_run(run_name: str, storage_name: str):
     # Load the exported outputs from the experiment run.
     output_dir = file_utils.geom_for_bsdf_dir(storage_name, run_name)
     normal_forces = torch.load(
-        op.join(output_dir, EXPORT_FORCES_DEFAULT_NAME)).detach()
+        op.join(output_dir, EXPORT_FORCES_DEFAULT_NAME),
+        weights_only=True).detach()
     support_points = torch.load(
-        op.join(output_dir, EXPORT_POINTS_DEFAULT_NAME)).detach()
+        op.join(output_dir, EXPORT_POINTS_DEFAULT_NAME),
+        weights_only=True).detach()
     support_directions = torch.load(
-        op.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME)).detach()
+        op.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME),
+        weights_only=True).detach()
     toss_frames = torch.load(
-        op.join(output_dir, EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME)).detach()
+        op.join(output_dir, EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME),
+        weights_only=True).detach()
 
     # Sample points on the support point mesh surface.
     mesh = create_mesh_from_set_of_points(support_points)
@@ -1406,7 +1410,7 @@ def localize_toss_and_frame_from_states(storage_name: str, run_name: str
 
     # Otherwise, generate it.
     states = torch.load(
-        op.join(output_dir, EXPORT_STATES_DEFAULT_NAME)).detach()
+        op.join(output_dir, EXPORT_STATES_DEFAULT_NAME), weights_only=True).detach()
 
     # Get the trajectories.
     toss_trajs = file_utils.get_trajectory_assets_from_config(

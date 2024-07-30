@@ -149,16 +149,20 @@ class MultibodyLearnableSystem(System):
             old_urdf_filename = path.basename(old_urdfs[urdf_name])
 
             if suffix is not None:
-                # Rename test.obj to test_{suffix}.obj.
-                obj_file = os.path.join(self.output_urdfs_dir, 'test.obj')
+                # Rename {base}.obj to {base}_{suffix}.obj.
+                obj_filename = file_utils.get_obj_name_from_urdf_string(
+                    new_urdf_string)
+                obj_base = obj_filename.split('.')[0]
+
+                obj_file = os.path.join(self.output_urdfs_dir, obj_filename)
                 new_obj_file = os.path.join(
-                    self.output_urdfs_dir, f'test_{suffix}.obj')
+                    self.output_urdfs_dir, f'{obj_base}_{suffix}.obj')
                 os.rename(obj_file, new_obj_file)
                 
                 # Replace references in the urdf to the new filename.
                 new_urdf_string = new_urdf_string.replace(
-                    'test.obj', f'test_{suffix}.obj')
-                
+                    f'{obj_base}.obj', f'{obj_base}_{suffix}.obj')
+
             new_urdf_path = path.join(self.output_urdfs_dir, old_urdf_filename)
             file_utils.save_string(new_urdf_path, new_urdf_string)
             new_urdfs[urdf_name] = new_urdf_path

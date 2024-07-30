@@ -3,13 +3,13 @@ import time
 from abc import ABC
 from dataclasses import field, dataclass
 from enum import Enum
-from typing import Any, List, Optional, cast, Dict, Callable
+from typing import Any, List, Optional, cast, Dict, Callable, Union
 import pdb
 
 import torch
 from torch import Tensor
-from tensordict.tensordict import TensorDict, LazyStackedTensorDict
 from torch.utils.data import DataLoader
+from tensordict.tensordict import TensorDictBase
 
 from dair_pll import file_utils
 from dair_pll import vis_utils
@@ -20,10 +20,8 @@ from dair_pll.experiment import SupervisedLearningExperiment, \
     TRAJECTORY_PENETRATION_NAME, LOGGING_DURATION
 from dair_pll.experiment_config import SystemConfig, \
     SupervisedLearningExperimentConfig
-from dair_pll.hyperparameter import Float
 from dair_pll.multibody_terms import InertiaLearn
-from dair_pll.multibody_learnable_system import \
-    MultibodyLearnableSystem, MultibodyLearnableSystemWithTrajectory
+from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 from dair_pll.system import System, SystemSummary
 
 @dataclass
@@ -48,7 +46,7 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """If provided, filepath to pretrained ICNN weights."""
     inertia_mode: InertiaLearn = field(default_factory=InertiaLearn)
     """What inertial parameters to learn."""
-    constant_bodies: List[str] = []
+    constant_bodies: List[str] = field(default_factory=list)
     """List of body names whose properties should NOT be learned."""
     w_pred: float = 1.0
     """Weight of prediction term in ContactNets loss (suggested keep at 1.0)."""
@@ -297,7 +295,7 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
 
         n_steps = x_pred.shape[0]
 
-        phi, _ = true_geom_system.multibody_terms.contact_terms(x_pred)
+        phi, _, _, _, _ = true_geom_system.multibody_terms.contact_terms(x_pred)
         phi = phi.detach().clone()
         smallest_phis = phi.min(dim=1).values
         return -smallest_phis[smallest_phis < 0].sum() / n_steps
@@ -465,17 +463,9 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
             return DrakeSystem(new_urdfs, self.get_drake_system().dt)
         return None
 
-    def get_loss_args(self, x_past: Tensor, x_future: Tensor, system: System
-                      ) -> Dict[str, Any]:
-        past = system.construct_state_tensor(x_past[..., -1, :])
-        plus = system.construct_state_tensor(x_future[..., 0, :])
-        control = torch.zeros(past.shape[:-1] + (0,))
-
-        return {"x": past, "u": control, "x_plus": plus}
-
     def contactnets_loss(self,
-                         x_past: Tensor,
-                         x_future: Tensor,
+                         x_past: Union[Tensor, TensorDictBase],
+                         x_future: Union[Tensor, TensorDictBase],
                          system: System,
                          keep_batch: bool = False) -> Tensor:
         r""" :py:data:`~dair_pll.experiment.LossCallbackCallable`

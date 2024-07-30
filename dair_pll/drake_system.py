@@ -37,7 +37,7 @@ class DrakeSystem(System):
     def __init__(self,
                  urdfs: Dict[str, str],
                  dt: float,
-                 visualization_file: Optional[str] = "meshcat",
+                 visualization_file: Optional[str] = None,
                  additional_system_builders: List[
                      Callable[[DiagramBuilder, MultibodyPlant], None]] = []
                 ) -> None:
@@ -48,8 +48,8 @@ class DrakeSystem(System):
             dt: Time step of plant in seconds.
             visualization_file: Optional output GIF filename for trajectory
               visualization.
-            additional_system_builders: Optional functions that add additional Drake
-              Systems to the plant diagram.
+            additional_system_builders: Optional functions that add additional
+              Drake systems to the plant diagram.
         """
         plant_diagram = MultibodyPlantDiagram(urdfs, dt, visualization_file,
                                               additional_system_builders)

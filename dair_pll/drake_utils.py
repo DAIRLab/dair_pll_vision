@@ -376,7 +376,9 @@ class MultibodyPlantDiagram:
 
         # Gravcomp
         # TODO: this is a HACK, find principled way of doing gravcomp
-        plant.set_gravity_enabled(plant.GetModelInstanceByName("robot"), False)
+        if 'robot' in urdfs.keys():
+            plant.set_gravity_enabled(
+                plant.GetModelInstanceByName("robot"), False)
 
         # Finalize multibody plant.
         plant.Finalize()
@@ -389,12 +391,12 @@ class MultibodyPlantDiagram:
         diagram = builder.Build()
         diagram.CreateDefaultContext()
 
-        # Uncomment the below lines to generate diagram graph.
-        diagram.set_name("graphviz example")
-        plt.figure(figsize=(11,8.5), dpi=300)
-        plot_system_graphviz(diagram)
-        from pathlib import Path
-        plt.savefig(str(Path.home() / "Desktop" / "graphviz_example.png"))
+        # # Uncomment the below lines to generate diagram graph.
+        # diagram.set_name("graphviz example")
+        # plt.figure(figsize=(11,8.5), dpi=300)
+        # plot_system_graphviz(diagram)
+        # from pathlib import Path
+        # plt.savefig(str(Path.home() / "Desktop" / "graphviz_example.png"))
 
 
         # Initialize simulator from diagram.

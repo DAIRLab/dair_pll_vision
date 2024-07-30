@@ -217,7 +217,7 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
             self.config.storage, self.config.run_name)
         try:
             # if a checkpoint is saved from disk, attempt to load it.
-            checkpoint_dict = torch.load(checkpoint_filename)
+            checkpoint_dict = torch.load(checkpoint_filename, weights_only=True)
             training_state = TrainingState(**checkpoint_dict)
             print("Resumed from disk.")
             is_resumed = True
@@ -280,7 +280,7 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         random_indices = torch.randperm(n_points)[:n_random_points]
         dirs = bsdf_dirs[random_indices]
         pts = bsdf_pts[random_indices]
-        scalars = bsdf_ds[random_indices]
+        # scalars = bsdf_ds[random_indices]
 
         # # Compute the loss as absolute value difference on the scalar outputs.
         # loss = (scalars - deep_support_network.get_output(dirs)).abs()
@@ -332,8 +332,9 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         losses_pred, losses_comp, losses_pen, losses_diss = [], [], [], []
         losses_bsdf = []
         for xy_i in train_dataloader:
-            x_i: Tensor = xy_i[0]
-            y_i: Tensor = xy_i[1]
+            # HACK:  Assumes 'state' key.
+            x_i: Tensor = xy_i[0]['state']
+            y_i: Tensor = xy_i[1]['state']
 
             x = x_i[..., -1, :]
             x_plus = y_i[..., 0, :]

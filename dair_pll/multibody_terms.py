@@ -173,7 +173,7 @@ class LagrangianTerms(Module):
 
         # pylint: disable=E1103
         self.body_parameters = ParameterList()
-        inertial_parameters = []
+        
         for body_param_tensor, body in zip(body_param_tensors, bodies):
             learn_body = (body.name() not in constant_bodies)
             body_parameter = [
@@ -185,16 +185,14 @@ class LagrangianTerms(Module):
                           requires_grad=(learn_body and inertia_mode.inertia)),
             ]
             self.body_parameters.extend(body_parameter)
-            inertial_parameters.append(torch.hstack(body_parameter))
-
-        self.inertial_parameters = torch.stack(inertial_parameters)
 
     # noinspection PyUnresolvedReferences
     @staticmethod
     def extract_body_parameters_and_variables(
             plant: MultibodyPlant_[Expression],
             model_ids: List[ModelInstanceIndex],
-            context: Context) -> Tuple[List[Tensor], np.ndarray, List[DrakeBody]]:
+            context: Context
+    ) -> Tuple[List[Tensor], np.ndarray, List[DrakeBody]]:
         """Generates parameterization and symbolic variables for all bodies.
 
         For a multibody plant, finds all bodies that should have inertial
@@ -241,9 +239,16 @@ class LagrangianTerms(Module):
 
     def pi_cm(self) -> Tensor:
         """Returns inertial parameters in human-understandable ``pi_cm``
-        -format"""
+        -format."""
+        inertial_parameters = []
+        for idx in range(len(self.body_parameters)//3):
+            inertial_parameters.append(torch.hstack(
+                (self.body_parameters[3*idx],
+                 self.body_parameters[3*idx+1],
+                 self.body_parameters[3*idx+2])))
+
         return InertialParameterConverter.theta_to_pi_cm(
-            self.inertial_parameters)
+            torch.stack(inertial_parameters))
 
     def forward(self, q: Tensor, v: Tensor, u: Tensor) -> Tuple[Tensor, Tensor]:
         """Evaluates Lagrangian dynamics terms at given state and input.
@@ -265,7 +270,6 @@ class LagrangianTerms(Module):
             InertialParameterConverter.pi_cm_to_drake_spatial_inertia_vector(
             self.pi_cm())
         inertia = inertia.expand(q.shape[:-1] + inertia.shape)
-
         M = self.mass_matrix(q, inertia)
         non_contact_acceleration = torch.linalg.solve(
             M, self.lagrangian_forces(q, v, u, inertia))
@@ -482,7 +486,8 @@ class ContactTerms(Module):
             .reshape(friction_jacobian_shape)
         return torch.cat((J_n, J_t), dim=-2)
 
-    def forward(self, q: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+    def forward(self, q: Tensor
+                ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         """Evaluates Lagrangian dynamics terms at given state and input.
 
         Uses :py:class:`GeometryCollider` and kinematics to construct signed
