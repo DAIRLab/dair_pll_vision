@@ -61,7 +61,7 @@ def main(storage_folder_name: str = "", run_name: str = "",
     # Save the final urdf.
     print(f'\nSaving the final learned URDF.')
     learned_system = cast(MultibodyLearnableSystem, learned_system)
-    learned_system.generate_updated_urdfs('best')
+    learned_system.generate_updated_urdfs(suffix='best')
     print(f'Done!')
 
 

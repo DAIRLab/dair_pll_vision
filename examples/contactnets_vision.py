@@ -355,7 +355,7 @@ def main(pll_run_id: str = "",
     # Save the final urdf.
     print(f'\nSaving the final learned URDF...', end=' ')
     learned_system = cast(MultibodyLearnableSystem, learned_system)
-    learned_system.generate_updated_urdfs()
+    learned_system.generate_updated_urdfs(suffix='best')
     print(f'Done!')
 
     # Export BundleSDF training data.
