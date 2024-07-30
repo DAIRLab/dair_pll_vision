@@ -77,11 +77,11 @@ class VisionDataConfig(DataConfig):
         assert len(dirs) == 2, f'Expected system/dataset, got ' \
             f'{self.asset_subdirectories}'
         assert dirs[0] in VISION_SYSTEMS, f'Invalid system {dirs[0]}'
-        assert dirs[0].split('_')[1] == dirs[1].split('_')[0], \
+        assert '_'.join(dirs[0].split('_')[1:]) == '_'.join(dirs[1].split('_')[:-1]), \
             f'Invalid/inconsistent system {dirs[0]} or dataset {dirs[1]}.'
 
         # Set the dataset size based on the number of tosses.
-        tosses = dirs[1].split('_')[1]
+        tosses = dirs[1].split('_')[-1]
         if bool(re.match(r'^\d+$', tosses)):
             first_toss, last_toss = int(tosses), int(tosses)
         elif bool(re.match(r'^\d+-\d+$', tosses)):

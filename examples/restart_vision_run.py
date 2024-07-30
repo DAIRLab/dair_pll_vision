@@ -30,7 +30,7 @@ def get_storage_names(system: str, start_toss: int, end_toss: int,
         storage_name: Name of the storage folder, e.g.
             'vision_cube/cube_2/bundlesdf_iteration_1'.
     """
-    asset_name = system.split('_')[1] + f'_{start_toss}'
+    asset_name = '_'.join(system.split('_')[1:]) + f'_{start_toss}'
     asset_name += f'-{end_toss}' if start_toss != end_toss else ''
     tracker = 'tagslam' if cycle_iteration == 0 else \
         f'bundlesdf_iteration_{cycle_iteration}'
@@ -97,12 +97,13 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int):
     # First decode the system and start/end tosses from the provided asset
     # directory.
     assert '_' in vision_asset, f'Invalid asset directory: {vision_asset}.'
-    system = f"vision_{vision_asset.split('_')[0]}"
+    system = f"vision_{'_'.join(vision_asset.split('_')[:-1])}"
     assert system in VISION_SYSTEMS, f'Invalid system in {vision_asset=}.'
 
-    start_toss = int(vision_asset.split('_')[-1].split('-')[0])
-    end_toss = start_toss if '-' not in vision_asset else \
-        int(vision_asset.split('-')[1])
+    toss_key = vision_asset.split('_')[-1]
+    start_toss = int(toss_key.split('-')[0])
+    end_toss = start_toss if '-' not in toss_key else \
+        int(toss_key.split('-')[1])
     assert start_toss <= end_toss, f'Invalid toss range: {start_toss} ' + \
         f'-{end_toss} inferred from {vision_asset=}.'
     
