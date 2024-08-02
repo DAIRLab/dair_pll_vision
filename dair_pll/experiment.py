@@ -1036,8 +1036,37 @@ class SupervisedLearningExperiment(ABC):
                       x_future: Union[Tensor, TensorDictBase],
                       system: System
                       ) -> Dict[str, Any]:
-        past = system.construct_state_tensor(x_past[..., -1, :])
-        plus = system.construct_state_tensor(x_future[..., 0, :])
+        """Extract the loss arguments from an input of past and future
+        information.
+
+        NOTE:  This implementation hardcodes zero control inputs (n_u = 0).
+
+        Args:
+            x_past:  either a Tensor of shape (*, t_history, n_x) or a
+              TensorDict of shape (*, t_history).
+            x_future:  either a Tensor of shape (*, t_prediction, n_x) or a
+              TensorDict of shape (*, t_prediction).
+            system:  a System instance.
+
+        Returns:
+            A dictionary with keys 'x', 'u', and 'x_plus', containing Tensors of
+              shape (*, n_x), (*, n_u), (*, n_x) respectively.
+        """
+        # If the input is a Tensor, preserve the last index containing the state
+        # information.
+        if isinstance(x_past, Tensor):
+            assert x_past.shape[-1] == system.space.n_x
+            past = system.construct_state_tensor(x_past[..., -1, :])
+            plus = system.construct_state_tensor(x_future[..., 0, :])
+
+        elif isinstance(x_past, TensorDictBase):
+            assert x_past.ndim == 2
+            past = system.construct_state_tensor(x_past[..., -1])
+            plus = system.construct_state_tensor(x_future[..., 0])
+
+        else:
+            raise RuntimeError("Invalid input type for x_past.")
+
         control = torch.zeros(past.shape[:-1] + (0,))
 
         return {"x": past, "u": control, "x_plus": plus}
