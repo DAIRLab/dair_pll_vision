@@ -2,14 +2,19 @@ from abc import ABC
 from dataclasses import dataclass
 from typing import Tuple, Type, Optional, cast
 
+import pdb
+
 import torch
 from torch import Tensor
 from torch.nn import Module
 
 from dair_pll.deep_learnable_model import DeepLearnableModel, DeepRecurrentModel
 from dair_pll.experiment import SupervisedLearningExperiment
-from dair_pll.experiment_config import SystemConfig
-from dair_pll.integrator import Integrator, VelocityIntegrator
+from dair_pll.experiment_config import SystemConfig, \
+    SupervisedLearningExperimentConfig
+from dair_pll.integrator import Integrator, VelocityIntegrator, \
+    PartialStepCallback
+from dair_pll.state_space import StateSpace
 from dair_pll.system import System
 
 
@@ -20,6 +25,7 @@ class DeepLearnableSystemConfig(SystemConfig):
     nonlinearity: Module = torch.nn.ReLU
     hidden_size: int = 128
     model_constructor: Type[DeepLearnableModel] = DeepRecurrentModel
+    represent_geometry_as: str = 'polygon'
 
 
 class DeepLearnableSystem(System):
@@ -31,12 +37,11 @@ class DeepLearnableSystem(System):
                  training_data: Optional[Tensor] = None) -> None:
         space = base_system.space
         output_size = config.integrator_type.calc_out_size(space)
-        # pdb.set_trace()
+
         model = config.model_constructor(space.n_x, config.hidden_size,
                                          output_size, config.layers,
                                          config.nonlinearity)
         if not (training_data is None):
-            # pdb.set_trace()
             model.set_normalization(training_data)
 
         integrator = config.integrator_type(space, model,
@@ -63,5 +68,6 @@ class DeepLearnableExperiment(SupervisedLearningExperiment, ABC):
     def get_learned_system(self, train_states: Tensor) -> System:
         deep_learnable_config = cast(DeepLearnableSystemConfig,
                                      self.config.learnable_config)
+
         return DeepLearnableSystem(self.get_base_system(),
                                    deep_learnable_config, train_states)

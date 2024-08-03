@@ -31,10 +31,13 @@ object manages the symbolic calculation and has corresponding
 :py:class:`LagrangianTerms` and :py:class:`ContactTerms` members.
 """
 from typing import List, Tuple, Callable, Dict, cast, Optional
+from dataclasses import dataclass
 
 import drake_pytorch  # type: ignore
 import numpy as np
 import torch
+import pdb
+
 from pydrake.geometry import SceneGraphInspector, GeometryId  # type: ignore
 from pydrake.multibody.plant import MultibodyPlant_  # type: ignore
 from pydrake.multibody.tree import JacobianWrtVariable  # type: ignore
@@ -44,17 +47,20 @@ from pydrake.multibody.tree import SpatialInertia_, UnitInertia_, \
 from pydrake.symbolic import Expression, Variable  # type: ignore
 from pydrake.symbolic import MakeVectorVariable, Jacobian  # type: ignore
 from pydrake.systems.framework import Context  # type: ignore
+from scipy.spatial.transform import Rotation
 from torch import Tensor
-from torch.nn import Module, ModuleList, Parameter
+from torch.nn import Module, ModuleList, Parameter, ParameterList
 
 from dair_pll import drake_utils
+from dair_pll.drake_utils import DrakeBody
 from dair_pll.deep_support_function import extract_mesh_from_support_function, \
     get_mesh_summary_from_polygon
 from dair_pll.drake_state_converter import DrakeStateConverter
 from dair_pll.drake_utils import MultibodyPlantDiagram
 from dair_pll.geometry import GeometryCollider, \
     PydrakeToCollisionGeometryFactory, \
-    CollisionGeometry, DeepSupportConvex, Polygon
+    CollisionGeometry, DeepSupportConvex, Polygon, Box, \
+    Plane, _NOMINAL_HALF_LENGTH
 from dair_pll.inertia import InertialParameterConverter
 from dair_pll.system import MeshSummary
 from dair_pll.tensor_utils import (pbmm, deal, spatial_to_point_jacobian)
@@ -65,6 +71,14 @@ StateInputInertialCallback = Callable[[Tensor, Tensor, Tensor, Tensor], Tensor]
 CENTER_OF_MASS_DOF = 3
 INERTIA_TENSOR_DOF = 6
 DEFAULT_SIMPLIFIER = drake_pytorch.Simplifier.QUICKTRIG
+
+
+@dataclass
+class InertiaLearn:
+    """Class to specify which inertial parameters to learn"""
+    mass: bool = False
+    com: bool = False
+    inertia: bool = False
 
 
 # noinspection PyUnresolvedReferences
@@ -110,17 +124,18 @@ class LagrangianTerms(Module):
     """
     mass_matrix: Optional[ConfigurationInertialCallback]
     lagrangian_forces: Optional[StateInputInertialCallback]
-    inertial_parameters: Parameter
+    body_parameters: ParameterList
+    inertial_parameters: Tensor
 
     def __init__(self, plant_diagram: MultibodyPlantDiagram,
-                 learn_inertia: str = 'all') -> None:
+                 inertia_mode: InertiaLearn = InertiaLearn(),
+                 constant_bodies: List[str] = []) -> None:
         """Inits :py:class:`LagrangianTerms` with prescribed parameters and
         functional forms.
 
         Args:
             plant_diagram: Drake MultibodyPlant diagram to extract terms from.
-            learn_inertia: Which inertia parameters to learn in the system
-                (all or none).  Note that 'all' excludes mass.
+            inertia_mode: which inertial parameters to learn.
         """
         super().__init__()
 
@@ -128,7 +143,7 @@ class LagrangianTerms(Module):
             plant_diagram)
         gamma = Jacobian(plant.GetVelocities(context), v)
 
-        body_parameters, body_variables = \
+        body_param_tensors, body_variables, bodies = \
             LagrangianTerms.extract_body_parameters_and_variables(
                 plant, plant_diagram.model_ids, context)
 
@@ -157,57 +172,27 @@ class LagrangianTerms(Module):
             simplify_computation=DEFAULT_SIMPLIFIER)
 
         # pylint: disable=E1103
-        self.inertial_parameters = Parameter(body_parameters,
-                                             requires_grad=True)
-
-        # Store the original inertial parameters to later implement learning
-        # portions of the inertial parameters.
-        self.original_pi_cm_parameters = \
-            InertialParameterConverter.theta_to_pi_cm(
-                self.inertial_parameters.detach().clone())
-        self.learn_inertia = learn_inertia
-
-    def get_inertial_parameters(self):
-        """Always access the inertial parameters through this method instead of
-        the class variable self.inertial_parameters.  This allows us to create
-        different inertial learning modes that can allow for overwriting some of
-        the inertial parameters while still maintaining the regressible theta
-        parameters.
-
-        Reminder:  pi_cm format is:
-            [m, m*p_x, m*p_y, m*p_z, I_xx, I_yy, I_zz, I_xy, I_xz, I_yz]
-        """
-        curr_pi_cm = InertialParameterConverter.theta_to_pi_cm(
-            self.inertial_parameters)
-
-        # Since the overall mass is unobservable, the only learnable parameters
-        # here should be the relative distribution of mass among all links.
-        original_mass = self.original_pi_cm_parameters[:, 0].sum()
-        curr_m_total = curr_pi_cm[:, 0].sum()
-        curr_pi_cm[:, 0] *= original_mass/curr_m_total
-
-        # Overwrite any other variables.
-        if self.learn_inertia == 'all':
-            # Nothing to do here.
-            pass
-
-        elif self.learn_inertia == 'none':
-            # Overwrite all the inertia parameters.
-            curr_pi_cm[:, 1:] = self.original_pi_cm_parameters[:, 1:]
-
-        else:
-            raise NotImplementedError(
-                f'Inertia learning mode {self.learn_inertia} not implemented.')
-
-        # Return the parameters in theta format.
-        return InertialParameterConverter.pi_cm_to_theta(curr_pi_cm)
+        self.body_parameters = ParameterList()
+        
+        for body_param_tensor, body in zip(body_param_tensors, bodies):
+            learn_body = (body.name() not in constant_bodies)
+            body_parameter = [
+                Parameter(body_param_tensor[0],
+                          requires_grad=(learn_body and inertia_mode.mass)),
+                Parameter(body_param_tensor[1:4],
+                          requires_grad=(learn_body and inertia_mode.com)),
+                Parameter(body_param_tensor[4:],
+                          requires_grad=(learn_body and inertia_mode.inertia)),
+            ]
+            self.body_parameters.extend(body_parameter)
 
     # noinspection PyUnresolvedReferences
     @staticmethod
     def extract_body_parameters_and_variables(
             plant: MultibodyPlant_[Expression],
             model_ids: List[ModelInstanceIndex],
-            context: Context) -> Tuple[Tensor, np.ndarray]:
+            context: Context
+    ) -> Tuple[List[Tensor], np.ndarray, List[DrakeBody]]:
         """Generates parameterization and symbolic variables for all bodies.
 
         For a multibody plant, finds all bodies that should have inertial
@@ -250,13 +235,20 @@ class LagrangianTerms(Module):
             body.SetSpatialInertiaInBodyFrame(context, body_spatial_inertia)
             body_variable_list.append(np.hstack((mass, p_BoBcm_B, I_BBcm_B)))
         # pylint: disable=E1103
-        return torch.stack(body_parameter_list), np.vstack(body_variable_list)
+        return body_parameter_list, np.vstack(body_variable_list), all_bodies
 
     def pi_cm(self) -> Tensor:
-        """Returns inertial parameters in human-understandable ``pi_cm``-
-        format"""
+        """Returns inertial parameters in human-understandable ``pi_cm``
+        -format."""
+        inertial_parameters = []
+        for idx in range(len(self.body_parameters)//3):
+            inertial_parameters.append(torch.hstack(
+                (self.body_parameters[3*idx],
+                 self.body_parameters[3*idx+1],
+                 self.body_parameters[3*idx+2])))
+
         return InertialParameterConverter.theta_to_pi_cm(
-            self.get_inertial_parameters())
+            torch.stack(inertial_parameters))
 
     def forward(self, q: Tensor, v: Tensor, u: Tensor) -> Tuple[Tensor, Tensor]:
         """Evaluates Lagrangian dynamics terms at given state and input.
@@ -274,10 +266,10 @@ class LagrangianTerms(Module):
         # pylint: disable=not-callable
         assert self.mass_matrix is not None
         assert self.lagrangian_forces is not None
-        inertia = InertialParameterConverter.pi_cm_to_drake_spatial_inertia(
+        inertia = \
+            InertialParameterConverter.pi_cm_to_drake_spatial_inertia_vector(
             self.pi_cm())
         inertia = inertia.expand(q.shape[:-1] + inertia.shape)
-
         M = self.mass_matrix(q, inertia)
         non_contact_acceleration = torch.linalg.solve(
             M, self.lagrangian_forces(q, v, u, inertia))
@@ -302,17 +294,19 @@ class ContactTerms(Module):
 
     Derives batched pytorch callback functions for collision geometry
     position and velocity kinematics from a
-    :class:`~dair_pll.drake_utils.MultibodyPlantDiagram`."""
+    :class:`~dair_pll.drake_utils.MultibodyPlantDiagram`.
+    """
     geometry_rotations: Optional[ConfigurationCallback]
     geometry_translations: Optional[ConfigurationCallback]
     geometry_spatial_jacobians: Optional[ConfigurationCallback]
     geometries: ModuleList
-    geometry_local_poses: Parameter
-    friction_params: Parameter
+    friction_param_list: ParameterList
+    friction_params: Tensor
     collision_candidates: Tensor
 
     def __init__(self, plant_diagram: MultibodyPlantDiagram,
-                 force_mesh_to_be_polygon: bool = False) -> None:
+                 represent_geometry_as: str = 'box',
+                 constant_bodies: List[str] = []) -> None:
         """Inits :py:class:`ContactTerms` with prescribed kinematics and
         geometries.
 
@@ -321,6 +315,9 @@ class ContactTerms(Module):
 
         Args:
             plant_diagram: Drake MultibodyPlant diagram to extract terms from.
+            represent_geometry_as: How to represent the geometry of any
+              learnable bodies (box/mesh/polygon).  By default, any ``Plane``
+              objects are not considered learnable -- only boxes or meshes.
         """
         # pylint: disable=too-many-locals
         super().__init__()
@@ -331,13 +328,23 @@ class ContactTerms(Module):
         collision_geometry_set = plant_diagram.collision_geometry_set
         geometry_ids = collision_geometry_set.ids
         coulomb_frictions = collision_geometry_set.frictions
-        collision_candidates = collision_geometry_set.collision_candidates
 
         # sweep over collision elements
         geometries, rotations, translations, drake_spatial_jacobians = \
             ContactTerms.extract_geometries_and_kinematics(
-                plant, inspector, geometry_ids, context,
-                force_mesh_to_be_polygon=force_mesh_to_be_polygon)
+                plant, inspector, geometry_ids, context, represent_geometry_as,
+                constant_bodies=constant_bodies)
+
+        collision_candidates = []
+        # If training, only consider collisions between at least one learnable
+        # object.
+        if self.training:
+            for candidate in collision_geometry_set.collision_candidates:
+                if geometries[candidate[0]].learnable or \
+                    geometries[candidate[1]].learnable:
+                    collision_candidates.append(candidate)
+        else:
+            collision_candidates = collision_geometry_set.collision_candidates
 
         for geometry_index, geometry_pair in enumerate(collision_candidates):
             if geometries[geometry_pair[0]] > geometries[geometry_pair[1]]:
@@ -359,24 +366,32 @@ class ContactTerms(Module):
 
         self.geometries = ModuleList(geometries)
 
-        mu_static = Tensor(
-            [friction.static_friction() for friction in coulomb_frictions])
+        self.friction_param_list = ParameterList()
+        for idx, friction in enumerate(coulomb_frictions):
+            body = drake_utils.get_body_from_geometry_id(
+                plant, inspector, geometry_ids[idx])
+            learnable = (body.name() not in constant_bodies) and \
+                (body != plant.world_body())
+            self.friction_param_list.append(Parameter(
+                torch.tensor([friction.static_friction()]),
+                requires_grad=learnable)
+            )
 
-        self.friction_params = Parameter(mu_static, requires_grad=True)
-
-        self.collision_candidates = Tensor(collision_candidates).t().long()
+        self.collision_candidates = torch.tensor(
+            collision_candidates).t().long()
 
     def get_friction_coefficients(self) -> Tensor:
-        """From the stored :py:attr:`friction_params`, compute the friction
+        """From the stored :py:attr:`friction_param_list`, compute the friction
         coefficient as its absolute value."""
-        return torch.abs(self.friction_params)
+        return torch.abs(torch.hstack([
+            param for param in self.friction_param_list]))
 
     # noinspection PyUnresolvedReferences
     @staticmethod
     def extract_geometries_and_kinematics(
         plant: MultibodyPlant_[Expression], inspector: SceneGraphInspector,
         geometry_ids: List[GeometryId], context: Context,
-        force_mesh_to_be_polygon: bool = False
+        represent_geometry_as: str, constant_bodies: List[str] = []
     ) -> Tuple[List[CollisionGeometry], List[np.ndarray], List[np.ndarray],
                List[np.ndarray]]:
         """Extracts modules and kinematics of list of geometries G.
@@ -386,14 +401,15 @@ class ContactTerms(Module):
             inspector: Scene graph inspector associated with plant.
             geometry_ids: List of geometries to model.
             context: Plant's context with symbolic state.
+            represent_geometry_as: How to represent learnable geometries.
 
         Returns:
             List of :py:class:`CollisionGeometry` models with one-to-one
-            correspondence with provided geometries.
+              correspondence with provided geometries.
             List[(3,3)] of corresponding rotation matrices R_WG
             List[(3,)] of corresponding geometry frame origins p_WoGo_W
             List[(6,n_v)] of geometry spatial jacobians w.r.t. drake velocity
-            coordinates, J(v_drake)_V_WG_W
+              coordinates, J(v_drake)_V_WG_W
         """
         world_frame = plant.world_frame()
         geometries = []
@@ -405,8 +421,12 @@ class ContactTerms(Module):
             geometry_pose = inspector.GetPoseInFrame(
                 geometry_id).cast[Expression]()
 
-            geometry_frame = plant.GetBodyFromFrameId(
-                inspector.GetFrameId(geometry_id)).body_frame()
+            body = plant.GetBodyFromFrameId(inspector.GetFrameId(geometry_id))
+
+            learnable = (body.name() not in constant_bodies) and \
+                (body != plant.world_body())
+
+            geometry_frame = body.body_frame()
 
             geometry_transform = geometry_frame.CalcPoseInWorld(
                 context) @ geometry_pose
@@ -426,8 +446,8 @@ class ContactTerms(Module):
 
             geometries.append(
                 PydrakeToCollisionGeometryFactory.convert(
-                    inspector.GetShape(geometry_id),
-                    force_mesh_to_be_polygon=force_mesh_to_be_polygon))
+                    inspector.GetShape(geometry_id), represent_geometry_as,
+                    learnable, body.name()))
 
         return geometries, rotations, translations, drake_spatial_jacobians
 
@@ -475,7 +495,8 @@ class ContactTerms(Module):
             .reshape(friction_jacobian_shape)
         return torch.cat((J_n, J_t), dim=-2)
 
-    def forward(self, q: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+    def forward(self, q: Tensor
+                ) -> Tuple[Tensor, Tensor, Tensor, List, List, List]:
         """Evaluates Lagrangian dynamics terms at given state and input.
 
         Uses :py:class:`GeometryCollider` and kinematics to construct signed
@@ -483,10 +504,6 @@ class ContactTerms(Module):
 
         phi(q) and J(q) are calculated implicitly from kinematics and collision
         geometries.
-
-        Note: Changes made on 1/8/2024 to return contact point locations in
-        addition to phi and J will only work for single geometry/geometry pairs,
-        e.g. ground and one object experiments.
 
         Args:
             q: (\*, n_q) configuration batch.
@@ -536,13 +553,17 @@ class ContactTerms(Module):
 
         Jv_v_W_BcAc_F = []
         phi_list = []
+        obj_pair_list = []
+        R_FW_list = []
+        mu_list = []
 
         # bundle all modules and kinematics into a tuple iterator
         a_b = zip(geometries_a, geometries_b, R_AW, R_BW, p_AoBo_A, Jv_V_WA_W,
-                  Jv_V_WB_W)
+                  Jv_V_WB_W, deal(mu))
 
         # iterate over body pairs (Ai, Bi)
-        for geo_a, geo_b, R_AiW, R_BiW, p_AiBi_A, Jv_V_WAi_W, Jv_V_WBi_W in a_b:
+        for geo_a, geo_b, R_AiW, R_BiW, p_AiBi_A, Jv_V_WAi_W, Jv_V_WBi_W, mu_i \
+            in a_b:
             # relative rotation between Ai and Bi, (*, 3, 3)
             R_AiBi = pbmm(R_AiW, R_BiW.transpose(-1, -2))
 
@@ -550,6 +571,7 @@ class ContactTerms(Module):
             # Tuple[(*, n_c), (*, n_c, 3, 3), (*, n_c, 3), (*, n_c, 3)]
             phi_i, R_AiF, p_AiAc_A, p_BiBc_B = GeometryCollider.collide(
                 geo_a, geo_b, R_AiBi, p_AiBi_A)
+            n_c = phi_i.shape[1]
 
             # contact frame rotation, (*, n_c, 3, 3)
             R_FW = pbmm(R_AiF.transpose(-1, -2), R_AiW.unsqueeze(-3))
@@ -563,6 +585,9 @@ class ContactTerms(Module):
             # contact relative velocity, (*, n_c, 3, 3)
             Jv_v_W_BcAc_F.append(pbmm(R_FW, Jv_v_WBc_W - Jv_v_WAc_W))
             phi_list.append(phi_i)
+            obj_pair_list.extend(n_c * [(geo_a.name, geo_b.name)])
+            mu_list.extend(n_c * [mu_i])
+            R_FW_list.extend([R_FW[..., i, :, :] for i in range(n_c)])
 
         # pylint: disable=E1103
         mu_repeated = torch.cat(
@@ -571,11 +596,7 @@ class ContactTerms(Module):
         J = ContactTerms.relative_velocity_to_contact_jacobian(
             torch.cat(Jv_v_W_BcAc_F, dim=-3), mu_repeated)
 
-        # Note:  p_BiBc_B works because the for loop over geometry/geometry pairs
-        # only runs once for our experiments, but this assumption may not hold for
-        # other use cases.
-        return phi, J, p_BiBc_B
-
+        return phi, J, p_BiBc_B, obj_pair_list, R_FW_list, mu_list
 
 class MultibodyTerms(Module):
     """Derives and manages computation of terms of multibody dynamics with
@@ -588,12 +609,12 @@ class MultibodyTerms(Module):
     geometry_body_assignment: Dict[str, List[int]]
     plant_diagram: MultibodyPlantDiagram
     urdfs: Dict[str, str]
+    inertia_mode: InertiaLearn
     pretrained_icnn_weights_filepath: str
 
     def scalars_and_meshes(
             self) -> Tuple[Dict[str, float], Dict[str, MeshSummary]]:
-        """Generates summary statistics for inertial and geometric
-        quantities."""
+        """Generates summary statistics for inertial and geometric quantities."""
         scalars = {}
         meshes = {}
         _, all_body_ids = \
@@ -610,13 +631,17 @@ class MultibodyTerms(Module):
                 f'{body_id}_{scalar_name}': scalar
                 for scalar_name, scalar in body_scalars.items()
             })
+
             for geometry_index in self.geometry_body_assignment[body_id]:
+                # include geometry
                 geometry = self.contact_terms.geometries[geometry_index]
                 geometry_scalars = geometry.scalars()
                 scalars.update({
                     f'{body_id}_{scalar_name}': scalar
                     for scalar_name, scalar in geometry_scalars.items()
                 })
+
+                # include friction
                 scalars[f'{body_id}_mu'] = \
                     friction_coefficients[geometry_index].item()
 
@@ -679,15 +704,18 @@ class MultibodyTerms(Module):
             (\*, n_v) Contact-free acceleration inv(M(q)) * F(q).
         """
         M, non_contact_acceleration = self.lagrangian_terms(q, v, u)
-        phi, J, p_BiBc_B = self.contact_terms(q)
+        phi, J, p_BiBc_B, obj_pair_list, R_FW_list, mu_list = \
+            self.contact_terms(q)
 
         delassus = pbmm(J, torch.linalg.solve(M, J.transpose(-1, -2)))
-        return delassus, M, J, phi, non_contact_acceleration, p_BiBc_B
+        return delassus, M, J, phi, non_contact_acceleration, p_BiBc_B, \
+            obj_pair_list, R_FW_list, mu_list
 
     def __init__(self, urdfs: Dict[str, str],
-                 pretrained_icnn_weights_filepath: str,
-                 learn_inertia: str = 'all',
-                 force_mesh_to_be_polygon: bool = False) -> None:
+                 inertia_mode: InertiaLearn = InertiaLearn(),
+                 pretrained_icnn_weights_filepath: str = None,
+                 constant_bodies: List[str] = [],
+                 represent_geometry_as: str = 'box') -> None:
         """Inits :py:class:`MultibodyTerms` for system described in URDFs
 
         Interpretation is performed as a thin wrapper around
@@ -702,10 +730,12 @@ class MultibodyTerms(Module):
         Args:
             urdfs: Dictionary of named URDF XML file names, containing
                 description of multibody system.
+            inertia_mode: specify which inertial parameters to learn
             pretrained_icnn_weights_filepath: Filepath to a set of
                 pretrained ICNN weights.
-            learn_inertia: Which inertia parameters to learn in the system
-                (all or none).  Note that 'all' excludes mass.
+            constant_bodies: list of body names to keep constant / not learn
+            represent_geometry_as: String box/mesh/polygon to determine how
+              the geometry should be represented.
         """
         super().__init__()
 
@@ -732,9 +762,10 @@ class MultibodyTerms(Module):
                 geometry_index)
 
         # setup parameterization
-        self.lagrangian_terms = LagrangianTerms(plant_diagram, learn_inertia)
+        self.lagrangian_terms = LagrangianTerms(
+            plant_diagram, inertia_mode, constant_bodies)
         self.contact_terms = ContactTerms(
-            plant_diagram, force_mesh_to_be_polygon=force_mesh_to_be_polygon)
+            plant_diagram, represent_geometry_as, constant_bodies)
         self.geometry_body_assignment = geometry_body_assignment
         self.plant_diagram = plant_diagram
         self.urdfs = urdfs

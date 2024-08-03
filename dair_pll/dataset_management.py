@@ -5,10 +5,12 @@ set of trajectories saved to disk for various tasks encountered during an
 experiment."""
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, cast
+import pdb
 
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
+from tensordict.tensordict import TensorDictBase, TensorDict
 
 from dair_pll import file_utils
 from dair_pll.data_config import TrajectorySliceConfig, DataConfig
@@ -53,10 +55,25 @@ class TrajectorySliceDataset(Dataset):
         future_states_length = self.config.t_prediction
         assert first_time_index <= last_time_index
         for index in range(first_time_index, last_time_index):
-            self.previous_states_slices.append(
-                trajectory[(index + 1 - previous_states_length):(index + 1), :])
-            self.future_states_slices.append(
-                trajectory[(index + 1):(index + 1 + future_states_length), :])
+            his_state = trajectory[(index + 1 - previous_states_length):(index + 1)]
+            if len(self.config.his_state_keys) > 0:
+                # Only keep requested state keys
+                for key in [key for key in his_state.keys()]:
+                    if key not in self.config.his_state_keys:
+                        del his_state[key]
+                # TODO: HACK Add Time Index
+                his_state["time"] = index * torch.ones([1, 1], dtype=torch.int32)
+            self.previous_states_slices.append(his_state)
+
+            pred_state = trajectory[(index + 1):(index + 1 + future_states_length)]
+            if len(self.config.pred_state_keys) > 0:
+                # Only keep requested state keys
+                for key in [key for key in pred_state.keys()]:
+                    if key not in self.config.pred_state_keys:
+                        del pred_state[key]
+                # TODO: HACK Add Time Index
+                pred_state["time"] = (index+1) * torch.ones([1, 1], dtype=torch.int32)
+            self.future_states_slices.append(pred_state)
 
     def __len__(self) -> int:
         """Length of dataset as number of total slice pairs."""
@@ -98,6 +115,21 @@ class TrajectorySet:
             trajectory_list: List of new ``(T, *)`` state trajectories.
             indices: indices associated with on-disk filenames.
         """
+        # For backwards compatibility, assume any trajectory that is just a
+        # single tensor is a state trajectory.
+        for i, traj in enumerate(trajectory_list):
+            if not isinstance(traj, TensorDictBase):
+                trajectory_list[i] = TensorDict({
+                    "state": traj}, [traj.shape[0]])
+
+        # Move to default device
+        trajectory_list = [
+            traj.to(torch.get_default_device()) for traj in trajectory_list]
+        for trajectory in trajectory_list:
+            # TODO: HACK add time manually
+            trajectory["time"] = torch.arange(
+                trajectory.shape[0], dtype=torch.int32
+                ).reshape(trajectory.shape + (1,))
         self.trajectories.extend(trajectory_list)
         for trajectory in trajectory_list:
             self.slices.add_slices_from_trajectory(trajectory)
@@ -188,8 +220,9 @@ class ExperimentDataManager:
                                                       index_lists):
             trajectories = [
                 torch.load(
-                    file_utils.trajectory_file(self.trajectory_dir,
-                                               trajectory_index))
+                    file_utils.trajectory_file(
+                        self.trajectory_dir, trajectory_index),
+                    weights_only=True)
                 for trajectory_index in trajectory_indices
             ]
             trajectory_set.add_trajectories(trajectories, trajectory_indices)

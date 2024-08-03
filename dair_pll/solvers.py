@@ -7,10 +7,14 @@ from typing import Dict, List, cast
 import cvxpy as cp
 from cvxpylayers.torch import CvxpyLayer
 from torch import Tensor
+from dair_pll.tensor_utils import sqrtm
 
+# TODO: HACK Recommended to comment out "pre-compute quantities for the
+# derivative" in cone_program.py in diffcp since we don't use it.
 _CVXPY_LCQP_EPS = 0.  #1e-7
 _CVXPY_SOLVER_ARGS = {"solve_method": "ECOS", "max_iters": 300,
-                      "abstol": 1e-10, "reltol": 1e-10, "feastol": 1e-10}
+                      "abstol": 1e-10, "reltol": 1e-10, "feastol": 1e-10,
+                      "n_jobs_forward": 1, "n_jobs_backward": 1}
 
 
 def construct_cvxpy_lcqp_layer(num_contacts: int,
@@ -85,4 +89,5 @@ class DynamicCvxpyLCQPLayer:
         assert J.shape[-2] % 3 == 0
 
         layer = self.get_sized_layer(J.shape[-2] // 3)
+        #pdb.set_trace()
         return layer(J, q, solver_args=_CVXPY_SOLVER_ARGS)[0]

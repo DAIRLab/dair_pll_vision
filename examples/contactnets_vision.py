@@ -21,6 +21,7 @@ from dair_pll.experiment import default_epoch_callback
 from dair_pll.experiment_config import OptimizerConfig
 from dair_pll.hyperparameter import Float, Int
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
+from dair_pll.multibody_terms import InertiaLearn
 from dair_pll.system import System
 
 
@@ -41,6 +42,9 @@ URDFS = {VISION_CUBE_SYSTEM: CUBE_URDFS,
          VISION_TOBLERONE_SYSTEM: TOBLERONE_URDFS,
          VISION_MILK_SYSTEM: MILK_URDFS}
 
+# TODO
+FRANKA_URDF_ASSET = 'franka_with_ee.urdf'
+
 # Data configuration.
 DT = 0.0333 #0.0068 # 1/frame rate of the camera
 
@@ -60,12 +64,24 @@ LRS = {VISION_CUBE_SYSTEM: CUBE_LR,
        'vision_half': 1e-3,
        'vision_egg': 1e-3,
        'vision_napkin': 1e-3,
-        'vision_bakingbox': 1e-3, 'vision_burger': 1e-3, 'vision_cardboard': 1e-3,
-        'vision_chocolate': 1e-3, 'vision_cream': 1e-3, 'vision_croc': 1e-3,
-        'vision_crushedcan': 1e-3, 'vision_duck': 1e-3, 'vision_gallon': 1e-3,
-        'vision_greencan': 1e-3, 'vision_hotdog': 1e-3, 'vision_icetray': 1e-3,
-        'vision_mug': 1e-3, 'vision_oatly': 1e-3, 'vision_pinkcan': 1e-3,
-        'vision_stapler': 1e-3, 'vision_styrofoam': 1e-3, 'vision_toothpaste': 1e-3,
+       'vision_bakingbox': 1e-3,
+       'vision_burger': 1e-3,
+       'vision_cardboard': 1e-3,
+       'vision_chocolate': 1e-3,
+       'vision_cream': 1e-3,
+       'vision_croc': 1e-3,
+       'vision_crushedcan': 1e-3,
+       'vision_duck': 1e-3,
+       'vision_gallon': 1e-3,
+       'vision_greencan': 1e-3,
+       'vision_hotdog': 1e-3,
+       'vision_icetray': 1e-3,
+       'vision_mug': 1e-3,
+       'vision_oatly': 1e-3,
+       'vision_pinkcan': 1e-3,
+       'vision_stapler': 1e-3,
+       'vision_styrofoam': 1e-3,
+       'vision_toothpaste': 1e-3,
        }
 CUBE_WD = 0.0
 PRISM_WD = 0.0
@@ -79,12 +95,24 @@ WDS = {VISION_CUBE_SYSTEM: CUBE_WD,
        'vision_half': 0.0,
        'vision_egg': 0.0,
        'vision_napkin': 0.0,
-        'vision_bakingbox': 0.0, 'vision_burger': 0.0, 'vision_cardboard': 0.0,
-        'vision_chocolate': 0.0, 'vision_cream': 0.0, 'vision_croc': 0.0,
-        'vision_crushedcan': 0.0, 'vision_duck': 0.0, 'vision_gallon': 0.0,
-        'vision_greencan': 0.0, 'vision_hotdog': 0.0, 'vision_icetray': 0.0,
-        'vision_mug': 0.0, 'vision_oatly': 0.0, 'vision_pinkcan': 0.0,
-        'vision_stapler': 0.0, 'vision_styrofoam': 0.0, 'vision_toothpaste': 0.0,
+       'vision_bakingbox': 0.0,
+       'vision_burger': 0.0,
+       'vision_cardboard': 0.0,
+       'vision_chocolate': 0.0,
+       'vision_cream': 0.0,
+       'vision_croc': 0.0,
+       'vision_crushedcan': 0.0,
+       'vision_duck': 0.0,
+       'vision_gallon': 0.0,
+       'vision_greencan': 0.0,
+       'vision_hotdog': 0.0,
+       'vision_icetray': 0.0,
+       'vision_mug': 0.0,
+       'vision_oatly': 0.0,
+       'vision_pinkcan': 0.0,
+       'vision_stapler': 0.0,
+       'vision_styrofoam': 0.0,
+       'vision_toothpaste': 0.0,
 }
 EPOCHS = 200 #500
 PATIENCE = 100 #EPOCHS
@@ -250,7 +278,7 @@ def main(pll_run_id: str = "",
             pll_id=pll_run_id
         )
     else:
-        urdf_asset = URDFS[VISION_CUBE_SYSTEM][MESH_TYPE] #URDFS[system][MESH_TYPE]
+        urdf_asset = URDFS[VISION_CUBE_SYSTEM][MESH_TYPE] #[system][MESH_TYPE]
         urdf = file_utils.get_asset(urdf_asset)
     urdfs = {system: urdf}
     base_config = DrakeSystemConfig(urdfs=urdfs)
@@ -259,16 +287,21 @@ def main(pll_run_id: str = "",
     # a multibody system, which is initialized as the system in the given URDFs.
     loss = MultibodyLosses.VISION_LOSS if contactnets else \
         MultibodyLosses.PREDICTION_LOSS
+    inertia_mode = InertiaLearn(
+        mass=False, com=learn_inertia=='all', inertia=learn_inertia=='all')
     learnable_config = MultibodyLearnableSystemConfig(
       urdfs=urdfs, loss=loss,
       pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
       w_pred=w_pred, w_comp=w_comp, w_diss=w_diss, w_pen=w_pen, w_bsdf=w_bsdf,
-      learn_inertia=learn_inertia
+      inertia_mode=inertia_mode, represent_geometry_as='mesh'
     )
 
-    # How to slice trajectories into training datapoints.
+    # How to slice trajectories into training datapoints.  Use the "state" key
+    # for the past and future information to pass.
     slice_config = TrajectorySliceConfig(
-        t_prediction=1 if contactnets else T_PREDICTION)
+        t_prediction=1 if contactnets else T_PREDICTION,
+        his_state_keys=["state"],
+        pred_state_keys=["state"])
 
     # Describes configuration of the data.
     data_config = VisionDataConfig(
@@ -293,7 +326,7 @@ def main(pll_run_id: str = "",
         optimizer_config=optimizer_config,
         data_config=data_config,
         full_evaluation_period=1,
-        visualize_learned_geometry=True,
+        update_geometry_in_videos=True,
         generate_video_predictions_throughout=gen_pred_videos,
         generate_video_geometries_throughout=gen_geom_videos,
         run_wandb=True,
@@ -322,7 +355,7 @@ def main(pll_run_id: str = "",
     # Save the final urdf.
     print(f'\nSaving the final learned URDF...', end=' ')
     learned_system = cast(MultibodyLearnableSystem, learned_system)
-    learned_system.generate_updated_urdfs()
+    learned_system.generate_updated_urdfs(suffix='best')
     print(f'Done!')
 
     # Export BundleSDF training data.

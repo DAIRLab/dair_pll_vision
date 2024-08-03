@@ -19,13 +19,20 @@ or :py:class:`~dair_pll.state_space.FixedBaseSpace`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Tuple, Dict, List, Optional, Union, Type, cast
+from typing import Callable, Tuple, Dict, List, Optional, Union, Type, cast
 try:
     from typing import TypeAlias
 except ImportError:
     from typing import TypeVar
     TypeAlias = TypeVar('TypeAlias')
     
+import pdb
+import math
+
+# TODO: put in place
+from pydrake.all import MeshcatVisualizer, StartMeshcat, Meshcat, DiscreteContactApproximation
+
+import matplotlib.pyplot as plt
 import numpy as np
 from pydrake.autodiffutils import AutoDiffXd  # type: ignore
 # pylint: disable-next=import-error
@@ -45,6 +52,7 @@ from pydrake.multibody.tree import SpatialInertia_  # type: ignore
 from pydrake.multibody.tree import world_model_instance, Body_  # type: ignore
 from pydrake.symbolic import Expression  # type: ignore
 from pydrake.systems.analysis import Simulator  # type: ignore
+from pydrake.systems.drawing import plot_system_graphviz
 from pydrake.systems.framework import DiagramBuilder, \
     DiagramBuilder_  # type: ignore
 # pylint: disable-next=import-error
@@ -60,7 +68,7 @@ DEFAULT_DT = 1e-3
 
 GROUND_COLOR = np.array([0.5, 0.5, 0.5, 0.1])
 
-CAM_FOV = np.pi / 5
+CAM_FOV = np.pi/6
 VIDEO_PIXELS = [480, 640]
 FPS = 30
 
@@ -102,7 +110,6 @@ DrakeDiagramBuilder = Union[DiagramBuilderFloat, DiagramBuilderAutoDiffXd,
 #:
 UniqueBodyIdentifier = str
 
-
 def get_bodies_in_model_instance(
         plant: DrakeMultibodyPlant,
         model_instance_index: ModelInstanceIndex) -> List[DrakeBody]:
@@ -129,6 +136,12 @@ def unique_body_identifier(plant: DrakeMultibodyPlant,
     """Unique string identifier for given ``Body_``."""
     return f'{plant.GetModelInstanceName(body.model_instance())}_{body.name()}'
 
+def get_body_from_geometry_id(plant: DrakeMultibodyPlant, inspector: DrakeSceneGraphInspector,
+                           geometry_id: GeometryId) -> DrakeBody:
+    """Return the Drake Body from the given GeometryId"""
+    frame_id = inspector.GetFrameId(geometry_id)
+    return plant.GetBodyFromFrameId(frame_id)
+
 
 def get_all_bodies(
     plant: DrakeMultibodyPlant, model_instance_indices: List[ModelInstanceIndex]
@@ -144,10 +157,12 @@ def get_all_inertial_bodies(
     plant: DrakeMultibodyPlant, model_instance_indices: List[ModelInstanceIndex]
 ) -> Tuple[List[DrakeBody], List[UniqueBodyIdentifier]]:
     """Get all bodies that should have inertial parameters in plant."""
-    return get_all_bodies(plant, [
-        model_index for model_index in model_instance_indices
-        if model_index != world_model_instance()
-    ])
+    bodies = []
+    for model_instance_index in model_instance_indices:
+        for body in get_bodies_in_model_instance(plant, model_instance_index):
+            if not math.isnan(body.default_mass()) and body.default_mass() > 0.:
+                bodies.append(body)
+    return bodies, [unique_body_identifier(plant, body) for body in bodies]
 
 
 @dataclass
@@ -212,20 +227,53 @@ def add_plant_from_urdfs(
 
     Returns:
         Named dictionary of model instances returned by
-        ``AddModelFromFile``.
+        ``AddModels``.
         New plant, which has been added to builder.
         Scene graph associated with new plant.
     """
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, dt)
     parser = Parser(plant)
+    parser.SetAutoRenaming(True)
 
     # Build [model instance index] list, starting with world model, which is
     # always added by default.
     model_ids = [world_model_instance()]
-    model_ids.extend(
-        [parser.AddModelFromFile(urdf, name) for name, urdf in urdfs.items()])
+    for name, urdf in urdfs.items():
+        new_ids = parser.AddModels(urdf)
+        if len(new_ids) < 1:
+            continue
+        assert len(new_ids) == 1, "Only one robot supported per URDF"
+        model_ids.extend(new_ids)
+        plant.RenameModelInstance(new_ids[0], name)
 
     return model_ids, plant, scene_graph
+
+
+# TODO: Move to separate file
+from pydrake.systems.controllers import PidController
+from pydrake.systems.primitives import ConstantVectorSource
+def pid_controller_builder(builder, plant, desired_state = np.zeros(2), model_name="robot", kp=1., kd=10.):
+    control_size = int(desired_state.size/2)
+    controller = PidController(kp * np.ones(control_size), np.zeros(control_size), kd * np.zeros(control_size))
+    model = plant.GetModelInstanceByName(model_name)
+
+    controller = builder.AddSystem(controller)
+    builder.Connect(
+        plant.get_state_output_port(model),
+        controller.get_input_port_estimated_state()
+    )
+    builder.Connect(
+        controller.get_output_port_control(),
+        plant.get_actuation_input_port(model)
+    )
+
+    # Desired State
+    constant = ConstantVectorSource(desired_state)
+    constant = builder.AddSystem(constant)
+    builder.Connect(
+        constant.get_output_port(),
+        controller.get_input_port_desired_state()
+    )
 
 
 class MultibodyPlantDiagram:
@@ -252,7 +300,10 @@ class MultibodyPlantDiagram:
     def __init__(self,
                  urdfs: Dict[str, str],
                  dt: float = DEFAULT_DT,
-                 visualization_file: Optional[str] = None) -> None:
+                 visualization_file: Optional[str] = None,
+                 additional_system_builders: List[
+                     Callable[[DiagramBuilder, MultibodyPlant], None]] = []
+                ) -> None:
         r"""Initialization generates a world containing each given URDF as a
         model instance, and a corresponding Drake ``Simulator`` set up to
         trigger a state update every ``dt``.
@@ -264,6 +315,8 @@ class MultibodyPlantDiagram:
             dt: Time step of plant in seconds.
             visualization_file: Optional output GIF filename for trajectory
               visualization.
+            additional_system_builders: Optional functions that add additional
+              Drake Systems to the plant diagram.
         """
         builder = DiagramBuilder()
         model_ids, plant, scene_graph = add_plant_from_urdfs(builder, urdfs, dt)
@@ -272,7 +325,21 @@ class MultibodyPlantDiagram:
         # to False, in the hopes of saving computation time; may cause
         # re-initialization to produce erroneous visualizations.
         visualizer = None
-        if visualization_file:
+        if visualization_file == "meshcat":
+            self.meshcat = StartMeshcat()
+            ortho_camera = Meshcat.OrthographicCamera()
+            ortho_camera.top = 1
+            ortho_camera.bottom = -0.1
+            ortho_camera.left = -1
+            ortho_camera.right = 2
+            ortho_camera.near = -10
+            ortho_camera.far = 500
+            ortho_camera.zoom = 1
+            self.meshcat.SetCamera(ortho_camera)
+            visualizer = MeshcatVisualizer.AddToBuilder(
+                builder, scene_graph, self.meshcat)
+
+        elif visualization_file:
             visualizer = VideoWriter.AddToBuilder(filename=visualization_file,
                                                   builder=builder,
                                                   sensor_pose=SENSOR_POSE,
@@ -295,13 +362,55 @@ class MultibodyPlantDiagram:
         self.collision_geometry_set = get_collision_geometry_set(
             scene_graph.model_inspector())
 
-        # Builds and initialize simulator from diagram
+        # TODO: fix contact model
+        plant.set_discrete_contact_approximation(
+            DiscreteContactApproximation.kSap)
+
+        # TODO: Document Weld World Frame
+        for name in urdfs.keys():
+            model = plant.GetModelInstanceByName(name)
+            if plant.HasFrameNamed("worldfixed", model):
+                plant.WeldFrames(
+                    plant.world_frame(),
+                    plant.GetFrameByName("worldfixed", model))
+
+        # Gravcomp
+        # TODO: this is a HACK, find principled way of doing gravcomp
+        if 'robot' in urdfs.keys():
+            plant.set_gravity_enabled(
+                plant.GetModelInstanceByName("robot"), False)
+
+        # Finalize multibody plant.
         plant.Finalize()
+
+        # Call Additional System Builders
+        for additional_system in additional_system_builders:
+            additional_system(builder, plant)
+
+        # Build diagram.
         diagram = builder.Build()
         diagram.CreateDefaultContext()
+
+        # # Uncomment the below lines to generate diagram graph.
+        # diagram.set_name("graphviz example")
+        # plt.figure(figsize=(11,8.5), dpi=300)
+        # plot_system_graphviz(diagram)
+        # from pathlib import Path
+        # plt.savefig(str(Path.home() / "Desktop" / "graphviz_example.png"))
+
+
+        # Initialize simulator from diagram.
         sim = Simulator(diagram)
+        sim.set_publish_at_initialization(True)
+
+        # Need constant visualization for Meshcat
+        sim.set_publish_every_time_step(visualization_file == "meshcat")
+
         sim.Initialize()
-        sim.set_publish_every_time_step(False)
+
+        # Give use time to start Meshcat
+        if visualization_file == "meshcat":
+            input("Start Meshcat now!")
 
         self.sim = sim
         self.plant = plant

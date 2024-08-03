@@ -1,34 +1,41 @@
 """Wrappers for Drake/ContactNets multibody experiments."""
+import time
 from abc import ABC
 from dataclasses import field, dataclass
 from enum import Enum
-from typing import Optional, cast, Dict
+from typing import Any, List, Optional, cast, Dict, Callable, Union
+import pdb
 
 import torch
 from torch import Tensor
+from torch.utils.data import DataLoader
+from tensordict.tensordict import TensorDictBase
 
 from dair_pll import file_utils
 from dair_pll import vis_utils
 from dair_pll.deep_learnable_system import DeepLearnableExperiment
 from dair_pll.drake_system import DrakeSystem
 from dair_pll.experiment import SupervisedLearningExperiment, \
-    LEARNED_SYSTEM_NAME, PREDICTION_NAME, TARGET_NAME
+    LEARNED_SYSTEM_NAME, PREDICTION_NAME, TARGET_NAME, \
+    TRAJECTORY_PENETRATION_NAME, LOGGING_DURATION
 from dair_pll.experiment_config import SystemConfig, \
     SupervisedLearningExperimentConfig
-from dair_pll.multibody_learnable_system import \
-    MultibodyLearnableSystem
+from dair_pll.multibody_terms import InertiaLearn
+from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 from dair_pll.system import System, SystemSummary
-
 
 @dataclass
 class DrakeSystemConfig(SystemConfig):
     urdfs: Dict[str, str] = field(default_factory=dict)
+    additional_system_builders: List[str] = field(default_factory=list)
+    additional_system_kwargs: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class MultibodyLosses(Enum):
     PREDICTION_LOSS = 1
     CONTACTNETS_LOSS = 2
     VISION_LOSS = 3
+    TACTILENET_LOSS = 4
 
 
 @dataclass
@@ -37,8 +44,10 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """Whether to use ContactNets or prediction loss."""
     pretrained_icnn_weights_filepath: str = None
     """If provided, filepath to pretrained ICNN weights."""
-    learn_inertia: str = 'all'
-    """Which inertia parameters to learn in the system ('all' excludes mass)."""
+    inertia_mode: InertiaLearn = field(default_factory=InertiaLearn)
+    """What inertial parameters to learn."""
+    constant_bodies: List[str] = field(default_factory=list)
+    """List of body names whose properties should NOT be learned."""
     w_pred: float = 1.0
     """Weight of prediction term in ContactNets loss (suggested keep at 1.0)."""
     w_comp: float = 1.0
@@ -49,38 +58,77 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """Weight of penetration term in ContactNets loss."""
     w_bsdf: float = 1.0
     """Weight of BundleSDF matching term in vision experiment loss."""
+    represent_geometry_as: str = 'box'
+    """How to represent geometry (box, mesh, or polygon)."""
 
 
 @dataclass
 class DrakeMultibodyLearnableExperimentConfig(SupervisedLearningExperimentConfig
                                              ):
-    visualize_learned_geometry: bool = True
-    """Whether to use learned geometry in trajectory overlay visualization."""
     generate_video_predictions_throughout: bool = True
     """Whether to visualize rollout predictions in W&B gifs throughout training.
     """
     generate_video_geometries_throughout: bool = True
     """Whether to visualize learned geometry in W&B gifs throughout training."""
 
+@dataclass
+class DrakeMultibodyLearnableTactileExperimentConfig(
+    DrakeMultibodyLearnableExperimentConfig):
+    trajectory_model_name: str = ""
+    """Whether to use learned geometry in trajectory overlay visualization."""
+
+
+from functools import partial
+from pydrake.all import DiagramBuilder, MultibodyPlant
+import importlib
+def system_builder_from_string(
+        string: str, **kwargs
+) -> Callable[[DiagramBuilder, MultibodyPlant], None]:
+    """
+    Get a function object from a class string
+    """
+    module_name = string[:string.rfind('.')]
+    func_name = string[string.rfind('.')+1:]
+    func = getattr(importlib.import_module(module_name), func_name)
+    return partial(func, **kwargs)
 
 class DrakeExperiment(SupervisedLearningExperiment, ABC):
     base_drake_system: Optional[DrakeSystem]
+    augmented_drake_system: Optional[DrakeSystem]
     visualization_system: Optional[DrakeSystem]
 
     def __init__(self, config: SupervisedLearningExperimentConfig) -> None:
-        super().__init__(config)
         self.base_drake_system = None
+        self.visualization_system = None
+        super().__init__(config)
 
     def get_drake_system(self) -> DrakeSystem:
         has_property = hasattr(self, 'base_drake_system')
         if not has_property or self.base_drake_system is None:
             base_config = cast(DrakeSystemConfig, self.config.base_config)
             dt = self.config.data_config.dt
-            self.base_drake_system = DrakeSystem(base_config.urdfs, dt)
+            assert len(base_config.additional_system_builders) == len(base_config.additional_system_kwargs), f"Expected {len(base_config.additional_system_builders)} == {len(base_config.additional_system_kwargs)}"
+            self.base_drake_system = DrakeSystem(base_config.urdfs, 
+                dt, 
+                additional_system_builders=[system_builder_from_string(string, **kwargs) for string, kwargs in zip(base_config.additional_system_builders, base_config.additional_system_kwargs)]
+            )
         return self.base_drake_system
 
     def get_base_system(self) -> System:
         return self.get_drake_system()
+
+    def get_augmented_system(self, additional_forces: str) -> DrakeSystem:
+        """Get a ``DrakeSystem`` where the Drake multibody plant has additional
+        forces in the ``applied_generalized_force`` or ``applied_spatial_force``
+        input ports."""
+        print("Getting augmented system!")
+        has_property = hasattr(self, 'augmented_drake_system')
+        if not has_property or self.augmented_drake_system is None:
+            base_config = cast(DrakeSystemConfig, self.config.base_config)
+            dt = self.config.data_config.dt
+            self.augmented_drake_system = DrakeSystem(
+                base_config.urdfs, dt, additional_forces=additional_forces)
+        return self.augmented_drake_system
 
     def get_learned_drake_system(
             self, learned_system: System) -> Optional[DrakeSystem]:
@@ -211,24 +259,71 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
 
         return SystemSummary(scalars={}, videos=videos, meshes={})
 
+    def get_true_geometry_multibody_learnable_system(self
+        ) -> MultibodyLearnableSystem:
+
+        has_property = hasattr(self, 'true_geom_multibody_system')
+        if not has_property or self.true_geom_multibody_system is None:
+            oracle_system = self.get_oracle_system()
+            dt = oracle_system.dt
+            urdfs = oracle_system.urdfs
+            self.true_geom_multibody_system = MultibodyLearnableSystem(
+                init_urdfs=urdfs,
+                dt=dt,
+                loss_weights_dict={
+                    'w_pred': self.config.learnable_config.w_pred,
+                    'w_comp': self.config.learnable_config.w_comp,
+                    'w_diss': self.config.learnable_config.w_diss,
+                    'w_pen': self.config.learnable_config.w_pen,
+                    'w_bsdf': self.config.learnable_config.w_bsdf},
+                inertia_mode = self.config.learnable_config.inertia_mode,
+                constant_bodies = self.config.learnable_config.constant_bodies,
+                represent_geometry_as = \
+                    self.config.learnable_config.represent_geometry_as)
+            
+        return self.true_geom_multibody_system
+
+    def penetration_metric(self, x_pred: Tensor, _x_target: Tensor) -> Tensor:
+        true_geom_system = self.get_true_geometry_multibody_learnable_system()
+
+        if x_pred.dim() == 1:
+            x_pred = x_pred.unsqueeze(0)
+        assert x_pred.dim() == 2
+        assert x_pred.shape[1] == true_geom_system.space.n_x
+
+        n_steps = x_pred.shape[0]
+
+        phi, _, _, _, _, _ = \
+            true_geom_system.multibody_terms.contact_terms(x_pred)
+        phi = phi.detach().clone()
+        smallest_phis = phi.min(dim=1).values
+        return -smallest_phis[smallest_phis < 0].sum() / n_steps
+
+    def extra_metrics(self) -> Dict[str, Callable[[Tensor, Tensor], Tensor]]:
+        # Calculate penetration metric
+        return {TRAJECTORY_PENETRATION_NAME: self.penetration_metric}
+
 
 class DrakeDeepLearnableExperiment(DrakeExperiment, DeepLearnableExperiment):
     pass
 
-
 class DrakeMultibodyLearnableExperiment(DrakeExperiment):
 
-    def __init__(self, config: DrakeMultibodyLearnableExperimentConfig) -> None:
+    def __init__(self, config: SupervisedLearningExperimentConfig) -> None:
         super().__init__(config)
-        learnable_config = cast(MultibodyLearnableSystemConfig,
+        self.learnable_config = cast(MultibodyLearnableSystemConfig,
                                 self.config.learnable_config)
-        if learnable_config.loss == MultibodyLosses.CONTACTNETS_LOSS:
+        if self.learnable_config.loss == MultibodyLosses.CONTACTNETS_LOSS:
             self.loss_callback = self.contactnets_loss
-        elif learnable_config.loss == MultibodyLosses.VISION_LOSS:
+        elif self.learnable_config.loss == MultibodyLosses.VISION_LOSS:
             # For DrakeMultibodyLearnableExperiment, cannot handle using vision
             # loss, so default to prediction.  This can get overwritten in the
             # VisionExperiment extension of this class.
             self.loss_callback = self.prediction_loss
+        else:
+            assert self.learnable_config.loss==MultibodyLosses.PREDICTION_LOSS,\
+                f'Loss {self.learnable_config.loss} not recognized for Drake' +\
+                f' multibody experiment.'
 
     def get_learned_system(self, _: Tensor) -> MultibodyLearnableSystem:
         learnable_config = cast(MultibodyLearnableSystemConfig,
@@ -236,33 +331,140 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
         output_dir = file_utils.get_learned_urdf_dir(self.config.storage,
                                                      self.config.run_name)
         return MultibodyLearnableSystem(
-            learnable_config.urdfs, self.config.data_config.dt,
-            {'w_pred': self.config.learnable_config.w_pred,
-             'w_comp': self.config.learnable_config.w_comp,
-             'w_diss': self.config.learnable_config.w_diss,
-             'w_pen': self.config.learnable_config.w_pen,
-             'w_bsdf': self.config.learnable_config.w_bsdf},
+            learnable_config.urdfs,
+            self.config.data_config.dt,
+            inertia_mode = learnable_config.inertia_mode,
+            constant_bodies = learnable_config.constant_bodies,
+            loss_weights_dict={
+                'w_pred': learnable_config.w_pred,
+                'w_comp': learnable_config.w_comp,
+                'w_diss': learnable_config.w_diss,
+                'w_pen': learnable_config.w_pen,
+                'w_bsdf': learnable_config.w_bsdf},
             output_urdfs_dir=output_dir,
+            represent_geometry_as=learnable_config.represent_geometry_as,
             pretrained_icnn_weights_filepath = \
-                learnable_config.pretrained_icnn_weights_filepath,
-            learn_inertia = learnable_config.learn_inertia
-        )
+                learnable_config.pretrained_icnn_weights_filepath)
+
+    def write_to_wandb(self, epoch: int, learned_system: System,
+                       statistics: Dict) -> None:
+        """In addition to extracting and writing training progress summary via
+        the parent :py:meth:`Experiment.write_to_wandb` method, also make a
+        breakdown plot of loss contributions for the ContactNets loss
+        formulation.
+
+        Args:
+            epoch: Current epoch.
+            learned_system: System being trained.
+            statistics: Summary statistics for learning process.
+        """
+        assert self.wandb_manager is not None
+
+        # begin recording wall-clock logging time.
+        start_log_time = time.time()
+
+        # To save space on W&B storage, only generate comparison videos at first
+        # and best epoch, the latter of which is implemented in
+        # :meth:`_evaluation`.
+        force_generate_videos = True if epoch == 0 else False
+
+        epoch_vars, learned_system_summary = \
+            self.build_epoch_vars_and_system_summary(
+                statistics, learned_system,
+                force_generate_videos=force_generate_videos)
+
+        # Start computing individual loss components.
+        # First get a batch sized portion of the shuffled training set.
+        train_traj_set, _, _ = \
+            self.learning_data_manager.get_updated_trajectory_sets()
+        train_dataloader = DataLoader(
+            train_traj_set.slices,
+            batch_size=self.config.optimizer_config.batch_size.value,
+            shuffle=True)
+
+        # Calculate the average loss components.
+        losses_pred, losses_comp, losses_pen, losses_diss = [], [], [], []
+        for xy_i in train_dataloader:
+            x_i: Tensor = xy_i[0]
+            y_i: Tensor = xy_i[1]
+
+            loss_pred, loss_comp, loss_pen, loss_diss = \
+                learned_system.calculate_contactnets_loss_terms(
+                    **self.get_loss_args(x_i, y_i, learned_system))
+
+            losses_pred.append(loss_pred.clone().detach())
+            losses_comp.append(loss_comp.clone().detach())
+            losses_pen.append(loss_pen.clone().detach())
+            losses_diss.append(loss_diss.clone().detach())
+
+        def really_weird_fix_for_cluster_only(list_of_tensors):
+            """For some reason, on the cluster only, the last item in the loss
+            lists can be a different shape than the rest of the items, and this
+            results in an error with the ``sum(losses_pred)`` below.  For now,
+            the fix (hack) is to just drop that last term.
+
+            TODO:  Figure out what is going on.
+            """
+            if (len(list_of_tensors) > 1) and \
+               (list_of_tensors[-1].shape != list_of_tensors[0].shape):
+                    return list_of_tensors[:-1]
+            return list_of_tensors
+
+        losses_pred = really_weird_fix_for_cluster_only(losses_pred)
+        losses_comp = really_weird_fix_for_cluster_only(losses_comp)
+        losses_pen = really_weird_fix_for_cluster_only(losses_pen)
+        losses_diss = really_weird_fix_for_cluster_only(losses_diss)
+
+        # Calculate average and scale by hyperparameter weights.
+        w_pred = self.learnable_config.w_pred
+        w_comp = self.learnable_config.w_comp.value
+        w_diss = self.learnable_config.w_diss.value
+        w_pen = self.learnable_config.w_pen.value
+
+        avg_loss_pred = w_pred*cast(Tensor, sum(losses_pred) \
+                            / len(losses_pred)).mean()
+        avg_loss_comp = w_comp*cast(Tensor, sum(losses_comp) \
+                            / len(losses_comp)).mean()
+        avg_loss_pen = w_pen*cast(Tensor, sum(losses_pen) \
+                            / len(losses_pen)).mean()
+        avg_loss_diss = w_diss*cast(Tensor, sum(losses_diss) \
+                            / len(losses_diss)).mean()
+
+        avg_loss_total = torch.sum(avg_loss_pred + avg_loss_comp + \
+                                   avg_loss_pen + avg_loss_diss)
+
+        loss_breakdown = {'loss_total': avg_loss_total,
+                          'loss_pred': avg_loss_pred,
+                          'loss_comp': avg_loss_comp,
+                          'loss_pen': avg_loss_pen,
+                          'loss_diss': avg_loss_diss}
+
+        # Include the loss components into system summary.
+        epoch_vars.update(loss_breakdown)
+        
+        # Overwrite the logging time.
+        logging_duration = time.time() - start_log_time
+        epoch_vars[LOGGING_DURATION] = logging_duration
+
+        self.wandb_manager.update(epoch, epoch_vars,
+                                  learned_system_summary.videos,
+                                  learned_system_summary.meshes)
 
     def visualizer_regeneration_is_required(self) -> bool:
-        return cast(DrakeMultibodyLearnableExperimentConfig,
-                    self.config).visualize_learned_geometry
+        return cast(SupervisedLearningExperimentConfig,
+                    self.config).update_geometry_in_videos
 
     def get_learned_drake_system(
             self, learned_system: System) -> Optional[DrakeSystem]:
         if self.visualizer_regeneration_is_required():
             new_urdfs = cast(MultibodyLearnableSystem,
-                             learned_system).generate_updated_urdfs()
+                             learned_system).generate_updated_urdfs('vis')
             return DrakeSystem(new_urdfs, self.get_drake_system().dt)
         return None
 
     def contactnets_loss(self,
-                         x_past: Tensor,
-                         x_future: Tensor,
+                         x_past: Union[Tensor, TensorDictBase],
+                         x_future: Union[Tensor, TensorDictBase],
                          system: System,
                          keep_batch: bool = False) -> Tensor:
         r""" :py:data:`~dair_pll.experiment.LossCallbackCallable`
@@ -276,11 +478,8 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
         """
         assert isinstance(system, MultibodyLearnableSystem), f'Expected ' + \
             f'MultibodyLearnableSystem, got {type(system)}.'
-        x = x_past[..., -1, :]
-        # pylint: disable=E1103
-        u = torch.zeros(x.shape[:-1] + (0,))
-        x_plus = x_future[..., 0, :]
-        loss = system.contactnets_loss(x, u, x_plus)
+        loss = system.contactnets_loss(
+            **self.get_loss_args(x_past, x_future, system))
         if not keep_batch:
             loss = loss.mean()
         return loss

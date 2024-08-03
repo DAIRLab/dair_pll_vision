@@ -5,6 +5,7 @@ examples/results/*
 examples/wandb/*
 logs/*
 plots/*
+wandb/
 
 # MacOS
 *DS_Store*
@@ -14,6 +15,9 @@ slurm-*
 
 # startup scripts
 examples/startup_*
+
+# test bash script
+examples/test.bash
 
 # Sphinx
 docsrc/source/dair_pll.*
@@ -99,7 +103,11 @@ instance/
 # Scrapy stuff:
 .scrapy
 
+<<<<<<< HEAD
+# Drake stuff:
+=======
 # special Drake version:
+>>>>>>> upstream/main
 drake-dev*.deb
 
 # Sphinx documentation
@@ -163,8 +171,13 @@ dmypy.json
 .pyre/
 /docsrc/source/index.rst
 
+# Some generated result files
+helpers/*.json
+helpers/*.csv
+
 *.npy
 *.pth
+*.code-workspace
 
 .pylintrc
 

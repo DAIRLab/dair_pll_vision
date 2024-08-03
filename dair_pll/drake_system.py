@@ -7,17 +7,19 @@ Interfacing with Drake is done by massaging a drake system into the
 A large portion of the internal implementation of ``DrakeSystem`` is contained
 in ``MultibodyPlantDiagram`` in ``drake_utils.py``.
 """
-from typing import Tuple, Dict, Optional
+from typing import Callable, Tuple, Dict, List, Optional
 
 import torch
 from torch import Tensor
+from tensordict.tensordict import TensorDict
 
 from dair_pll.drake_state_converter import DrakeStateConverter
 from dair_pll.drake_utils import MultibodyPlantDiagram
 from dair_pll.integrator import StateIntegrator
 from dair_pll.state_space import ProductSpace
 from dair_pll.system import System
-
+from pydrake.systems.framework import DiagramBuilder
+from pydrake.multibody.plant import MultibodyPlant
 
 class DrakeSystem(System):
     """``System`` wrapper of a Drake simulation environment for a
@@ -35,7 +37,10 @@ class DrakeSystem(System):
     def __init__(self,
                  urdfs: Dict[str, str],
                  dt: float,
-                 visualization_file: Optional[str] = None) -> None:
+                 visualization_file: Optional[str] = None,
+                 additional_system_builders: List[
+                     Callable[[DiagramBuilder, MultibodyPlant], None]] = []
+                ) -> None:
         """Inits ``DrakeSystem`` with provided model URDFs.
 
         Args:
@@ -43,8 +48,11 @@ class DrakeSystem(System):
             dt: Time step of plant in seconds.
             visualization_file: Optional output GIF filename for trajectory
               visualization.
+            additional_system_builders: Optional functions that add additional
+              Drake systems to the plant diagram.
         """
-        plant_diagram = MultibodyPlantDiagram(urdfs, dt, visualization_file)
+        plant_diagram = MultibodyPlantDiagram(urdfs, dt, visualization_file,
+                                              additional_system_builders)
 
         space = plant_diagram.generate_state_space()
         integrator = StateIntegrator(space, self.sim_step, dt)
@@ -89,6 +97,8 @@ class DrakeSystem(System):
                                              self.space)
         sim.Initialize()
 
+        carry_0 = self.populate_carry(carry_0)
+
         return x_0, carry_0
 
     def get_quantized_start_time(self, start_time: float) -> float:
@@ -115,6 +125,35 @@ class DrakeSystem(System):
 
         return cur_time_quantized
 
+    def populate_carry(self, carry: Tensor) -> Tensor:
+        sim = self.plant_diagram.sim
+        plant = self.plant_diagram.plant
+        new_plant_context = plant.GetMyMutableContextFromRoot(
+            sim.get_mutable_context())
+        carry_next = torch.clone(carry.detach())
+        if type(carry) == TensorDict:
+            for key in carry.keys():
+                if key == "contact_forces":
+                    for body_name in carry[key].keys():
+                        carry_next[key][body_name] = torch.zeros(3).reshape(1, -1)
+                    contact_results = plant.get_contact_results_output_port().Eval(new_plant_context)
+                    for idx in range(contact_results.num_point_pair_contacts()):
+                        contact = contact_results.point_pair_contact_info(idx)
+                        bodyA_name = plant.get_body(contact.bodyA_index()).name()
+                        bodyB_name = plant.get_body(contact.bodyB_index()).name()
+                        if bodyA_name in carry[key].keys():
+                            carry_next[key][bodyA_name] -= Tensor(contact.contact_force()).reshape(1, -1)
+                            print(f"Subtracting {contact.contact_force()} from {key}.{bodyA_name}")
+                        elif bodyB_name in carry[key].keys():
+                            carry_next[key][bodyB_name] += Tensor(contact.contact_force()).reshape(1, -1)
+                            print(f"Adding {contact.contact_force()} to {key}.{bodyB_name}")
+                        
+
+                if plant.HasOutputPort(key):
+                    carry_next[key] = plant.GetOutputPort(key).Eval(new_plant_context).reshape(1, -1)
+                    print(f"Writing {carry_next[key]} to {key}")
+        return carry_next
+
     def sim_step(self, x: Tensor, carry: Tensor) -> Tuple[Tensor, Tensor]:
         """Simulate forward in time one step.
 
@@ -128,7 +167,6 @@ class DrakeSystem(System):
         """
         # pylint: disable=E1103
         assert x.shape == torch.Size([self.space.n_x])
-        assert carry.dim() == 1
 
         sim = self.plant_diagram.sim
         plant = self.plant_diagram.plant
@@ -144,4 +182,7 @@ class DrakeSystem(System):
         x_next = DrakeStateConverter.context_to_state(
             plant, new_plant_context, self.plant_diagram.model_ids, self.space)
 
-        return Tensor(x_next), carry
+        carry_next = self.populate_carry(carry)
+        #input("Step...")
+
+        return Tensor(x_next), carry_next

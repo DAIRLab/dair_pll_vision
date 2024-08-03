@@ -14,12 +14,13 @@ such as a UKF estimator or an RNN.
 """
 from abc import ABC
 from dataclasses import dataclass, field
-from typing import Tuple, Callable, Optional, Dict
+from typing import Tuple, Callable, Optional, Dict, List, Union
 
 import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import Module
+from tensordict.tensordict import TensorDictBase
 
 from dair_pll import state_space
 from dair_pll.integrator import Integrator
@@ -42,6 +43,7 @@ class SystemSummary:
     scalars: Dict[str, float] = field(default_factory=dict)
     videos: Dict[str, Tuple[np.ndarray, int]] = field(default_factory=dict)
     meshes: Dict[str, MeshSummary] = field(default_factory=dict)
+    overlaid_scalars: Optional[List[Dict[str, float]]] = None
 
 
 class System(ABC, Module):
@@ -189,3 +191,26 @@ class System(ABC, Module):
         assert statistics is not None
         assert self is not None
         return SystemSummary()
+
+    def get_regularization_terms(self, x: Tensor, u: Tensor,
+                                 x_plus: Tensor) -> List[Tensor]:
+        """Return a list of possible regularization terms.  This template
+        returns no regularizers.
+        """
+        return []
+
+    def construct_state_tensor(
+            self, data_state: Union[Tensor, TensorDictBase]) -> Tensor:
+        """
+        Args:
+            data_state: Tensor coming from the TrajectorySet Dataloader, this
+              class expects a TensorDict, shape [batch, ?]
+
+        Returns:
+            Full state tensor (adding traj parameters) shape [batch, n_x_full]
+        """
+        # TODO: HACK "state" is hard-coded, switch to local arg
+        if isinstance(data_state, TensorDictBase):
+            return data_state["state"]
+
+        return data_state

@@ -121,7 +121,7 @@ class StateSpace(ABC):
 
         Returns:
             ``(*, n_v)`` element of Lie algebra g defining the transformation
-              from ``q_1`` to ``q_2``
+            from ``q_1`` to ``q_2``
         """
 
     @abstractmethod
@@ -373,7 +373,7 @@ class StateSpace(ABC):
         Returns:
             ``(*, n_x)`` tensor, projection of ``x`` onto G x g.
         """
-        assert x.shape[-1] == self.n_x
+        assert x.shape[-1] == self.n_x, f"State Space Size Mismatch: {x.shape[-1]} != {self.n_x}"
         return self.x(self.project_configuration(self.q(x)), self.v(x))
 
     def project_derivative(self, x: Tensor, dt: float) -> Tensor:
