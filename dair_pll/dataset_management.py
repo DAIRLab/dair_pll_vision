@@ -221,8 +221,7 @@ class ExperimentDataManager:
             trajectories = [
                 torch.load(
                     file_utils.trajectory_file(
-                        self.trajectory_dir, trajectory_index),
-                    weights_only=True)
+                        self.trajectory_dir, trajectory_index))
                 for trajectory_index in trajectory_indices
             ]
             trajectory_set.add_trajectories(trajectories, trajectory_indices)

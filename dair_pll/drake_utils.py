@@ -377,8 +377,14 @@ class MultibodyPlantDiagram:
         # Gravcomp
         # TODO: this is a HACK, find principled way of doing gravcomp
         if 'robot' in urdfs.keys():
-            plant.set_gravity_enabled(
-                plant.GetModelInstanceByName("robot"), False)
+            if urdfs['robot'].endswith('franka_with_ee.urdf'):
+                # Don't add gravity compensation to Franka for vision robot
+                # experiments, since we use the recorded Franka efforts that
+                # already include all torque including gravity.
+                pass
+            else:
+                plant.set_gravity_enabled(
+                    plant.GetModelInstanceByName("robot"), False)
 
         # Finalize multibody plant.
         plant.Finalize()

@@ -2,7 +2,7 @@
 project."""
 
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, cast, Dict
+from typing import List, Tuple, Optional, cast, Dict, Union, Any
 
 import os.path as op
 import re
@@ -10,6 +10,7 @@ import time
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
+from tensordict.tensordict import TensorDictBase
 
 from dair_pll import file_utils
 from dair_pll.data_config import DataConfig
@@ -35,7 +36,8 @@ VISION_SYSTEMS = ['vision_bottle', VISION_CUBE_SYSTEM, 'vision_egg',
                   'vision_crushedcan', 'vision_duck', 'vision_gallon',
                   'vision_greencan', 'vision_hotdog', 'vision_icetray',
                   'vision_mug', 'vision_oatly', 'vision_pinkcan', 'vision_stapler',
-                  'vision_styrofoam', 'vision_toothpaste']
+                  'vision_styrofoam', 'vision_toothpaste',
+                  'vision_robot_bakingbox_sticky_A']
 
 
 @dataclass
@@ -407,3 +409,29 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         self.wandb_manager.update(epoch, epoch_vars,
                                   learned_system_summary.videos,
                                   learned_system_summary.meshes)
+
+
+class VisionRobotExperiment(VisionExperiment):
+    """Class for vision experiments with robot interaction."""
+
+    def __init__(self, config: VisionExperimentConfig) -> None:
+        super().__init__(config)
+
+    def get_loss_args(self,
+                      x_past: TensorDictBase,
+                      x_future: TensorDictBase,
+                      system: System
+                      ) -> Dict[str, Any]:
+        """TODO"""
+        assert isinstance(x_past, TensorDictBase)
+        assert isinstance(x_future, TensorDictBase)
+
+        # Build the state tensors.
+        # TODO do this from 'robot_state' and 'object_state' keys.
+        past = system.construct_state_tensor(x_past[..., -1])
+        plus = system.construct_state_tensor(x_future[..., 0])
+
+        # Get the control from the past state.
+        control = past['robot_effort'].reshape(-1, 1)
+
+        return {'x': past, 'u': control, 'x_plus': plus}

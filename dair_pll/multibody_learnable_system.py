@@ -25,13 +25,14 @@ from multiprocessing import pool
 import os
 from os import path
 import pdb
-from typing import List, Tuple, Optional, Dict, cast
+from typing import List, Tuple, Optional, Dict, cast, Union
 
 import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import Module, ParameterList, Parameter
 import torch.nn as nn
+from tensordict.tensordict import TensorDict, TensorDictBase
 
 from dair_pll import urdf_utils, tensor_utils, file_utils
 from dair_pll.drake_system import DrakeSystem
@@ -543,4 +544,33 @@ class MultibodyLearnableSystem(System):
             states = torch.cat((states, state_i), dim=0)
 
         return points, directions, impulses_flat/self.dt, states
-    
+
+    def construct_state_tensor(
+            self, data_state: Union[Tensor, TensorDictBase]) -> Tensor:
+        """
+        Args:
+            data_state: Tensor coming from the TrajectorySet Dataloader, this
+              class expects a TensorDict, shape [batch, ?]
+
+        Returns:
+            Full state tensor (adding traj parameters) shape [batch, n_x_full]
+        """
+        pdb.set_trace()
+        # Handle single-URDF case first.
+        if len(self.init_urdfs.keys()) == 1:
+            if isinstance(data_state, Tensor):
+                return data_state
+            if isinstance(data_state, TensorDictBase):
+                # TODO: HACK "state" is hard-coded, switch to local arg
+                return data_state["state"]
+
+        # For multi-URDF case, enforce that the input is a TensorDict.
+        assert isinstance(data_state, TensorDictBase), 'For multi-URDF ' + \
+            f'cases, data_state must be a TensorDict, but got {data_state=}.'
+
+        # Define system_state as a concatenation of the states of all URDFs, in
+        # the order that matches the Drake plant.
+        pdb.set_trace()
+        # TODO
+
+        return system_state

@@ -13,8 +13,9 @@ from torch import Tensor
 from dair_pll import file_utils
 from dair_pll.data_config import TrajectorySliceConfig
 from dair_pll.vision_config import VisionDataConfig, VisionExperiment, \
-    VisionExperimentConfig, VISION_SYSTEMS, VISION_CUBE_SYSTEM, \
-    VISION_PRISM_SYSTEM, VISION_TOBLERONE_SYSTEM, VISION_MILK_SYSTEM
+    VisionExperimentConfig, VisionRobotExperiment, VISION_SYSTEMS, \
+    VISION_CUBE_SYSTEM, VISION_PRISM_SYSTEM, VISION_TOBLERONE_SYSTEM, \
+    VISION_MILK_SYSTEM
 from dair_pll.drake_experiment import DrakeSystemConfig, \
     MultibodyLearnableSystemConfig, MultibodyLosses
 from dair_pll.experiment import default_epoch_callback
@@ -31,6 +32,8 @@ CUBE_MESH_URDF_ASSET = 'bundlesdf_cube_mesh.urdf'
 PRISM_MESH_URDF_ASSET = 'bundlesdf_prism_mesh.urdf'
 TOBLERONE_MESH_URDF_ASSET = 'bundlesdf_toblerone_mesh.urdf'
 MILK_MESH_URDF_ASSET = 'bundlesdf_milk_mesh.urdf'
+# Franka URDF for robot experiments.
+FRANKA_URDF_ASSET = 'franka_with_ee.urdf'
 
 MESH_TYPE = 'mesh'
 CUBE_URDFS = {MESH_TYPE: CUBE_MESH_URDF_ASSET}
@@ -42,8 +45,11 @@ URDFS = {VISION_CUBE_SYSTEM: CUBE_URDFS,
          VISION_TOBLERONE_SYSTEM: TOBLERONE_URDFS,
          VISION_MILK_SYSTEM: MILK_URDFS}
 
-# TODO
-FRANKA_URDF_ASSET = 'franka_with_ee.urdf'
+ROBOT_CONSTANT_BODIES = [
+    'panda_link0', 'panda_link1', 'panda_link2', 'panda_link3', 'panda_link4',
+    'panda_link5', 'panda_link6', 'panda_link7', 'end_effector_base',
+    'end_effector_link', 'end_effector_tip'
+]
 
 # Data configuration.
 DT = 0.0333 #0.0068 # 1/frame rate of the camera
@@ -82,6 +88,7 @@ LRS = {VISION_CUBE_SYSTEM: CUBE_LR,
        'vision_stapler': 1e-3,
        'vision_styrofoam': 1e-3,
        'vision_toothpaste': 1e-3,
+       'vision_robot_bakingbox_sticky_A': 1e-3,
        }
 CUBE_WD = 0.0
 PRISM_WD = 0.0
@@ -113,6 +120,7 @@ WDS = {VISION_CUBE_SYSTEM: CUBE_WD,
        'vision_stapler': 0.0,
        'vision_styrofoam': 0.0,
        'vision_toothpaste': 0.0,
+       'vision_robot_bakingbox_sticky_A': 0.0,
 }
 EPOCHS = 200 #500
 PATIENCE = 100 #EPOCHS
@@ -197,7 +205,8 @@ def main(pll_run_id: str = "",
          w_diss: float = DEFAULT_W_DISS,
          w_pen: float = DEFAULT_W_PEN,
          w_bsdf: float = DEFAULT_W_BSDF,
-         use_bundlesdf_mesh: bool = True):
+         use_bundlesdf_mesh: bool = True,
+         is_robot_experiment: bool = False):
     """Execute ContactNets basic example on a system.
 
     Args:
@@ -224,6 +233,7 @@ def main(pll_run_id: str = "",
         use_bundlesdf_mesh: Whether to use the mesh from BundleSDF or the
           default URDF for the system (warning: the default URDFs are not
           origin-aligned to the BundleSDF tracking origin).
+        is_robot_experiment: Whether this is a robot experiment.
     """
     # pylint: disable=too-many-locals, too-many-arguments
     if pll_run_id == "":
@@ -246,7 +256,8 @@ def main(pll_run_id: str = "",
          + f'\n\tw_pen: {w_pen}' \
          + f'\n\tw_bsdf: {w_bsdf}' \
          + f'\n\tusing BundleSDF mesh: {use_bundlesdf_mesh}' \
-         + f'\n\tand skipping video generation: {skip_videos} \n')
+         + f'\n\tskipping video generation: {skip_videos}' \
+         + f'\n\tand is robot experiment: {is_robot_experiment} \n')
     
     # First step, clear out data on disk for a fresh start.
     asset_name, tracker, storage_name = get_storage_names(
@@ -268,7 +279,7 @@ def main(pll_run_id: str = "",
                                        patience=PATIENCE,
                                        epochs=EPOCHS)
 
-    # Describes the ground truth system; infers everything from the URDF.
+    # Describes the ground truth system; infers everything from the URDFs.
     # This is a configuration for a DrakeSystem, which wraps a Drake simulation
     # for the described URDFs.
     if use_bundlesdf_mesh and tracker != 'tagslam' and w_bsdf > 0:
@@ -280,28 +291,38 @@ def main(pll_run_id: str = "",
     else:
         urdf_asset = URDFS[VISION_CUBE_SYSTEM][MESH_TYPE] #[system][MESH_TYPE]
         urdf = file_utils.get_asset(urdf_asset)
-    urdfs = {system: urdf}
+    urdfs = {'object': urdf}
+    if is_robot_experiment:
+        urdfs['robot'] = file_utils.get_asset(FRANKA_URDF_ASSET)
     base_config = DrakeSystemConfig(urdfs=urdfs)
 
     # Describes the learnable system. The MultibodyLearnableSystem type learns
     # a multibody system, which is initialized as the system in the given URDFs.
-    loss = MultibodyLosses.VISION_LOSS if contactnets else \
-        MultibodyLosses.PREDICTION_LOSS
-    inertia_mode = InertiaLearn(
-        mass=False, com=learn_inertia=='all', inertia=learn_inertia=='all')
+    # Don't learn the mass even if learning the rest of the inertia.
+    # TODO could reconsider this for robot experiments.
     learnable_config = MultibodyLearnableSystemConfig(
-      urdfs=urdfs, loss=loss,
-      pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
-      w_pred=w_pred, w_comp=w_comp, w_diss=w_diss, w_pen=w_pen, w_bsdf=w_bsdf,
-      inertia_mode=inertia_mode, represent_geometry_as='mesh'
+        urdfs=urdfs,
+        loss = MultibodyLosses.VISION_LOSS if contactnets else \
+            MultibodyLosses.PREDICTION_LOSS,
+        constant_bodies = [] if is_robot_experiment else ROBOT_CONSTANT_BODIES,
+        inertia_mode = InertiaLearn(
+            mass=False, com=learn_inertia=='all', inertia=learn_inertia=='all'),
+        pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
+        w_pred=w_pred, w_comp=w_comp, w_diss=w_diss, w_pen=w_pen,
+        w_bsdf=w_bsdf, represent_geometry_as='mesh'
     )
 
-    # How to slice trajectories into training datapoints.  Use the "state" key
-    # for the past and future information to pass.
+    # How to slice trajectories into training datapoints.
+    if is_robot_experiment:
+        previous_state_keys = ['object_state', 'robot_state', 'robot_effort']
+        future_state_keys = ['object_state', 'robot_state']
+    else:
+        previous_state_keys = ['state']
+        future_state_keys = ['state']
     slice_config = TrajectorySliceConfig(
         t_prediction=1 if contactnets else T_PREDICTION,
-        his_state_keys=["state"],
-        pred_state_keys=["state"])
+        his_state_keys=previous_state_keys,
+        pred_state_keys=future_state_keys)
 
     # Describes configuration of the data.
     data_config = VisionDataConfig(
@@ -335,7 +356,8 @@ def main(pll_run_id: str = "",
 
     # Makes experiment.
     print('Making experiment.')
-    experiment = VisionExperiment(experiment_config)
+    experiment = VisionRobotExperiment(experiment_config) if \
+        is_robot_experiment else VisionExperiment(experiment_config)
 
     # No need to prepare data for vision experiments since all assets from the
     # asset directory are used.
@@ -440,9 +462,15 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
     assert start_toss <= end_toss, f'Invalid toss range: {start_toss} ' + \
         f'-{end_toss} inferred from {vision_asset=}.'
 
-    main(run_name, system, start_toss, end_toss, cycle_iteration, bundlesdf_id,
-         contactnets, regenerate, pretrained, learn_inertia, skip_videos,
-         clear_data, w_pred, w_comp, w_diss, w_pen, w_bsdf)
+    is_robot_experiment = system.startswith('vision_robot')
+
+    main(pll_run_id=run_name, system=system, start_toss=start_toss,
+         end_toss=end_toss, cycle_iteration=cycle_iteration,
+         bundlesdf_id=bundlesdf_id, contactnets=contactnets,
+         regenerate=regenerate, pretrained_icnn_weights_filepath=pretrained,
+         learn_inertia=learn_inertia, skip_videos=skip_videos,
+         clear_data=clear_data, w_pred=w_pred, w_comp=w_comp, w_diss=w_diss,
+         w_pen=w_pen, w_bsdf=w_bsdf, is_robot_experiment=is_robot_experiment)
 
 
 
