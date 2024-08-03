@@ -25,7 +25,7 @@ for eg_vision_cube in os.listdir(file_utils.ASSETS_DIR):
 
         print(f'\n===== Checking {eg_vision_cube}/{subfolder} =====')
         toss_folder = op.join(vision_folder, subfolder, 'toss')
-        toss_num = int(subfolder.split('_')[1])
+        toss_num = int(subfolder.split('_')[-1])
 
         # First check for tagslam.pt.
         if 'tagslam.pt' in os.listdir(toss_folder):
