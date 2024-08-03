@@ -5,8 +5,15 @@
 <!-- |      1) Lacrosse ball end effector on a stick, matching the physical end        | -->
 <!-- |         effector used for the C3 experiments.                                   | -->
 <!-- |      2) No collision geometry except for the ball end effector.                 | -->
+<!-- |      3) Offset between a "worldfixed" link and Franka link 0 that matches the   | -->
+<!-- |         measured height offset between the toss surface and Franka bottom plane | -->
+<!-- |         in the robot interaction dataset.  The toss surface in PLL is always    | -->
+<!-- |         assumed to be at z=0.                                                   | -->
 <!-- =================================================================================== -->
 <robot xmlns:drake="http://drake.mit.edu" name="panda">
+    <!-- PLL looks for any links named 'worldfixed' and fixes them to the world
+    with identity tranformation between them. -->
+    <link name="worldfixed" />
     <link name="panda_link0">
         <inertial>
             <mass value="2.92"/>
@@ -104,6 +111,15 @@
             </geometry>
         </collision> -->
     </link>
+    <!-- This joint establishes the location of the Franka wrt a z=0 toss
+    surface.  The xy offset should be 0, and the z offset was measured to be the
+    Franka is approximately 8.7mm higher than the toss surface. -->
+    <joint name="fixed_franka" type="fixed">
+        <origin rpy="0 0 0" xyz="0 0 0.0087"/>
+        <parent link="worldfixed"/>
+        <child link="panda_link0"/>
+    </joint>
+
     <link name="panda_link1">
         <inertial>
             <mass value="2.74"/>
@@ -590,7 +606,11 @@
         <inertial>
             <origin rpy="0 0 0" xyz="0 0 -0.0048"/>
             <mass value="0.0779312"/>
-            <inertia ixx="0.0000193318083" iyy="0.0000193318083" izz="0.0000386636166" ixy="0" ixz="0" iyz="0"/>
+            <inertia
+                ixx="1.9930319916000003e-05"
+                iyy="1.9930319916000003e-05"
+                izz="3.866361660000001e-05"
+                ixy="0" ixz="0" iyz="0"/>
         </inertial>
         <!-- <collision>
             <origin rpy="0 0 0" xyz="0 0 -0.0048"/>
@@ -609,7 +629,11 @@
         <inertial>
             <origin rpy="0 0 0" xyz="0 0 -0.0508"/>
             <mass value="0.1340688"/>
-            <inertia ixx="0.000005405989188" iyy="0.000005405989188" izz="0.000010811978376" ixy="0" ixz="0" iyz="0"/>
+            <inertia
+                ixx="0.00012073375853199997"
+                iyy="0.00012073375853199997"
+                izz="1.0811978376e-05"
+                ixy="0" ixz="0" iyz="0"/>
         </inertial>
         <visual>
             <origin rpy="0 0 0" xyz="0 0 -0.0508"/>
@@ -627,17 +651,21 @@
         <inertial>
             <origin rpy="0 0 0" xyz="0 0 0.0"/>
             <mass value="0.057"/>
-            <inertia ixx="0.0" iyy="0.0" izz="0.0" ixy="0" ixz="0" iyz="0"/>
+            <inertia
+                ixx="8.669700000000001e-06"
+                iyy="8.669700000000001e-06"
+                izz="8.669700000000001e-06"
+                ixy="0" ixz="0" iyz="0"/>
         </inertial>
         <visual>
-            <origin rpy="0 0 0" xyz="0 0 0.0"/>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
             <geometry>
                 <sphere radius="0.0195"/>
             </geometry>
             <material name="black"/>
         </visual>
         <collision>
-            <origin rpy="0 0 0" xyz="0 0 0.0"/>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
             <geometry>
                 <sphere radius="0.0195"/>
             </geometry>
