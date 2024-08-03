@@ -157,26 +157,26 @@ class LagrangianTerms(Module):
                 print(f'Printing {row=}, {col=}')
 
                 # Save the Drake expression.
-                with open(f'/home/minghz/Desktop/symbolic_pytorch/mass_matrix_{col}_{row}.txt',
+                with open(f'/home/minghz/Desktop/symbolic_pytorch/mass_matrix_{row}_{col}.txt',
                           'w') as f:
-                    f.write(str(mass_matrix_expression[col, row]))
+                    f.write(str(mass_matrix_expression[row, col]))
 
                 # Save the pytorch function string.
                 _, func_string = drake_pytorch.sym_to_pytorch(
-                    mass_matrix_expression[col, row],
+                    mass_matrix_expression[row, col],
                     q,
                     body_variables,
                     simplify_computation=DEFAULT_SIMPLIFIER)
-                with open(f'/home/minghz/Desktop/symbolic_pytorch/mass_matrix_{col}_{row}_func.txt',
+                with open(f'/home/minghz/Desktop/symbolic_pytorch/mass_matrix_{row}_{col}_func.txt',
                           'w') as f:
                     f.write(func_string)
 
-        # pdb.set_trace()
-        # self.mass_matrix, _ = drake_pytorch.sym_to_pytorch(
-        #     mass_matrix_expression,
-        #     q,
-        #     body_variables,
-        #     simplify_computation=DEFAULT_SIMPLIFIER)
+        # # pdb.set_trace()
+        # # self.mass_matrix, _ = drake_pytorch.sym_to_pytorch(
+        # #     mass_matrix_expression,
+        # #     q,
+        # #     body_variables,
+        # #     simplify_computation=DEFAULT_SIMPLIFIER)
 
         u = MakeVectorVariable(plant.num_actuated_dofs(), 'u',
                                Variable.Type.CONTINUOUS)
@@ -186,25 +186,24 @@ class LagrangianTerms(Module):
 
         lagrangian_forces_expression = gamma.T @ drake_forces_expression
         print(f'\nMAKING CONTINUOUS DYNAMICS DRAKE PYTORCH EXPRESSION\n')
-        # pdb.set_trace()
+        pdb.set_trace()
         for row in range(13):
-            for col in range(13):
-                print(f'Printing {row=}, {col=}')
+            print(f'Printing {row=}')
 
-                # Save the Drake expression.
-                with open(f'/home/minghz/Desktop/symbolic_pytorch/lagrangian_forces_{col}_{row}.txt',
-                          'w') as f:
-                    f.write(str(lagrangian_forces_expression[col, row]))
+            # Save the Drake expression.
+            with open(f'/home/minghz/Desktop/symbolic_pytorch/lagrangian_forces_{row}.txt',
+                        'w') as f:
+                f.write(str(lagrangian_forces_expression[row]))
 
-                # Save the pytorch function string.
-                _, func_string = drake_pytorch.sym_to_pytorch(
-                    lagrangian_forces_expression[col, row],
-                    q, v, u,
-                    body_variables,
-                    simplify_computation=DEFAULT_SIMPLIFIER)
-                with open(f'/home/minghz/Desktop/symbolic_pytorch/lagrangian_forces_{col}_{row}_func.txt',
-                          'w') as f:
-                    f.write(func_string)
+            # Save the pytorch function string.
+            _, func_string = drake_pytorch.sym_to_pytorch(
+                lagrangian_forces_expression[row],
+                q, v, u,
+                body_variables,
+                simplify_computation=DEFAULT_SIMPLIFIER)
+            with open(f'/home/minghz/Desktop/symbolic_pytorch/lagrangian_forces_{row}_func.txt',
+                        'w') as f:
+                f.write(func_string)
         exit()
         self.lagrangian_forces, _ = drake_pytorch.sym_to_pytorch(
             lagrangian_forces_expression,
