@@ -1,0 +1,4 @@
+def my_func(*torch_args):
+  batch_dims = torch_args[0].shape[:-1]
+  var_0 = torch_args[1][..., 0, 0]
+  return var_0
