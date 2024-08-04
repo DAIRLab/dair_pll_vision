@@ -145,19 +145,19 @@ class LagrangianTerms(Module):
 
         body_param_tensors, body_variables, bodies = \
             LagrangianTerms.extract_body_parameters_and_variables(
-                plant, plant_diagram.model_ids, context)
+                plant, plant_diagram.model_ids, context,
+                constant_bodies=constant_bodies)
 
         mass_matrix_expression = \
             gamma.T @ plant.CalcMassMatrixViaInverseDynamics(context) @ gamma
 
         print(f'\nMAKING MASS DRAKE PYTORCH EXPRESSION\n')
-        # pdb.set_trace()
         for row in range(13):
             for col in range(13):
                 print(f'Printing {row=}, {col=}')
 
                 # Save the Drake expression.
-                with open(f'/home/minghz/Desktop/symbolic_pytorch/mass_matrix_{row}_{col}.txt',
+                with open(f'/home/minghz/Desktop/simpler_symbolic_pytorch/mass_matrix_{row}_{col}.txt',
                           'w') as f:
                     f.write(str(mass_matrix_expression[row, col]))
 
@@ -167,7 +167,7 @@ class LagrangianTerms(Module):
                     q,
                     body_variables,
                     simplify_computation=DEFAULT_SIMPLIFIER)
-                with open(f'/home/minghz/Desktop/symbolic_pytorch/mass_matrix_{row}_{col}_func.txt',
+                with open(f'/home/minghz/Desktop/simpler_symbolic_pytorch/mass_matrix_{row}_{col}_func.txt',
                           'w') as f:
                     f.write(func_string)
 
@@ -186,12 +186,11 @@ class LagrangianTerms(Module):
 
         lagrangian_forces_expression = gamma.T @ drake_forces_expression
         print(f'\nMAKING CONTINUOUS DYNAMICS DRAKE PYTORCH EXPRESSION\n')
-        pdb.set_trace()
         for row in range(13):
             print(f'Printing {row=}')
 
             # Save the Drake expression.
-            with open(f'/home/minghz/Desktop/symbolic_pytorch/lagrangian_forces_{row}.txt',
+            with open(f'/home/minghz/Desktop/simpler_symbolic_pytorch/lagrangian_forces_{row}.txt',
                         'w') as f:
                 f.write(str(lagrangian_forces_expression[row]))
 
@@ -201,11 +200,11 @@ class LagrangianTerms(Module):
                 q, v, u,
                 body_variables,
                 simplify_computation=DEFAULT_SIMPLIFIER)
-            with open(f'/home/minghz/Desktop/symbolic_pytorch/lagrangian_forces_{row}_func.txt',
+            with open(f'/home/minghz/Desktop/simpler_symbolic_pytorch/lagrangian_forces_{row}_func.txt',
                         'w') as f:
                 f.write(func_string)
         exit()
-        self.lagrangian_forces, _ = drake_pytorch.sym_to_pytorch(
+        self.lagrangian_forces, _ = drake_pytorch.sym_to_pytorch(  # started 1:14pm
             lagrangian_forces_expression,
             q,
             v,
@@ -233,7 +232,8 @@ class LagrangianTerms(Module):
     def extract_body_parameters_and_variables(
             plant: MultibodyPlant_[Expression],
             model_ids: List[ModelInstanceIndex],
-            context: Context
+            context: Context,
+            constant_bodies: List[str] = []
     ) -> Tuple[List[Tensor], np.ndarray, List[DrakeBody]]:
         """Generates parameterization and symbolic variables for all bodies.
 
@@ -246,6 +246,7 @@ class LagrangianTerms(Module):
             plant: Symbolic plant from which to extract parameterization.
             model_ids: List of models in plant.
             context: Plant's symbolic context.
+            constant_bodies: List of bodies to exclude from parameterization.
 
         Returns:
             (n_bodies, 10) ``theta`` parameters initial conditions.
@@ -257,6 +258,9 @@ class LagrangianTerms(Module):
         body_parameter_list = []
         body_variable_list = []
         for body, body_id in zip(all_bodies, all_body_ids):
+            # Don't parameterize constant bodies, whose values stay fixed.
+            if body.name() in constant_bodies:  continue
+
             mass = Variable(f'{body_id}_m', Variable.Type.CONTINUOUS)
             p_BoBcm_B = MakeVectorVariable(CENTER_OF_MASS_DOF, f'{body_id}_com',
                                            Variable.Type.CONTINUOUS)

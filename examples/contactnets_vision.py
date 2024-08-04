@@ -304,7 +304,7 @@ def main(pll_run_id: str = "",
         urdfs=urdfs,
         loss = MultibodyLosses.VISION_LOSS if contactnets else \
             MultibodyLosses.PREDICTION_LOSS,
-        constant_bodies = [] if is_robot_experiment else ROBOT_CONSTANT_BODIES,
+        constant_bodies = ROBOT_CONSTANT_BODIES if is_robot_experiment else [],
         inertia_mode = InertiaLearn(
             mass=False, com=learn_inertia=='all', inertia=learn_inertia=='all'),
         pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
