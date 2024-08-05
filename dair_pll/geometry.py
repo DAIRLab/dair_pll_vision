@@ -278,8 +278,11 @@ class Polygon(SparseVertexConvexCollisionGeometry):
         mesh = trimesh.Trimesh(vertices.numpy(), [])
         hull = mesh.convex_hull
         hull_vertices = Tensor(hull.vertices)/_NOMINAL_HALF_LENGTH
-        self.vertices = Parameter(
+        self.vertices_parameter = Parameter(
             hull_vertices.clone(), requires_grad=learnable)
+
+    def get_fcl_geometry(self) -> fcl.CollisionGeometry:
+        raise NotImplementedError
 
     def get_vertices(self, directions: Tensor) -> Tensor:
         """Return batched view of static vertex set"""
@@ -647,7 +650,7 @@ class PydrakeToCollisionGeometryFactory:
             return DeepSupportConvex(vertices, learnable=learnable)
 
         if represent_geometry_as == 'polygon':
-            return Polygon(vertices, learnable)
+            return Polygon(vertices, learnable=learnable)
 
         raise NotImplementedError(f'Cannot presently represent a ' + \
             f'DrakeMesh() as {represent_geometry_as} type.')
