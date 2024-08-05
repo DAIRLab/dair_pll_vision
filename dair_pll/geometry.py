@@ -555,7 +555,8 @@ class PydrakeToCollisionGeometryFactory:
         ) -> CollisionGeometry:
         """Converts abstract ``pydrake.geometry.shape`` to
         ``CollisionGeometry`` according to the desired ``represent_geometry_as``
-        type.
+        type.  If the body is not learnable, then it will use the default
+        simplest type, regardless of ``represent_geometry_as``.
 
         Notes:
             The desired ``represent_geometry_as`` type only will affect
@@ -594,6 +595,9 @@ class PydrakeToCollisionGeometryFactory:
                     learnable: bool = True
         ) -> Union[Box, Polygon]:
         """Converts ``pydrake.geometry.Box`` to ``Box`` or ``Polygon``."""
+        if not learnable:
+            represent_geometry_as = 'box'
+
         if represent_geometry_as == 'box':
             half_widths = 0.5 * Tensor(np.copy(drake_box.size()))
             return Box(half_widths, 4, learnable)
@@ -608,15 +612,19 @@ class PydrakeToCollisionGeometryFactory:
     def convert_sphere(drake_sphere: DrakeSphere, represent_geometry_as: str,
                        learnable: bool = True
         ) -> Union[Sphere, Polygon]:
-        """Converts ``pydrake.geometry.Box`` to ``Box`` or ``Polygon``."""
-        if represent_geometry_as == 'box':
+        """Converts ``pydrake.geometry.Sphere`` to ``Sphere``."""
+        if not learnable:
+            represent_geometry_as = 'sphere'
+
+        if represent_geometry_as == 'sphere':
             return Sphere(torch.tensor([drake_sphere.radius()]), learnable)
 
         if represent_geometry_as == 'polygon':
             pass # TODO
 
-        raise NotImplementedError(f'Cannot presently represent a DrakeBox()' + \
-            f'as {represent_geometry_as} type.')
+        raise NotImplementedError(
+            f'Cannot presently represent a DrakeSphere() as ' + \
+            f'{represent_geometry_as} type.')
 
     @staticmethod
     def convert_plane() -> Plane:
@@ -728,7 +736,8 @@ class GeometryCollider:
 
     @staticmethod
     def collide_convex_convex(
-            geometry_a: BoundedConvexCollisionGeometry, geometry_b: BoundedConvexCollisionGeometry,
+            geometry_a: BoundedConvexCollisionGeometry,
+            geometry_b: BoundedConvexCollisionGeometry,
             R_AB: Tensor,
             p_AoBo_A: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Implementation of ``GeometryCollider.collide()`` when
