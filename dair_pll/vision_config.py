@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, cast, Dict, Union, Any, Callable
 
 import os.path as op
+import numpy as np
 import pdb
 import re
 import time
@@ -20,7 +21,8 @@ from dair_pll.drake_experiment import DrakeMultibodyLearnableExperimentConfig, \
     DrakeMultibodyLearnableExperiment, MultibodyLosses, \
     MultibodyLearnableSystemConfig
 from dair_pll.experiment import LossCallbackCallable, TrainingState, \
-    LOGGING_DURATION
+    LOGGING_DURATION, StatisticsDict, StatisticsValue, TRAIN_SET, LOSS_NAME, \
+    AVERAGE_TAG
 from dair_pll.geometry import DeepSupportConvex
 from dair_pll.system import System
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
@@ -497,6 +499,67 @@ class VisionRobotExperiment(VisionExperiment):
 
         return x_u_xplus_dict
 
+    def evaluate_systems_on_sets(
+            self, systems: Dict[str, System],
+            sets: Dict[str, TrajectorySet]) -> StatisticsDict:
+        """Overwritten to exclude some metrics that aren't well-defined (yet)
+        for robot interaction epxeriments."""
+        stats = {}  # type: StatisticsDict
+
+        def to_json(possible_tensor: Union[float, List, Tensor]) -> \
+                StatisticsValue:
+            """Converts tensor to :class:`~np.ndarray`, which enables saving
+            stats as json."""
+            if isinstance(possible_tensor, list):
+                return [to_json(value) for value in possible_tensor]
+            if torch.is_tensor(possible_tensor):
+                tensor = cast(Tensor, possible_tensor)
+                return tensor.detach().cpu().numpy()
+
+            assert isinstance(possible_tensor, float)
+            return possible_tensor
+
+        for set_name, trajectory_set in sets.items():
+            # Avoid error case if one of the sets is empty (e.g. test set).
+            if trajectory_set.indices.shape[0] == 0:
+                continue
+
+            slices_loader = DataLoader(trajectory_set.slices,
+                                       batch_size=128,
+                                       shuffle=False)
+
+            # Skip velocity square error.
+
+            for system_name, system in systems.items():
+                # Skip prediction loss.
+
+                # The training loss on the training set will get added to the
+                # stats dictionary in per_epoch_evaluation.  The below computes
+                # the same loss metric but for the other sets (val/test).
+                if set_name != TRAIN_SET:
+                    model_loss_list = []
+                    for batch_x, batch_y in slices_loader:
+                        model_loss_list.append(
+                            self.loss_callback(batch_x, batch_y, system, True))
+                    model_loss = torch.cat(model_loss_list)
+                    loss_name = f'{set_name}_{system_name}_{LOSS_NAME}'
+                    stats[loss_name] = to_json(model_loss)
+
+                # Skip trajectory predictions.
+
+                # Skip extra metrics and auxillary losses.
+
+        summary_stats = {}  # type: StatisticsDict
+        for key, stat in stats.items():
+            if isinstance(stat, np.ndarray):
+                if len(stat) > 0:
+                    if isinstance(stat[0], float):
+                        summary_stats[f'{key}_{AVERAGE_TAG}'] = np.average(stat)
+
+        stats.update(summary_stats)
+        return stats
+
+
 
 """Precomputed mass matrix and lagrangian forces expressions for robot
 interaction vision experiments."""
@@ -562,6 +625,7 @@ def get_precomputed_lagrangian_forces_function(
         lagrangian_forces = torch.zeros(batch_dims + (13,))
         for row in range(13):
             lagrangian_forces[..., row] = vector_of_functions[row](*torch_args)
+            print(f'ok {lagrangian_forces.shape}')
         return lagrangian_forces
 
     return lagrangian_forces_func

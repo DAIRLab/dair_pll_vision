@@ -296,7 +296,7 @@ class HomogeneousICNN(Module):
         _, output = self.network_activations(directions)
         return output
 
-    def forward(self, directions: Tensor) -> Tensor:
+    def forward(self, directions: Tensor, *kwargs) -> Tensor:
         """Evaluates support function Jacobian at provided inputs.
 
         Args:

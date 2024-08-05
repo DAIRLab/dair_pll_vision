@@ -21,6 +21,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Tuple, Dict, cast, Union
 from typing import Tuple, Dict, cast, Union
+import pdb
 
 import fcl  # type: ignore
 import numpy as np
@@ -378,7 +379,8 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         perturbed = tile_dim(perturbed, n_to_add, -2)
         
         perturbed += torch.cat((torch.zeros(
-            (1, 3)), 1.99 * (torch.rand((n_to_add - 1, 3)) - 0.5))).expand(perturbed.shape)
+                (1, 3)), 1.99 * (torch.rand((n_to_add - 1, 3)) - 0.5)
+            )).expand(perturbed.shape)
         perturbed /= perturbed.norm(dim=-1, keepdim=True)
 
         return self.network(perturbed)
@@ -683,15 +685,16 @@ class GeometryCollider:
         assert not geometry_a > geometry_b
 
         # case 1: half-space to compact-convex collision
-        # TODO: make function allow planes in general, not just in 1st slot
+        # TODO: make function allow planes in general, not just in 1st slot and
+        # at z=0.
         if isinstance(geometry_a, Plane) and isinstance(
                 geometry_b, BoundedConvexCollisionGeometry):
             return GeometryCollider.collide_plane_convex(
                 geometry_b, R_AB, p_AoBo_A)
-        if isinstance(geometry_a, BoundedConvexCollisionGeometry) and isinstance(
-                geometry_b, BoundedConvexCollisionGeometry):
-            return GeometryCollider.collide_convex_convex(geometry_a, geometry_b,
-                                                      R_AB, p_AoBo_A)
+        if isinstance(geometry_a, BoundedConvexCollisionGeometry) and \
+            isinstance(geometry_b, BoundedConvexCollisionGeometry):
+            return GeometryCollider.collide_convex_convex(
+                geometry_a, geometry_b, R_AB, p_AoBo_A)
         raise TypeError(
             "No type-specific implementation for geometry "
             "pair of following types:",
@@ -742,6 +745,7 @@ class GeometryCollider:
             p_AoBo_A: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Implementation of ``GeometryCollider.collide()`` when
         both geometries are ``BoundedConvexCollisionGeometry``\es."""
+        # pylint: disable=too-many-locals
 
         # Call network directly for DeepSupportConvex objects
         support_fn_a = geometry_a.support_points
@@ -751,7 +755,6 @@ class GeometryCollider:
         if isinstance(geometry_b, DeepSupportConvex):
             support_fn_b = geometry_b.network
 
-        # pylint: disable=too-many-locals
         p_AoBo_A = p_AoBo_A.unsqueeze(-2)
         original_batch_dims = p_AoBo_A.shape[:-2]
         p_AoBo_A = p_AoBo_A.view(-1, 3)
@@ -788,8 +791,14 @@ class GeometryCollider:
                 # Collision detected.
                 # Assume only 1 contact point.
                 directions[transform_index] += result.contacts[0].normal
-                nearest_points = [result.contacts[0].pos + result.contacts[0].penetration_depth/2.0 * result.contacts[0].normal,
-                    result.contacts[0].pos - result.contacts[0].penetration_depth/2.0 * result.contacts[0].normal]
+                nearest_points = [
+                    result.contacts[0].pos + \
+                        result.contacts[0].penetration_depth/2.0 * \
+                        result.contacts[0].normal,
+                    result.contacts[0].pos - \
+                        result.contacts[0].penetration_depth/2.0 * \
+                        result.contacts[0].normal
+                ]
             else:
                 result = fcl.DistanceResult()
                 fcl.distance(a_obj, b_obj, distance_request, result)
@@ -799,40 +808,30 @@ class GeometryCollider:
                 nearest_points = result.nearest_points
 
             # Record Hints == expected contact point in each object's frame
-            hints_a[transform_index] = Tensor(nearest_points[0])
+            hints_a[transform_index] = torch.tensor(nearest_points[0])
             hints_b[transform_index] = pbmm(
-                Tensor(nearest_points[1]) - p_AoBo_A[transform_index].detach(), 
-                R_AB[transform_index])
+                torch.tensor(nearest_points[1]) - \
+                    p_AoBo_A[transform_index].detach(),
+                R_AB[transform_index]
+            )
+
+        R_AC = rotation_matrix_from_one_vector(directions, 2)
 
         # Get normal directions in each object frame
         directions_A = directions / directions.norm(dim=-1, keepdim=True)
         directions_B = -pbmm(directions_A.unsqueeze(-2), R_AB).squeeze(-2)
 
-        p_AoAc_A = support_fn_a(directions_A, hints_a)
+        p_AoAc_A = support_fn_a(directions_A, hints_a).squeeze(-2)
         p_BoBc_B = support_fn_b(directions_B, hints_b)
-        p_BoBc_A = pbmm(p_BoBc_B, R_AB.transpose(-1,-2))
-        # Check Sanity of autodiff-calculated points relative to FCL
-        assert np.isclose(p_AoAc_A.detach().numpy(), hints_a.unsqueeze(-2).detach().numpy()).all()
-        assert np.isclose(p_BoBc_B.detach().numpy(), hints_b.unsqueeze(-2).detach().numpy()).all()
+        p_BoBc_A = pbmm(p_BoBc_B.unsqueeze(-2),
+                        R_AB.transpose(-1, -2)).squeeze(-2)
 
-        p_AcBc_A = -p_AoAc_A + p_AoBo_A.unsqueeze(-2) + p_BoBc_A
+        p_AcBc_A = -p_AoAc_A + p_AoBo_A + p_BoBc_A
 
-        # Unsqueeze # of witness points dimension, default 1
-        R_AC = rotation_matrix_from_one_vector(directions_A, 2).unsqueeze(-3)
-        # Assume same contact frame for all witness points
-        R_AC = R_AC.expand(p_AcBc_A.shape + (3,))
-        # Get length of witness point distance projected onto contact normal
-        phi = (p_AcBc_A * R_AC[..., 2]).sum(dim=-1)       
-        
-        # No longer necessary
-        # phi = phi.reshape(original_batch_dims + (1,))
-        # R_AC = R_AC.reshape(original_batch_dims + (1, 3, 3))
-        # p_AoAc_A = p_AoAc_A.reshape(original_batch_dims + (1, 3))
-        # p_BoBc_B = p_BoBc_B.reshape(original_batch_dims + (1, 3))
+        phi = (p_AcBc_A * R_AC[..., 2]).sum(dim=-1)
 
-        # Check outputs are sane before return
-        assert (phi.shape + (3,3,)) == R_AC.shape
-        assert phi.shape[1] == 1 # TODO: HACK Only supporting 1 contact witness point
-        assert phi.shape[1] == p_AoAc_A.shape[1]
-        assert phi.shape[1] == p_BoBc_B.shape[1]
+        phi = phi.reshape(original_batch_dims + (1,))
+        R_AC = R_AC.reshape(original_batch_dims + (1, 3, 3))
+        p_AoAc_A = p_AoAc_A.reshape(original_batch_dims + (1, 3))
+        p_BoBc_B = p_BoBc_B.reshape(original_batch_dims + (1, 3))
         return phi, R_AC, p_AoAc_A, p_BoBc_B
