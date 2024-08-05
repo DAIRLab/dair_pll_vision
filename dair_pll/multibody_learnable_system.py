@@ -25,7 +25,7 @@ from multiprocessing import pool
 import os
 from os import path
 import pdb
-from typing import List, Tuple, Optional, Dict, cast, Union
+from typing import List, Tuple, Optional, Dict, cast, Union, Callable
 
 import numpy as np
 import torch
@@ -74,7 +74,8 @@ class MultibodyLearnableSystem(System):
                  constant_bodies: List[str] = [],
                  output_urdfs_dir: Optional[str] = None,
                  pretrained_icnn_weights_filepath: Optional[str] = None,
-                 represent_geometry_as: str = 'box') -> None:
+                 represent_geometry_as: str = 'box',
+                 precomputed_functions: Dict[str, Callable] = {}) -> None:
         """Inits :py:class:`MultibodyLearnableSystem` with provided model URDFs.
 
         Implementation is primarily based on Drake. Bodies are modeled via
@@ -104,7 +105,8 @@ class MultibodyLearnableSystem(System):
             inertia_mode=inertia_mode,
             constant_bodies=constant_bodies,
             represent_geometry_as=represent_geometry_as,
-            pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath)
+            pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
+            precomputed_functions=precomputed_functions)
 
         space = multibody_terms.plant_diagram.space
         integrator = VelocityIntegrator(space, self.sim_step, dt)
@@ -555,22 +557,31 @@ class MultibodyLearnableSystem(System):
         Returns:
             Full state tensor (adding traj parameters) shape [batch, n_x_full]
         """
-        pdb.set_trace()
         # Handle single-URDF case first.
         if len(self.init_urdfs.keys()) == 1:
             if isinstance(data_state, Tensor):
                 return data_state
             if isinstance(data_state, TensorDictBase):
-                # TODO: HACK "state" is hard-coded, switch to local arg
+                # NOTE:  key "state" is hard-coded.
                 return data_state["state"]
 
         # For multi-URDF case, enforce that the input is a TensorDict.
         assert isinstance(data_state, TensorDictBase), 'For multi-URDF ' + \
             f'cases, data_state must be a TensorDict, but got {data_state=}.'
 
+        # Get the plant's expected state ordering by name.
+        state_names = self.multibody_terms.plant_diagram.plant.GetStateNames()
+
         # Define system_state as a concatenation of the states of all URDFs, in
         # the order that matches the Drake plant.
-        pdb.set_trace()
-        # TODO
+        system_state = torch.zeros((data_state.shape[0], self.space.n_x))
+
+        for model_name in self.init_urdfs.keys():
+            model_state_indices = [i for i, s in enumerate(state_names) if \
+                                   s.startswith(model_name)]
+            # NOTE:  key f'{model_name}_state' is assumed to exist containing
+            # that system's state in Drake order.
+            system_state[:, model_state_indices] = data_state[
+                f'{model_name}_state']
 
         return system_state

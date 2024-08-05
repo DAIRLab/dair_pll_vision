@@ -129,13 +129,19 @@ class LagrangianTerms(Module):
 
     def __init__(self, plant_diagram: MultibodyPlantDiagram,
                  inertia_mode: InertiaLearn = InertiaLearn(),
-                 constant_bodies: List[str] = []) -> None:
+                 constant_bodies: List[str] = [],
+                 precomputed_functions: Dict[str, Callable[[Tensor], Tensor]]={}
+                 ) -> None:
         """Inits :py:class:`LagrangianTerms` with prescribed parameters and
         functional forms.
 
         Args:
             plant_diagram: Drake MultibodyPlant diagram to extract terms from.
             inertia_mode: which inertial parameters to learn.
+            constant_bodies: List of bodies to exclude from parameterization.
+            precomputed_functions: Dictionary of precomputed functions.  Keys
+                that will be considered are 'mass_matrix' and
+                'lagrangian_forces'.
         """
         super().__init__()
 
@@ -148,69 +154,39 @@ class LagrangianTerms(Module):
                 plant, plant_diagram.model_ids, context,
                 constant_bodies=constant_bodies)
 
-        mass_matrix_expression = \
-            gamma.T @ plant.CalcMassMatrixViaInverseDynamics(context) @ gamma
+        if 'mass_matrix' not in precomputed_functions.keys():
+            mass_matrix_expression = gamma.T @ \
+                plant.CalcMassMatrixViaInverseDynamics(context) @ gamma
 
-        print(f'\nMAKING MASS DRAKE PYTORCH EXPRESSION\n')
-        for row in range(13):
-            for col in range(13):
-                print(f'Printing {row=}, {col=}')
-
-                # Save the Drake expression.
-                with open(f'/home/minghz/Desktop/simpler_symbolic_pytorch/mass_matrix_{row}_{col}.txt',
-                          'w') as f:
-                    f.write(str(mass_matrix_expression[row, col]))
-
-                # Save the pytorch function string.
-                _, func_string = drake_pytorch.sym_to_pytorch(
-                    mass_matrix_expression[row, col],
-                    q,
-                    body_variables,
-                    simplify_computation=DEFAULT_SIMPLIFIER)
-                with open(f'/home/minghz/Desktop/simpler_symbolic_pytorch/mass_matrix_{row}_{col}_func.txt',
-                          'w') as f:
-                    f.write(func_string)
-
-        # # pdb.set_trace()
-        # # self.mass_matrix, _ = drake_pytorch.sym_to_pytorch(
-        # #     mass_matrix_expression,
-        # #     q,
-        # #     body_variables,
-        # #     simplify_computation=DEFAULT_SIMPLIFIER)
-
-        u = MakeVectorVariable(plant.num_actuated_dofs(), 'u',
-                               Variable.Type.CONTINUOUS)
-        drake_forces_expression = -plant.CalcBiasTerm(
-            context) + plant.MakeActuationMatrix(
-            ) @ u + plant.CalcGravityGeneralizedForces(context)
-
-        lagrangian_forces_expression = gamma.T @ drake_forces_expression
-        print(f'\nMAKING CONTINUOUS DYNAMICS DRAKE PYTORCH EXPRESSION\n')
-        for row in range(13):
-            print(f'Printing {row=}')
-
-            # Save the Drake expression.
-            with open(f'/home/minghz/Desktop/simpler_symbolic_pytorch/lagrangian_forces_{row}.txt',
-                        'w') as f:
-                f.write(str(lagrangian_forces_expression[row]))
-
-            # Save the pytorch function string.
-            _, func_string = drake_pytorch.sym_to_pytorch(
-                lagrangian_forces_expression[row],
-                q, v, u,
+            print(f'\nMAKING MASS DRAKE PYTORCH EXPRESSION\n')
+            self.mass_matrix, _ = drake_pytorch.sym_to_pytorch(
+                mass_matrix_expression,
+                q,
                 body_variables,
                 simplify_computation=DEFAULT_SIMPLIFIER)
-            with open(f'/home/minghz/Desktop/simpler_symbolic_pytorch/lagrangian_forces_{row}_func.txt',
-                        'w') as f:
-                f.write(func_string)
-        exit()
-        self.lagrangian_forces, _ = drake_pytorch.sym_to_pytorch(  # started 1:14pm
-            lagrangian_forces_expression,
-            q,
-            v,
-            u,
-            body_variables,
-            simplify_computation=DEFAULT_SIMPLIFIER)
+        else:
+            print(f'Using pre-computed mass_matrix expression.')
+            self.mass_matrix = precomputed_functions['mass_matrix']
+
+        if 'lagrangian_forces' not in precomputed_functions.keys():
+            u = MakeVectorVariable(plant.num_actuated_dofs(), 'u',
+                                Variable.Type.CONTINUOUS)
+            drake_forces_expression = -plant.CalcBiasTerm(
+                context) + plant.MakeActuationMatrix(
+                ) @ u + plant.CalcGravityGeneralizedForces(context)
+
+            lagrangian_forces_expression = gamma.T @ drake_forces_expression
+            print(f'\nMAKING CONTINUOUS DYNAMICS DRAKE PYTORCH EXPRESSION\n')
+            self.lagrangian_forces, _ = drake_pytorch.sym_to_pytorch(
+                lagrangian_forces_expression,
+                q,
+                v,
+                u,
+                body_variables,
+                simplify_computation=DEFAULT_SIMPLIFIER)
+        else:
+            print(f'Using pre-computed lagrangian_forces expression.')
+            self.lagrangian_forces = precomputed_functions['lagrangian_forces']
 
         # pylint: disable=E1103
         self.body_parameters = ParameterList()
@@ -762,7 +738,9 @@ class MultibodyTerms(Module):
                  inertia_mode: InertiaLearn = InertiaLearn(),
                  pretrained_icnn_weights_filepath: str = None,
                  constant_bodies: List[str] = [],
-                 represent_geometry_as: str = 'box') -> None:
+                 represent_geometry_as: str = 'box',
+                 precomputed_functions: Dict[str, Callable[[Tensor], Tensor]]={}
+                 ) -> None:
         """Inits :py:class:`MultibodyTerms` for system described in URDFs
 
         Interpretation is performed as a thin wrapper around
@@ -782,7 +760,10 @@ class MultibodyTerms(Module):
                 pretrained ICNN weights.
             constant_bodies: list of body names to keep constant / not learn
             represent_geometry_as: String box/mesh/polygon to determine how
-              the geometry should be represented.
+                the geometry should be represented.
+            precomputed_functions: Dictionary of function names that have been
+                precomputed offline.  Only eligible keys that will get checked
+                for are 'mass_matrix' and 'lagrangian_forces'.
         """
         super().__init__()
 
@@ -810,7 +791,8 @@ class MultibodyTerms(Module):
 
         # setup parameterization
         self.lagrangian_terms = LagrangianTerms(
-            plant_diagram, inertia_mode, constant_bodies)
+            plant_diagram, inertia_mode, constant_bodies,
+            precomputed_functions=precomputed_functions)
         self.contact_terms = ContactTerms(
             plant_diagram, represent_geometry_as, constant_bodies)
         self.geometry_body_assignment = geometry_body_assignment

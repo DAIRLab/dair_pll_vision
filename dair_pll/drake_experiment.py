@@ -60,6 +60,9 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """Weight of BundleSDF matching term in vision experiment loss."""
     represent_geometry_as: str = 'box'
     """How to represent geometry (box, mesh, or polygon)."""
+    precomputed_function_directories: Dict[str, str] = field(default_factory={})
+    """Head directory containing precomputed functions to use for continuous
+    dynamics.  Can accept keys 'mass_matrix' and/or 'lagrangian_forces'."""
 
 
 @dataclass

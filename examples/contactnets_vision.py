@@ -289,12 +289,23 @@ def main(pll_run_id: str = "",
             pll_id=pll_run_id
         )
     else:
-        urdf_asset = URDFS[VISION_CUBE_SYSTEM][MESH_TYPE] #[system][MESH_TYPE]
+        urdf_asset = URDFS[VISION_CUBE_SYSTEM][MESH_TYPE]
         urdf = file_utils.get_asset(urdf_asset)
     urdfs = {'object': urdf}
     if is_robot_experiment:
         urdfs['robot'] = file_utils.get_asset(FRANKA_URDF_ASSET)
     base_config = DrakeSystemConfig(urdfs=urdfs)
+
+    # If this is a robot experiment, use precomputed mass matrix and lagrangian
+    # forces functions.
+    if is_robot_experiment:
+        txt_function_directory = \
+            file_utils.get_asset('precomputed_vision_functions')
+        precomputed_function_directories = {
+            'mass_matrix': txt_function_directory,
+            'lagrangian_forces': txt_function_directory}
+    else:
+        precomputed_function_directories = {}
 
     # Describes the learnable system. The MultibodyLearnableSystem type learns
     # a multibody system, which is initialized as the system in the given URDFs.
@@ -309,7 +320,8 @@ def main(pll_run_id: str = "",
             mass=False, com=learn_inertia=='all', inertia=learn_inertia=='all'),
         pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
         w_pred=w_pred, w_comp=w_comp, w_diss=w_diss, w_pen=w_pen,
-        w_bsdf=w_bsdf, represent_geometry_as='mesh'
+        w_bsdf=w_bsdf, represent_geometry_as='mesh',
+        precomputed_function_directories=precomputed_function_directories
     )
 
     # How to slice trajectories into training datapoints.

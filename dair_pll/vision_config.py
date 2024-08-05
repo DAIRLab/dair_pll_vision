@@ -2,9 +2,10 @@
 project."""
 
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, cast, Dict, Union, Any
+from typing import List, Tuple, Optional, cast, Dict, Union, Any, Callable
 
 import os.path as op
+import pdb
 import re
 import time
 import torch
@@ -16,7 +17,8 @@ from dair_pll import file_utils
 from dair_pll.data_config import DataConfig
 from dair_pll.dataset_management import ExperimentDataManager, TrajectorySet
 from dair_pll.drake_experiment import DrakeMultibodyLearnableExperimentConfig, \
-    DrakeMultibodyLearnableExperiment, MultibodyLosses
+    DrakeMultibodyLearnableExperiment, MultibodyLosses, \
+    MultibodyLearnableSystemConfig
 from dair_pll.experiment import LossCallbackCallable, TrainingState, \
     LOGGING_DURATION
 from dair_pll.geometry import DeepSupportConvex
@@ -209,6 +211,18 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
             self.loss_callback = self.vision_loss
         file_utils.save_configuration(config.storage, config.run_name, config,
                                       human_readable=True)
+
+        # Get precomputed functions in dictionary[string, callable] form.
+        precomputed_functions = {}
+        dirs = config.learnable_config.precomputed_function_directories
+        if 'mass_matrix' in dirs.keys():
+            precomputed_functions['mass_matrix'] = \
+                get_precomputed_mass_matrix_function(dirs['mass_matrix'])
+        if 'lagrangian_forces' in dirs.keys():
+            precomputed_functions['lagrangian_forces'] = \
+                get_precomputed_lagrangian_forces_function(
+                    dirs['lagrangian_forces'])
+        self.precomputed_functions = precomputed_functions
 
     def setup_learning_data_manager(self, checkpoint_filename: str
                                     ) -> VisionExperimentDataManager:
@@ -410,6 +424,57 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
                                   learned_system_summary.videos,
                                   learned_system_summary.meshes)
 
+    def get_true_geometry_multibody_learnable_system(
+            self) -> MultibodyLearnableSystem:
+        """Overwritten for vision experiments to use any specified pre-computed
+        functions for the continuous dynamics."""
+        has_property = hasattr(self, 'true_geom_multibody_system')
+        if not has_property or self.true_geom_multibody_system is None:
+            oracle_system = self.get_oracle_system()
+            dt = oracle_system.dt
+            urdfs = oracle_system.urdfs
+
+            self.true_geom_multibody_system = MultibodyLearnableSystem(
+                init_urdfs=urdfs,
+                dt=dt,
+                loss_weights_dict={
+                    'w_pred': self.config.learnable_config.w_pred,
+                    'w_comp': self.config.learnable_config.w_comp,
+                    'w_diss': self.config.learnable_config.w_diss,
+                    'w_pen': self.config.learnable_config.w_pen,
+                    'w_bsdf': self.config.learnable_config.w_bsdf},
+                inertia_mode = self.config.learnable_config.inertia_mode,
+                constant_bodies = self.config.learnable_config.constant_bodies,
+                represent_geometry_as = \
+                    self.config.learnable_config.represent_geometry_as,
+                precomputed_functions = self.precomputed_functions)
+
+        return self.true_geom_multibody_system
+
+    def get_learned_system(self, _: Tensor) -> MultibodyLearnableSystem:
+        """Overwritten for vision experiments to use any specified pre-computed
+        functions for the continuous dynamics."""
+        learnable_config = cast(MultibodyLearnableSystemConfig,
+                                self.config.learnable_config)
+        output_dir = file_utils.get_learned_urdf_dir(self.config.storage,
+                                                     self.config.run_name)
+        return MultibodyLearnableSystem(
+            learnable_config.urdfs,
+            self.config.data_config.dt,
+            inertia_mode = learnable_config.inertia_mode,
+            constant_bodies = learnable_config.constant_bodies,
+            loss_weights_dict={
+                'w_pred': learnable_config.w_pred,
+                'w_comp': learnable_config.w_comp,
+                'w_diss': learnable_config.w_diss,
+                'w_pen': learnable_config.w_pen,
+                'w_bsdf': learnable_config.w_bsdf},
+            output_urdfs_dir=output_dir,
+            represent_geometry_as=learnable_config.represent_geometry_as,
+            pretrained_icnn_weights_filepath = \
+                learnable_config.pretrained_icnn_weights_filepath,
+                precomputed_functions = self.precomputed_functions)
+
 
 class VisionRobotExperiment(VisionExperiment):
     """Class for vision experiments with robot interaction."""
@@ -422,16 +487,81 @@ class VisionRobotExperiment(VisionExperiment):
                       x_future: TensorDictBase,
                       system: System
                       ) -> Dict[str, Any]:
-        """TODO"""
-        assert isinstance(x_past, TensorDictBase)
-        assert isinstance(x_future, TensorDictBase)
-
-        # Build the state tensors.
-        # TODO do this from 'robot_state' and 'object_state' keys.
-        past = system.construct_state_tensor(x_past[..., -1])
-        plus = system.construct_state_tensor(x_future[..., 0])
+        """Extract the loss arguments from an input of past and future
+        information, getting controls under the key 'robot_effort'."""
+        x_u_xplus_dict = super().get_loss_args(x_past, x_future, system)
 
         # Get the control from the past state.
-        control = past['robot_effort'].reshape(-1, 1)
+        n_horizon = x_past.shape[0]
+        x_u_xplus_dict['u'] = x_past['robot_effort'].reshape(n_horizon, -1)
 
-        return {'x': past, 'u': control, 'x_plus': plus}
+        return x_u_xplus_dict
+
+
+"""Precomputed mass matrix and lagrangian forces expressions for robot
+interaction vision experiments."""
+from typing_extensions import Protocol
+import types
+import copy
+
+class TensorCallable(Protocol):
+    def __call__(self, *args: torch.Tensor) -> torch.Tensor: ...
+
+
+def get_precomputed_mass_matrix_function(
+        txt_function_directory: str) -> Callable[[Tensor], Tensor]:
+    # Look for mass_matrix_{row}_{col}_func.txt.
+    empty_row = [None] * 13
+    matrix_of_functions = [copy.copy(empty_row) for _ in range(13)]
+    for row in range(13):
+        for col in range(13):
+            func_txt_file = op.join(
+                txt_function_directory, f'mass_matrix_{row}_{col}_func.txt')
+            assert op.exists(func_txt_file), f'Need {func_txt_file} to exist.'
+
+            with open(func_txt_file, 'r') as file:
+                func_string = file.read()
+
+            code = compile(func_string, f'tmp_M_{row}_{col}.py', 'single')
+            func = cast(TensorCallable,
+                        types.FunctionType(code.co_consts[0], globals()))
+
+            matrix_of_functions[row][col] = func
+
+    def mass_matrix_func(*torch_args):  # q, inertia
+        batch_dims = torch_args[0].shape[:-1]
+        mass_matrix = torch.zeros(batch_dims + (13, 13))
+        for row in range(13):
+            for col in range(13):
+                mass_matrix[..., row, col] = \
+                    matrix_of_functions[row][col](*torch_args)
+        return mass_matrix
+
+    return mass_matrix_func
+
+def get_precomputed_lagrangian_forces_function(
+        txt_function_directory: str) -> Callable[[Tensor], Tensor]:
+    # Look for lagrangian_forces_{row}_func.txt.
+    vector_of_functions = [None] * 13
+    for row in range(13):
+        func_txt_file = op.join(
+            txt_function_directory, f'lagrangian_forces_{row}_func.txt')
+        assert op.exists(func_txt_file), f'Need {func_txt_file} to exist.'
+
+        with open(func_txt_file, 'r') as file:
+            func_string = file.read()
+
+        code = compile(func_string, f'tmp_lagr_{row}.py', 'single')
+        func = cast(TensorCallable,
+                    types.FunctionType(code.co_consts[0], globals()))
+
+        vector_of_functions[row] = copy.deepcopy(func)
+
+    def lagrangian_forces_func(*torch_args):  # q, v, u, inertia
+        batch_dims = torch_args[0].shape[:-1]
+        lagrangian_forces = torch.zeros(batch_dims + (13,))
+        for row in range(13):
+            lagrangian_forces[..., row] = vector_of_functions[row](*torch_args)
+        return lagrangian_forces
+
+    return lagrangian_forces_func
