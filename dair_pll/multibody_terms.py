@@ -594,7 +594,7 @@ class ContactTerms(Module):
             # Tuple[(*, n_c), (*, n_c, 3, 3), (*, n_c, 3), (*, n_c, 3)]
             phi_i, R_AiF, p_AiAc_A, p_BiBc_B = GeometryCollider.collide(
                 geo_a, geo_b, R_AiBi, p_AiBi_A)
-            n_c = phi_i.shape[1]
+            n_c = phi_i.shape[-1]
 
             # contact frame rotation, (*, n_c, 3, 3)
             R_FW = pbmm(R_AiF.transpose(-1, -2), R_AiW.unsqueeze(-3))
