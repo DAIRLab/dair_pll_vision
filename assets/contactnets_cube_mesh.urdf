@@ -5,12 +5,12 @@
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <mass value="0.37" />
             <inertia
-                ixx="0.00081"
+                ixx="0.0008466093333333335"
                 ixy="0"
                 ixz="0"
-                iyy="0.00081"
+                iyy="0.0008466093333333335"
                 iyz="0"
-                izz="0.00081"/>
+                izz="0.0008466093333333335"/>
         </inertial>
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0" />
