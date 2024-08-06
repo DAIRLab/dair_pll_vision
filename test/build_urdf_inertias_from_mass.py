@@ -60,9 +60,9 @@ half_length = 0.0524
 
 side_mass = mass / 6
 
-Ixx = (1/12) * side_mass * half_length**2
-Iyy = (1/12) * side_mass * half_length**2
-Izz = (1/12) * side_mass * (2*half_length)**2
+Ixx = (1/12) * side_mass * (2*half_length)**2
+Iyy = (1/12) * side_mass * (2*half_length)**2
+Izz = (1/12) * side_mass * (2*(2*half_length))**2
 
 inertia_tensor_cube = torch.zeros((3,3))
 
