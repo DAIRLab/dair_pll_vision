@@ -22,9 +22,10 @@ from dair_pll.drake_experiment import DrakeMultibodyLearnableExperimentConfig, \
     MultibodyLearnableSystemConfig
 from dair_pll.experiment import LossCallbackCallable, TrainingState, \
     LOGGING_DURATION, StatisticsDict, StatisticsValue, TRAIN_SET, LOSS_NAME, \
-    AVERAGE_TAG
+    AVERAGE_TAG, TRAIN_TIME_SETS, EVALUATION_VARIABLES, LEARNED_SYSTEM_NAME, \
+    ALL_DURATIONS
 from dair_pll.geometry import DeepSupportConvex
-from dair_pll.system import System
+from dair_pll.system import System, SystemSummary
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 
 
@@ -350,16 +351,12 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         losses_pred, losses_comp, losses_pen, losses_diss = [], [], [], []
         losses_bsdf = []
         for xy_i in train_dataloader:
-            # HACK:  Assumes 'state' key.
-            x_i: Tensor = xy_i[0]['state']
-            y_i: Tensor = xy_i[1]['state']
-
-            x = x_i[..., -1, :]
-            x_plus = y_i[..., 0, :]
-            u = torch.zeros(x.shape[:-1] + (0,))
+            x_i: Tensor = xy_i[0]
+            y_i: Tensor = xy_i[1]
 
             loss_pred, loss_comp, loss_pen, loss_diss = \
-                learned_system.calculate_contactnets_loss_terms(x, u, x_plus)
+                learned_system.calculate_contactnets_loss_terms(
+                    **self.get_loss_args(x_i, y_i, learned_system))
             loss_bsdf = self.bundlesdf_geometry_loss(learned_system)
 
             losses_pred.append(loss_pred.clone().detach())
@@ -558,6 +555,52 @@ class VisionRobotExperiment(VisionExperiment):
 
         stats.update(summary_stats)
         return stats
+
+    # TODO: Possibly add in something to visualize robot interactions.
+    def build_epoch_vars_and_system_summary(self, statistics: Dict,
+            learned_system: System, force_generate_videos: bool = False
+        ) -> Tuple[Dict, SystemSummary]:
+        """Build epoch variables and system summary for learning process.
+
+        Args:
+            statistics: Summary statistics for learning process.
+            learned_system: System being trained.
+            force_generate_videos: Whether to force generate videos for
+              comparison, even if the experiment's config says to skip.  This is
+              useful for generating videos at the first and last epochs.
+
+        Returns:
+            Dictionary of scalars to log.
+            System summary.
+        """
+        # begin recording wall-clock logging time.
+        start_log_time = time.time()
+
+        epoch_vars = {}
+        for stats_set in TRAIN_TIME_SETS:
+            for variable in EVALUATION_VARIABLES:
+                var_key = f'{stats_set}_{LEARNED_SYSTEM_NAME}' + \
+                          f'_{variable}_{AVERAGE_TAG}'
+                if var_key in statistics:
+                    epoch_vars[f'{stats_set}_{variable}'] = statistics[var_key]
+
+        learned_system_summary = learned_system.summary(statistics)
+
+        # comparison_summary = self.base_and_learned_comparison_summary(
+        #     statistics, learned_system,
+        #     force_generate_videos=force_generate_videos)
+
+        epoch_vars.update(learned_system_summary.scalars)
+        logging_duration = time.time() - start_log_time
+        statistics[LOGGING_DURATION] = logging_duration
+        epoch_vars.update(
+            {duration: statistics[duration] for duration in ALL_DURATIONS})
+
+        # epoch_vars.update(comparison_summary.scalars)
+        # learned_system_summary.videos.update(comparison_summary.videos)
+        # learned_system_summary.meshes.update(comparison_summary.meshes)
+
+        return epoch_vars, learned_system_summary
 
 
 

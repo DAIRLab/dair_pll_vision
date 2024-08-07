@@ -226,14 +226,21 @@ class LagrangianTerms(Module):
 
         Returns:
             (n_bodies, 10) ``theta`` parameters initial conditions.
-            (n_bodies, 10) symbolic inertial variables.
+            (n_learnable_bodies, 10) symbolic inertial variables for any
+                learnable bodies, i.e. ones not in ``constant_bodies`` list.
+            (n_bodies,) list of inertial bodies.
         """
-        all_bodies, all_body_ids = drake_utils.get_all_inertial_bodies(
-            plant, model_ids)
+        inertial_bodies, inertial_body_ids = \
+            drake_utils.get_all_inertial_bodies(plant, model_ids)
 
         body_parameter_list = []
         body_variable_list = []
-        for body, body_id in zip(all_bodies, all_body_ids):
+        for body, body_id in zip(inertial_bodies, inertial_body_ids):
+            # get original values
+            body_parameter_list.append(
+                InertialParameterConverter.drake_to_theta(
+                    body.CalcSpatialInertiaInBodyFrame(context)))
+
             # Don't parameterize constant bodies, whose values stay fixed.
             if body.name() in constant_bodies:  continue
 
@@ -243,11 +250,6 @@ class LagrangianTerms(Module):
             I_BBcm_B = MakeVectorVariable(INERTIA_TENSOR_DOF, f'{body_id}_I',
                                           Variable.Type.CONTINUOUS)
 
-            # get original values
-            body_parameter_list.append(
-                InertialParameterConverter.drake_to_theta(
-                    body.CalcSpatialInertiaInBodyFrame(context)))
-
             body_spatial_inertia = \
                 SpatialInertia_[Expression].MakeFromCentralInertia(
                     mass=mass, p_PScm_E=p_BoBcm_B,
@@ -256,8 +258,10 @@ class LagrangianTerms(Module):
             body.SetMass(context, mass)
             body.SetSpatialInertiaInBodyFrame(context, body_spatial_inertia)
             body_variable_list.append(np.hstack((mass, p_BoBcm_B, I_BBcm_B)))
+
+        body_variables = np.vstack(body_variable_list)
         # pylint: disable=E1103
-        return body_parameter_list, np.vstack(body_variable_list), all_bodies
+        return body_parameter_list, body_variables, inertial_bodies
 
     def pi_cm(self) -> Tensor:
         """Returns inertial parameters in human-understandable ``pi_cm``

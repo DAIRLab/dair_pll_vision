@@ -6,6 +6,7 @@ from typing import Dict, List, cast
 
 import cvxpy as cp
 from cvxpylayers.torch import CvxpyLayer
+import torch
 from torch import Tensor
 from dair_pll.tensor_utils import sqrtm
 
@@ -88,6 +89,18 @@ class DynamicCvxpyLCQPLayer:
         assert q.shape[-1] == J.shape[-2]
         assert J.shape[-2] % 3 == 0
 
+        # Handle possibly more batch dimensions, but for now ensure only one can
+        # have non-zero value.
+        batch_dims = J.shape[:-2]
+        assert sum(torch.as_tensor(batch_dims) > 1) <= 1, f'Cannot handle ' + \
+            f'more than one non-one batch dimension: {batch_dims}'
+
+        num_contacts = J.shape[-2] // 3
+        J = J.reshape(-1, 3 * num_contacts, self.num_velocities)
+        q = q.reshape(-1, 3 * num_contacts)
+
+        out_shape = batch_dims + (-1,)
+
         layer = self.get_sized_layer(J.shape[-2] // 3)
         #pdb.set_trace()
-        return layer(J, q, solver_args=_CVXPY_SOLVER_ARGS)[0]
+        return layer(J, q, solver_args=_CVXPY_SOLVER_ARGS)[0].reshape(out_shape)

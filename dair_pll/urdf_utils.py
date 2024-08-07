@@ -9,6 +9,7 @@ of a ``CollisionGeometry``, and ``fill_link_with_parameterization`` dumps
 these representations into a URDF "link" tag.
 """
 import os.path
+import pdb
 from typing import Dict, List, Optional, Tuple, cast
 from xml.etree import ElementTree
 from xml.etree.ElementTree import register_namespace
@@ -298,7 +299,7 @@ def fill_link_with_parameterization(element: ElementTree.Element, pi_cm: Tensor,
         InertialParameterConverter.pi_cm_to_urdf(pi_cm)
 
     # This will have to change when function can handle more than one geometry.
-    mu = str(friction_coeffs.item())
+    mu = None if friction_coeffs.shape[0] == 0 else str(friction_coeffs.item())
 
     body_inertial_element = UrdfFindOrDefault.find(element, _INERTIAL)
 
@@ -327,12 +328,14 @@ def fill_link_with_parameterization(element: ElementTree.Element, pi_cm: Tensor,
 
         prox_props_element = UrdfFindOrDefault.find(collision_element,
             _DRAKE_PROXIMITY_PROPERTIES)
-        UrdfFindOrDefault.find(prox_props_element, _DRAKE_MU_STATIC).set(
-            _VALUE, mu)
+        if mu is not None:
+            UrdfFindOrDefault.find(prox_props_element, _DRAKE_MU_STATIC).set(
+                _VALUE, mu)
 
 
-def represent_multibody_terms_as_urdfs(multibody_terms: MultibodyTerms,
-                                       output_dir: str) -> Dict[str, str]:
+def represent_multibody_terms_as_urdfs(
+        multibody_terms: MultibodyTerms, output_dir: str,
+        constant_bodies: List[str]) -> Dict[str, str]:
     """Renders the current parameterization of multibody terms as a
     set of urdfs.
 
@@ -371,6 +374,8 @@ def represent_multibody_terms_as_urdfs(multibody_terms: MultibodyTerms,
             if element.tag == "link":
                 link_name = element.get("name")
                 assert link_name is not None
+                if link_name in constant_bodies:
+                    continue
 
                 body_id = drake_utils.unique_body_identifier(
                     multibody_terms.plant_diagram.plant,

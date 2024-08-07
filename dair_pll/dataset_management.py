@@ -119,6 +119,9 @@ class TrajectorySet:
         # single tensor is a state trajectory.
         for i, traj in enumerate(trajectory_list):
             if not isinstance(traj, TensorDictBase):
+                assert traj.ndim == 2, f'Trajectory {i} has shape ' + \
+                    f'{traj.shape} but expecting 2 dimesions.'
+
                 trajectory_list[i] = TensorDict({
                     "state": traj}, [traj.shape[0]])
 

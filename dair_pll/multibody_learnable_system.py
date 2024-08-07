@@ -122,6 +122,8 @@ class MultibodyLearnableSystem(System):
         self.set_carry_sampler(lambda: Tensor([False]))
         self.max_batch_dim = 1
 
+        self.constant_bodies = constant_bodies
+
         # Save the loss weights.
         self.w_pred = loss_weights_dict['w_pred']
         self.w_comp = loss_weights_dict['w_comp']
@@ -143,7 +145,7 @@ class MultibodyLearnableSystem(System):
         assert self.output_urdfs_dir is not None
         old_urdfs = self.init_urdfs
         new_urdf_strings = urdf_utils.represent_multibody_terms_as_urdfs(
-            self.multibody_terms, self.output_urdfs_dir)
+            self.multibody_terms, self.output_urdfs_dir, self.constant_bodies)
         new_urdfs = {}
 
         # Save new urdfs with original file basenames plus optional suffix in
@@ -574,14 +576,14 @@ class MultibodyLearnableSystem(System):
 
         # Define system_state as a concatenation of the states of all URDFs, in
         # the order that matches the Drake plant.
-        system_state = torch.zeros((data_state.shape[0], self.space.n_x))
+        system_state = torch.zeros(data_state.shape + (self.space.n_x,))
 
         for model_name in self.init_urdfs.keys():
             model_state_indices = [i for i, s in enumerate(state_names) if \
                                    s.startswith(model_name)]
             # NOTE:  key f'{model_name}_state' is assumed to exist containing
             # that system's state in Drake order.
-            system_state[:, model_state_indices] = data_state[
+            system_state[..., model_state_indices] = data_state[
                 f'{model_name}_state']
 
         return system_state
