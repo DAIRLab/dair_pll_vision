@@ -623,6 +623,9 @@ class ContactTerms(Module):
         J = ContactTerms.relative_velocity_to_contact_jacobian(
             torch.cat(Jv_v_W_BcAc_F, dim=-3), mu_repeated)
 
+        if torch.any(J.isnan()):
+            pdb.set_trace()
+
         return phi, J, p_BiBc_B, obj_pair_list, R_FW_list, mu_list
 
 class MultibodyTerms(Module):

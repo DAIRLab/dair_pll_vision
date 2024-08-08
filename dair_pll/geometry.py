@@ -19,8 +19,7 @@ general purpose converter is implemented in
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Tuple, Dict, cast, Union
-from typing import Tuple, Dict, cast, Union
+from typing import Tuple, Dict, cast, Union, Optional
 import pdb
 
 import fcl  # type: ignore

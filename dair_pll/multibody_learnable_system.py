@@ -122,14 +122,26 @@ class MultibodyLearnableSystem(System):
         self.set_carry_sampler(lambda: Tensor([False]))
         self.max_batch_dim = 1
 
-        self.constant_bodies = constant_bodies
-
         # Save the loss weights.
         self.w_pred = loss_weights_dict['w_pred']
         self.w_comp = loss_weights_dict['w_comp']
         self.w_pen = loss_weights_dict['w_pen']
         self.w_diss = loss_weights_dict['w_diss']
         self.w_bsdf = loss_weights_dict['w_bsdf']
+
+        # Store which states correspond to learnable bodies.
+        self.constant_bodies = constant_bodies
+        self.learnable_state_map = self.state_map_for_learnable_bodies()
+
+    def state_map_for_learnable_bodies(self) -> Tensor:
+        """Returns a boolean tensor indicating which states correspond to
+        learnable bodies.
+
+        HACK:  This assumes anything that starts with 'robot' should not be part
+        of a learnable body, and everything else is.
+        """
+        state_names = self.multibody_terms.plant_diagram.plant.GetStateNames()
+        return torch.tensor([not s.startswith('robot') for s in state_names])
 
     def generate_updated_urdfs(self, suffix: str = None) -> Dict[str, str]:
         """Exports current parameterization as a :py:class:`DrakeSystem`.
@@ -262,13 +274,34 @@ class MultibodyLearnableSystem(System):
         sliding_speeds = sliding_velocities.reshape(
             phi.shape[:-1] + (n_contacts, 2)).norm(dim=-1, keepdim=True)
 
-        Q = delassus
+        # Prepare to exclude the robot predictions from the prediction loss.
+        batch_dims = x.shape[:-1]
+        velocity_map = torch.diag(self.learnable_state_map[self.space.n_q:])
+        for _ in batch_dims:
+            velocity_map = velocity_map.unsqueeze(0)
+        velocity_map = velocity_map.expand(batch_dims + \
+                                           (self.space.n_v, self.space.n_v))
+        velocity_map = torch.tensor(velocity_map, dtype=torch.double)
+
+        M_inv = torch.inverse(M)
+        Q = pbmm(J,
+                 pbmm(velocity_map,
+                      pbmm(M_inv,
+                           pbmm(velocity_map,
+                                J.transpose(-1, -2)))))
         J_M = pbmm(reorder_mat.transpose(-1, -2),
-                   pbmm(J, torch.linalg.cholesky(torch.inverse((M)))))
+                   pbmm(J,
+                        pbmm(velocity_map,
+                             torch.linalg.cholesky(M_inv))))
 
         dv = (v_plus - (v + non_contact_acceleration * dt)).unsqueeze(-2)
 
-        q_pred = -pbmm(J, dv.transpose(-1, -2))
+        q_pred = -pbmm(J,
+                       pbmm(velocity_map,
+                            pbmm(M_inv,
+                                 pbmm(velocity_map,
+                                      pbmm(M,
+                                           dv.transpose(-1, -2))))))
         q_comp = torch.abs(phi_then_zero).unsqueeze(-1)
         q_diss = dt * torch.cat((sliding_speeds, sliding_velocities), dim=-2)
 
@@ -281,6 +314,13 @@ class MultibodyLearnableSystem(System):
         c_pen = c_pen.reshape(c_pen.shape + (1, 1))
 
         c_pred = 0.5 * pbmm(dv, pbmm(M, dv.transpose(-1, -2)))
+        c_pred = 0.5 * pbmm(dv,
+                            pbmm(M,
+                                 pbmm(velocity_map,
+                                      pbmm(M_inv,
+                                           pbmm(velocity_map,
+                                                pbmm(M,
+                                                     dv.transpose(-1, -2)))))))
 
         # Envelope theorem guarantees that gradient of loss w.r.t. parameters
         # can ignore the gradient of the impulses w.r.t. the QCQP parameters.
@@ -294,8 +334,10 @@ class MultibodyLearnableSystem(System):
                     J_M,
                     pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1)
                 ).detach().unsqueeze(-1))
-        except:
+        except Exception as e:
+            import traceback
             pdb.set_trace()
+            print(traceback.format_exc())
 
         # Hack: remove elements of ``impulses`` where solver likely failed.
         invalid = torch.any(

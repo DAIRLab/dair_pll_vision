@@ -668,7 +668,6 @@ def get_precomputed_lagrangian_forces_function(
         lagrangian_forces = torch.zeros(batch_dims + (13,))
         for row in range(13):
             lagrangian_forces[..., row] = vector_of_functions[row](*torch_args)
-            print(f'ok {lagrangian_forces.shape}')
         return lagrangian_forces
 
     return lagrangian_forces_func
