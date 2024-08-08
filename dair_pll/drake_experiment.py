@@ -63,6 +63,10 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     precomputed_function_directories: Dict[str, str] = field(default_factory={})
     """Head directory containing precomputed functions to use for continuous
     dynamics.  Can accept keys 'mass_matrix' and/or 'lagrangian_forces'."""
+    export_drake_pytorch_dir: str = None
+    """The folder in which exported elements of the mass matrix and lagrangian
+    force expressions will be saved.  If provided, the code terminates after the
+    export."""
 
 
 @dataclass

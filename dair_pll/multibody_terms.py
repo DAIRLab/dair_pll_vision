@@ -35,6 +35,7 @@ from dataclasses import dataclass
 
 import drake_pytorch  # type: ignore
 import numpy as np
+import os.path as op
 import torch
 import pdb
 
@@ -51,7 +52,7 @@ from scipy.spatial.transform import Rotation
 from torch import Tensor
 from torch.nn import Module, ModuleList, Parameter, ParameterList
 
-from dair_pll import drake_utils
+from dair_pll import drake_utils, file_utils
 from dair_pll.drake_utils import DrakeBody
 from dair_pll.deep_support_function import extract_mesh_from_support_function, \
     get_mesh_summary_from_polygon
@@ -130,7 +131,8 @@ class LagrangianTerms(Module):
     def __init__(self, plant_diagram: MultibodyPlantDiagram,
                  inertia_mode: InertiaLearn = InertiaLearn(),
                  constant_bodies: List[str] = [],
-                 precomputed_functions: Dict[str, Callable[[Tensor], Tensor]]={}
+                 precomputed_functions: Dict[str, Callable[[Tensor], Tensor]]={},
+                 export_drake_pytorch_dir: str = None
                  ) -> None:
         """Inits :py:class:`LagrangianTerms` with prescribed parameters and
         functional forms.
@@ -142,8 +144,14 @@ class LagrangianTerms(Module):
             precomputed_functions: Dictionary of precomputed functions.  Keys
                 that will be considered are 'mass_matrix' and
                 'lagrangian_forces'.
+            export_drake_pytorch_dir: The folder in which exported elements of
+                the mass matrix and lagrangian force expressions will be saved.
+                If provided, the code terminates after the export.
         """
         super().__init__()
+
+        if export_drake_pytorch_dir is not None:
+            precomputed_functions = {}
 
         plant, context, q, v = init_symbolic_plant_context_and_state(
             plant_diagram)
@@ -164,6 +172,30 @@ class LagrangianTerms(Module):
                 q,
                 body_variables,
                 simplify_computation=DEFAULT_SIMPLIFIER)
+
+            if export_drake_pytorch_dir is not None:
+                file_utils.assure_created(export_drake_pytorch_dir)
+                for row in range(13):
+                    for col in range(13):
+                        print(f'Printing {row=}, {col=}')
+
+                        # Save the Drake expression.
+                        with open(
+                            op.join(export_drake_pytorch_dir,
+                                f'mass_matrix_{row}_{col}.txt'), 'w') as f:
+                            f.write(str(mass_matrix_expression[row, col]))
+
+                        # Save the pytorch function string.
+                        _, func_string = drake_pytorch.sym_to_pytorch(
+                            mass_matrix_expression[row, col],
+                            q,
+                            body_variables,
+                            simplify_computation=DEFAULT_SIMPLIFIER)
+                        with open(
+                            op.join(export_drake_pytorch_dir,
+                                f'mass_matrix_{row}_{col}_func.txt'), 'w') as f:
+                            f.write(func_string)
+
         else:
             print(f'Using pre-computed mass_matrix expression.')
             self.mass_matrix = precomputed_functions['mass_matrix']
@@ -184,6 +216,30 @@ class LagrangianTerms(Module):
                 u,
                 body_variables,
                 simplify_computation=DEFAULT_SIMPLIFIER)
+
+            if export_drake_pytorch_dir is not None:
+                print(f'\nMAKING CONTINUOUS DYNAMICS DRAKE PYTORCH EXPRESSION\n')
+                for row in range(13):
+                    print(f'Printing {row=}')
+
+                    # Save the Drake expression.
+                    with open(
+                        op.join(export_drake_pytorch_dir,
+                            f'lagrangian_forces_{row}.txt'), 'w') as f:
+                        f.write(str(lagrangian_forces_expression[row]))
+
+                    # Save the pytorch function string.
+                    _, func_string = drake_pytorch.sym_to_pytorch(
+                        lagrangian_forces_expression[row],
+                        q, v, u,
+                        body_variables,
+                        simplify_computation=DEFAULT_SIMPLIFIER)
+                    with open(
+                        op.join(export_drake_pytorch_dir,
+                            f'lagrangian_forces_{row}_func.txt'), 'w') as f:
+                        f.write(func_string)
+                exit()
+
         else:
             print(f'Using pre-computed lagrangian_forces expression.')
             self.lagrangian_forces = precomputed_functions['lagrangian_forces']
@@ -746,7 +802,8 @@ class MultibodyTerms(Module):
                  pretrained_icnn_weights_filepath: str = None,
                  constant_bodies: List[str] = [],
                  represent_geometry_as: str = 'box',
-                 precomputed_functions: Dict[str, Callable[[Tensor], Tensor]]={}
+                 precomputed_functions: Dict[str, Callable[[Tensor], Tensor]]={},
+                 export_drake_pytorch_dir: str = None
                  ) -> None:
         """Inits :py:class:`MultibodyTerms` for system described in URDFs
 
@@ -771,6 +828,9 @@ class MultibodyTerms(Module):
             precomputed_functions: Dictionary of function names that have been
                 precomputed offline.  Only eligible keys that will get checked
                 for are 'mass_matrix' and 'lagrangian_forces'.
+            export_drake_pytorch_dir: The folder in which exported elements of
+                the mass matrix and lagrangian force expressions will be saved.
+                If provided, the code terminates after the export.
         """
         super().__init__()
 
@@ -799,7 +859,8 @@ class MultibodyTerms(Module):
         # setup parameterization
         self.lagrangian_terms = LagrangianTerms(
             plant_diagram, inertia_mode, constant_bodies,
-            precomputed_functions=precomputed_functions)
+            precomputed_functions=precomputed_functions,
+            export_drake_pytorch_dir=export_drake_pytorch_dir)
         self.contact_terms = ContactTerms(
             plant_diagram, represent_geometry_as, constant_bodies)
         self.geometry_body_assignment = geometry_body_assignment

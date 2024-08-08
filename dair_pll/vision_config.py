@@ -227,6 +227,11 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
                     dirs['lagrangian_forces'])
         self.precomputed_functions = precomputed_functions
 
+        # Store the optional location at which Drake Pytorch expressions that
+        # are computed for these systems will be exported.
+        self.export_drake_pytorch_dir = \
+            config.learnable_config.export_drake_pytorch_dir
+
     def setup_learning_data_manager(self, checkpoint_filename: str
                                     ) -> VisionExperimentDataManager:
         """Sets up learning data manager for vision experiments."""
@@ -442,11 +447,12 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
                     'w_diss': self.config.learnable_config.w_diss,
                     'w_pen': self.config.learnable_config.w_pen,
                     'w_bsdf': self.config.learnable_config.w_bsdf},
-                inertia_mode = self.config.learnable_config.inertia_mode,
-                constant_bodies = self.config.learnable_config.constant_bodies,
+                inertia_mode=self.config.learnable_config.inertia_mode,
+                constant_bodies=self.config.learnable_config.constant_bodies,
                 represent_geometry_as = \
                     self.config.learnable_config.represent_geometry_as,
-                precomputed_functions = self.precomputed_functions)
+                precomputed_functions=self.precomputed_functions,
+                export_drake_pytorch_dir=self.export_drake_pytorch_dir)
 
         return self.true_geom_multibody_system
 
@@ -460,8 +466,8 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         return MultibodyLearnableSystem(
             learnable_config.urdfs,
             self.config.data_config.dt,
-            inertia_mode = learnable_config.inertia_mode,
-            constant_bodies = learnable_config.constant_bodies,
+            inertia_mode=learnable_config.inertia_mode,
+            constant_bodies=learnable_config.constant_bodies,
             loss_weights_dict={
                 'w_pred': learnable_config.w_pred,
                 'w_comp': learnable_config.w_comp,
@@ -472,7 +478,8 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
             represent_geometry_as=learnable_config.represent_geometry_as,
             pretrained_icnn_weights_filepath = \
                 learnable_config.pretrained_icnn_weights_filepath,
-                precomputed_functions = self.precomputed_functions)
+            precomputed_functions=self.precomputed_functions,
+            export_drake_pytorch_dir = self.export_drake_pytorch_dir)
 
 
 class VisionRobotExperiment(VisionExperiment):

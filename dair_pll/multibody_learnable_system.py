@@ -30,21 +30,16 @@ from typing import List, Tuple, Optional, Dict, cast, Union, Callable
 import numpy as np
 import torch
 from torch import Tensor
-from torch.nn import Module, ParameterList, Parameter
-import torch.nn as nn
-from tensordict.tensordict import TensorDict, TensorDictBase
+from tensordict.tensordict import TensorDictBase
 
-from dair_pll import urdf_utils, tensor_utils, file_utils
+from dair_pll import urdf_utils, tensor_utils, file_utils, quaternion
 from dair_pll.drake_system import DrakeSystem
 from dair_pll.integrator import VelocityIntegrator
 from dair_pll.multibody_terms import MultibodyTerms, InertiaLearn
 from dair_pll.solvers import DynamicCvxpyLCQPLayer
-from dair_pll.state_space import FloatingBaseSpace, StateSpace
 from dair_pll.system import System, SystemSummary
-from dair_pll.tensor_utils import pbmm, broadcast_lorentz, \
-    one_vector_block_diagonal, project_lorentz, reflect_lorentz
+from dair_pll.tensor_utils import pbmm, broadcast_lorentz
 
-from dair_pll import quaternion
 
 # Scaling factors to equalize translation and rotation errors.
 # For rotation versus linear scaling:  penalize 0.1 meters same as 90 degrees.
@@ -75,7 +70,8 @@ class MultibodyLearnableSystem(System):
                  output_urdfs_dir: Optional[str] = None,
                  pretrained_icnn_weights_filepath: Optional[str] = None,
                  represent_geometry_as: str = 'box',
-                 precomputed_functions: Dict[str, Callable] = {}) -> None:
+                 precomputed_functions: Dict[str, Callable] = {},
+                 export_drake_pytorch_dir: str = None) -> None:
         """Inits :py:class:`MultibodyLearnableSystem` with provided model URDFs.
 
         Implementation is primarily based on Drake. Bodies are modeled via
@@ -98,6 +94,14 @@ class MultibodyLearnableSystem(System):
                 written to.
             pretrained_icnn_weights_filepath: Filepath of a set of pretrained
                 ICNN weights.
+            represent_geometry_as: String box/mesh/polygon to determine how
+                the geometry should be represented.
+            precomputed_functions: Dictionary of function names that have been
+                precomputed offline.  Only eligible keys that will get checked
+                for are 'mass_matrix' and 'lagrangian_forces'.
+            export_drake_pytorch_dir: The folder in which exported elements of
+                the mass matrix and lagrangian force expressions will be saved.
+                If provided, the code terminates after the export.
         """
 
         multibody_terms = MultibodyTerms(
@@ -106,7 +110,8 @@ class MultibodyLearnableSystem(System):
             constant_bodies=constant_bodies,
             represent_geometry_as=represent_geometry_as,
             pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
-            precomputed_functions=precomputed_functions)
+            precomputed_functions=precomputed_functions,
+            export_drake_pytorch_dir=export_drake_pytorch_dir)
 
         space = multibody_terms.plant_diagram.space
         integrator = VelocityIntegrator(space, self.sim_step, dt)
@@ -281,7 +286,7 @@ class MultibodyLearnableSystem(System):
             velocity_map = velocity_map.unsqueeze(0)
         velocity_map = velocity_map.expand(batch_dims + \
                                            (self.space.n_v, self.space.n_v))
-        velocity_map = torch.tensor(velocity_map, dtype=torch.double)
+        velocity_map = velocity_map.type(torch.double)
 
         M_inv = torch.inverse(M)
         Q = pbmm(J,
@@ -313,7 +318,6 @@ class MultibodyLearnableSystem(System):
         c_pen = (torch.maximum(-phi, torch.zeros_like(phi))**2).sum(dim=-1)
         c_pen = c_pen.reshape(c_pen.shape + (1, 1))
 
-        c_pred = 0.5 * pbmm(dv, pbmm(M, dv.transpose(-1, -2)))
         c_pred = 0.5 * pbmm(dv,
                             pbmm(M,
                                  pbmm(velocity_map,

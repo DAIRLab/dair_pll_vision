@@ -131,6 +131,8 @@ SKIP_VIDEO_OPTIONS = ['none', 'all', 'geometry', 'rollout']
 LEARN_INERTIA_OPTIONS = ['none', 'all']     # May want to add more cases, e.g.
                                             # learn CoM only.
 
+DRAKE_PYTORCH_FUNCTION_EXPORT_DIR = '/home/minghz/Desktop/symbolic_pytorch_v2'
+
 # Loss term weights.
 DEFAULT_W_PRED = 1.0
 DEFAULT_W_COMP = 1.0
@@ -206,7 +208,8 @@ def main(pll_run_id: str = "",
          w_pen: float = DEFAULT_W_PEN,
          w_bsdf: float = DEFAULT_W_BSDF,
          use_bundlesdf_mesh: bool = True,
-         is_robot_experiment: bool = False):
+         is_robot_experiment: bool = False,
+         export_drake_pytorch: bool = False):
     """Execute ContactNets basic example on a system.
 
     Args:
@@ -234,6 +237,9 @@ def main(pll_run_id: str = "",
           default URDF for the system (warning: the default URDFs are not
           origin-aligned to the BundleSDF tracking origin).
         is_robot_experiment: Whether this is a robot experiment.
+        export_drake_pytorch: Whether to export Drake Pytorch expressions to
+          files for reuse in later experiments.  If true, this experiment will
+          terminate after the export has completed.
     """
     # pylint: disable=too-many-locals, too-many-arguments
     if pll_run_id == "":
@@ -321,7 +327,9 @@ def main(pll_run_id: str = "",
         pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
         w_pred=w_pred, w_comp=w_comp, w_diss=w_diss, w_pen=w_pen,
         w_bsdf=w_bsdf, represent_geometry_as='mesh',
-        precomputed_function_directories=precomputed_function_directories
+        precomputed_function_directories=precomputed_function_directories,
+        export_drake_pytorch_dir = DRAKE_PYTORCH_FUNCTION_EXPORT_DIR if \
+            export_drake_pytorch else None
     )
 
     # How to slice trajectories into training datapoints.
@@ -427,6 +435,11 @@ def main(pll_run_id: str = "",
               type=click.Choice(LEARN_INERTIA_OPTIONS),
               default='all',
               help="what inertia parameters to learn (none, all).")
+@click.option('--export-drake-pytorch/--train',
+              type=bool,
+              default=False,
+              help="whether to export computed drake pytorch expressions " + \
+                "then force terminate the code.")
 @click.option('--skip-videos',
               type=click.Choice(SKIP_VIDEO_OPTIONS),
               default='rollout',
@@ -458,9 +471,10 @@ def main(pll_run_id: str = "",
 
 def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
                  bundlesdf_id: str, contactnets: bool, regenerate: bool,
-                 pretrained: str, learn_inertia: str, skip_videos: str,
-                 clear_data: bool, w_pred: float, w_comp: float, w_diss: float,
-                 w_pen: float, w_bsdf: float):
+                 pretrained: str, learn_inertia: str,
+                 export_drake_pytorch: bool, skip_videos: str, clear_data: bool,
+                 w_pred: float, w_comp: float, w_diss: float, w_pen: float,
+                 w_bsdf: float):
     # First decode the system and start/end tosses from the provided asset
     # directory.
     assert '_' in vision_asset, f'Invalid asset directory: {vision_asset}.'
@@ -482,7 +496,8 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
          regenerate=regenerate, pretrained_icnn_weights_filepath=pretrained,
          learn_inertia=learn_inertia, skip_videos=skip_videos,
          clear_data=clear_data, w_pred=w_pred, w_comp=w_comp, w_diss=w_diss,
-         w_pen=w_pen, w_bsdf=w_bsdf, is_robot_experiment=is_robot_experiment)
+         w_pen=w_pen, w_bsdf=w_bsdf, is_robot_experiment=is_robot_experiment,
+         export_drake_pytorch=export_drake_pytorch)
 
 
 
