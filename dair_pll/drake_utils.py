@@ -246,6 +246,11 @@ def add_plant_from_urdfs(
         model_ids.extend(new_ids)
         plant.RenameModelInstance(new_ids[0], name)
 
+    # Flip the model ID list.  This ensures that the model ID ordering matches
+    # the MultibodyPlant state ordering, which always prepends the states of new
+    # models added to the plant.
+    model_ids.reverse()
+
     return model_ids, plant, scene_graph
 
 
