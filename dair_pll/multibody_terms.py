@@ -167,12 +167,6 @@ class LagrangianTerms(Module):
                 plant.CalcMassMatrixViaInverseDynamics(context) @ gamma
 
             print(f'\nMAKING MASS DRAKE PYTORCH EXPRESSION\n')
-            self.mass_matrix, _ = drake_pytorch.sym_to_pytorch(
-                mass_matrix_expression,
-                q,
-                body_variables,
-                simplify_computation=DEFAULT_SIMPLIFIER)
-
             if export_drake_pytorch_dir is not None:
                 file_utils.assure_created(export_drake_pytorch_dir)
                 for row in range(13):
@@ -196,6 +190,13 @@ class LagrangianTerms(Module):
                                 f'mass_matrix_{row}_{col}_func.txt'), 'w') as f:
                             f.write(func_string)
 
+            else:
+                self.mass_matrix, _ = drake_pytorch.sym_to_pytorch(
+                    mass_matrix_expression,
+                    q,
+                    body_variables,
+                    simplify_computation=DEFAULT_SIMPLIFIER)
+
         else:
             print(f'Using pre-computed mass_matrix expression.')
             self.mass_matrix = precomputed_functions['mass_matrix']
@@ -208,17 +209,9 @@ class LagrangianTerms(Module):
                 ) @ u + plant.CalcGravityGeneralizedForces(context)
 
             lagrangian_forces_expression = gamma.T @ drake_forces_expression
-            print(f'\nMAKING CONTINUOUS DYNAMICS DRAKE PYTORCH EXPRESSION\n')
-            self.lagrangian_forces, _ = drake_pytorch.sym_to_pytorch(
-                lagrangian_forces_expression,
-                q,
-                v,
-                u,
-                body_variables,
-                simplify_computation=DEFAULT_SIMPLIFIER)
 
+            print(f'\nMAKING CONTINUOUS DYNAMICS DRAKE PYTORCH EXPRESSION\n')
             if export_drake_pytorch_dir is not None:
-                print(f'\nMAKING CONTINUOUS DYNAMICS DRAKE PYTORCH EXPRESSION\n')
                 for row in range(13):
                     print(f'Printing {row=}')
 
@@ -239,6 +232,15 @@ class LagrangianTerms(Module):
                             f'lagrangian_forces_{row}_func.txt'), 'w') as f:
                         f.write(func_string)
                 exit()
+
+            else:
+                self.lagrangian_forces, _ = drake_pytorch.sym_to_pytorch(
+                    lagrangian_forces_expression,
+                    q,
+                    v,
+                    u,
+                    body_variables,
+                    simplify_computation=DEFAULT_SIMPLIFIER)
 
         else:
             print(f'Using pre-computed lagrangian_forces expression.')
