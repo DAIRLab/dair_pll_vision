@@ -122,7 +122,7 @@ WDS = {VISION_CUBE_SYSTEM: CUBE_WD,
        'vision_toothpaste': 0.0,
        'vision_robot_bakingbox_sticky_A': 0.0,
 }
-EPOCHS = 12 #500
+EPOCHS = 200 #500
 PATIENCE = 100 #EPOCHS
 
 WANDB_PROJECT = 'dair_pll-vision'

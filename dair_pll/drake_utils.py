@@ -409,7 +409,6 @@ class MultibodyPlantDiagram:
         # from pathlib import Path
         # plt.savefig(str(Path.home() / "Desktop" / "graphviz_example.png"))
 
-
         # Initialize simulator from diagram.
         sim = Simulator(diagram)
         sim.set_publish_at_initialization(True)

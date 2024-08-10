@@ -157,10 +157,11 @@ class LagrangianTerms(Module):
             plant_diagram)
         gamma = Jacobian(plant.GetVelocities(context), v)
 
-        body_param_tensors, body_variables, bodies = \
-            LagrangianTerms.extract_body_parameters_and_variables(
-                plant, plant_diagram.model_ids, context,
-                constant_bodies=constant_bodies)
+        body_param_tensors, learnable_body_variables, bodies, \
+            learnable_body_idx = \
+                LagrangianTerms.extract_body_parameters_and_variables(
+                    plant, plant_diagram.model_ids, context,
+                    constant_bodies=constant_bodies)
 
         if 'mass_matrix' not in precomputed_functions.keys():
             mass_matrix_expression = gamma.T @ \
@@ -183,7 +184,7 @@ class LagrangianTerms(Module):
                         _, func_string = drake_pytorch.sym_to_pytorch(
                             mass_matrix_expression[row, col],
                             q,
-                            body_variables,
+                            learnable_body_variables,
                             simplify_computation=DEFAULT_SIMPLIFIER)
                         with open(
                             op.join(export_drake_pytorch_dir,
@@ -194,7 +195,7 @@ class LagrangianTerms(Module):
                 self.mass_matrix, _ = drake_pytorch.sym_to_pytorch(
                     mass_matrix_expression,
                     q,
-                    body_variables,
+                    learnable_body_variables,
                     simplify_computation=DEFAULT_SIMPLIFIER)
 
         else:
@@ -203,7 +204,7 @@ class LagrangianTerms(Module):
 
         if 'lagrangian_forces' not in precomputed_functions.keys():
             u = MakeVectorVariable(plant.num_actuated_dofs(), 'u',
-                                Variable.Type.CONTINUOUS)
+                                   Variable.Type.CONTINUOUS)
             drake_forces_expression = -plant.CalcBiasTerm(
                 context) + plant.MakeActuationMatrix(
                 ) @ u + plant.CalcGravityGeneralizedForces(context)
@@ -225,7 +226,7 @@ class LagrangianTerms(Module):
                     _, func_string = drake_pytorch.sym_to_pytorch(
                         lagrangian_forces_expression[row],
                         q, v, u,
-                        body_variables,
+                        learnable_body_variables,
                         simplify_computation=DEFAULT_SIMPLIFIER)
                     with open(
                         op.join(export_drake_pytorch_dir,
@@ -239,7 +240,7 @@ class LagrangianTerms(Module):
                     q,
                     v,
                     u,
-                    body_variables,
+                    learnable_body_variables,
                     simplify_computation=DEFAULT_SIMPLIFIER)
 
         else:
@@ -260,6 +261,8 @@ class LagrangianTerms(Module):
                           requires_grad=(learn_body and inertia_mode.inertia)),
             ]
             self.body_parameters.extend(body_parameter)
+
+        self.learnable_body_idx = learnable_body_idx
 
     # noinspection PyUnresolvedReferences
     @staticmethod
@@ -287,13 +290,19 @@ class LagrangianTerms(Module):
             (n_learnable_bodies, 10) symbolic inertial variables for any
                 learnable bodies, i.e. ones not in ``constant_bodies`` list.
             (n_bodies,) list of inertial bodies.
+            (n_learnable_bodies,) list of learnable body indices.
         """
         inertial_bodies, inertial_body_ids = \
             drake_utils.get_all_inertial_bodies(plant, model_ids)
 
         body_parameter_list = []
         body_variable_list = []
-        for body, body_id in zip(inertial_bodies, inertial_body_ids):
+        learnable_indices = []
+
+        bodies_and_ids = zip(inertial_bodies, inertial_body_ids)
+        for i, body_and_id in enumerate(bodies_and_ids):
+            body, body_id = body_and_id
+
             # get original values
             body_parameter_list.append(
                 InertialParameterConverter.drake_to_theta(
@@ -301,6 +310,7 @@ class LagrangianTerms(Module):
 
             # Don't parameterize constant bodies, whose values stay fixed.
             if body.name() in constant_bodies:  continue
+            learnable_indices.append(i)
 
             mass = Variable(f'{body_id}_m', Variable.Type.CONTINUOUS)
             p_BoBcm_B = MakeVectorVariable(CENTER_OF_MASS_DOF, f'{body_id}_com',
@@ -319,13 +329,17 @@ class LagrangianTerms(Module):
 
         body_variables = np.vstack(body_variable_list)
         # pylint: disable=E1103
-        return body_parameter_list, body_variables, inertial_bodies
+        return body_parameter_list, body_variables, inertial_bodies, \
+            learnable_indices
 
-    def pi_cm(self) -> Tensor:
+    def pi_cm(self, just_learnables: bool = False) -> Tensor:
         """Returns inertial parameters in human-understandable ``pi_cm``
         -format."""
+        indices = self.learnable_body_idx if just_learnables else \
+            range(len(self.body_parameters)//3)
+
         inertial_parameters = []
-        for idx in range(len(self.body_parameters)//3):
+        for idx in indices:
             inertial_parameters.append(torch.hstack(
                 (self.body_parameters[3*idx],
                  self.body_parameters[3*idx+1],
@@ -350,13 +364,14 @@ class LagrangianTerms(Module):
         # pylint: disable=not-callable
         assert self.mass_matrix is not None
         assert self.lagrangian_forces is not None
-        inertia = \
+        learnable_inertia = \
             InertialParameterConverter.pi_cm_to_drake_spatial_inertia_vector(
-            self.pi_cm())
-        inertia = inertia.expand(q.shape[:-1] + inertia.shape)
-        M = self.mass_matrix(q, inertia)
+            self.pi_cm(just_learnables=True))
+        learnable_inertia = learnable_inertia.expand(
+            q.shape[:-1] + learnable_inertia.shape)
+        M = self.mass_matrix(q, learnable_inertia)
         non_contact_acceleration = torch.linalg.solve(
-            M, self.lagrangian_forces(q, v, u, inertia))
+            M, self.lagrangian_forces(q, v, u, learnable_inertia))
         return M, non_contact_acceleration
 
 
@@ -713,6 +728,7 @@ class MultibodyTerms(Module):
         friction_coefficients = self.contact_terms.get_friction_coefficients()
 
         for body_pi, body_id in zip(self.lagrangian_terms.pi_cm(), all_body_ids):
+
             body_scalars = InertialParameterConverter.pi_cm_to_scalars(body_pi)
 
             scalars.update({
