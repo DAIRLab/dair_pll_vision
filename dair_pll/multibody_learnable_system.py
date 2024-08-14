@@ -168,6 +168,12 @@ class MultibodyLearnableSystem(System):
         # Save new urdfs with original file basenames plus optional suffix in
         # new folder.
         for urdf_name, new_urdf_string in new_urdf_strings.items():
+            if urdf_name == 'robot':
+                # HACK:  Assumes robots are unlearnable and reuses the original
+                # robot URDF.
+                new_urdfs[urdf_name] = old_urdfs[urdf_name]
+                continue
+
             old_urdf_filename = path.basename(old_urdfs[urdf_name])
 
             if suffix is not None:

@@ -236,7 +236,7 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
                                 f'_{TARGET_NAME}'
                     prediction_key = f'{set_name}_{LEARNED_SYSTEM_NAME}' + \
                                     f'_{PREDICTION_NAME}'
-                    if not target_key in statistics:
+                    if not prediction_key in statistics:
                         continue
                     target_trajectory = Tensor(statistics[target_key][traj_num])
                     prediction_trajectory = Tensor(

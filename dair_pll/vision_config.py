@@ -14,7 +14,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from tensordict.tensordict import TensorDictBase
 
-from dair_pll import file_utils
+from dair_pll import file_utils, vis_utils
 from dair_pll.data_config import DataConfig
 from dair_pll.dataset_management import ExperimentDataManager, TrajectorySet
 from dair_pll.drake_experiment import DrakeMultibodyLearnableExperimentConfig, \
@@ -23,7 +23,8 @@ from dair_pll.drake_experiment import DrakeMultibodyLearnableExperimentConfig, \
 from dair_pll.experiment import LossCallbackCallable, TrainingState, \
     LOGGING_DURATION, StatisticsDict, StatisticsValue, TRAIN_SET, LOSS_NAME, \
     AVERAGE_TAG, TRAIN_TIME_SETS, EVALUATION_VARIABLES, LEARNED_SYSTEM_NAME, \
-    ALL_DURATIONS
+    ALL_DURATIONS, TARGET_NAME, MAX_SAVED_TRAJECTORIES, ALL_SETS, \
+    ORACLE_SYSTEM_NAME
 from dair_pll.geometry import DeepSupportConvex
 from dair_pll.system import System, SystemSummary
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
@@ -294,7 +295,7 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         deep_support_network = deep_support_geom.network
 
         # Next load a random subset of the BundleSDF data.
-        bsdf_dirs, bsdf_pts, bsdf_ds = file_utils.get_bundlesdf_geometry_data(
+        bsdf_dirs, bsdf_pts, _bsdf_ds = file_utils.get_bundlesdf_geometry_data(
             self.config.data_config.asset_subdirectories,
             self.config.data_config.bundlesdf_id,
             iteration = int(self.config.data_config.tracker.split('_')[-1])
@@ -528,6 +529,9 @@ class VisionRobotExperiment(VisionExperiment):
             if trajectory_set.indices.shape[0] == 0:
                 continue
 
+            trajectories = trajectory_set.trajectories
+            n_saved_trajectories = min(MAX_SAVED_TRAJECTORIES,
+                                       len(trajectories))
             slices_loader = DataLoader(trajectory_set.slices,
                                        batch_size=128,
                                        shuffle=False)
@@ -549,7 +553,19 @@ class VisionRobotExperiment(VisionExperiment):
                     loss_name = f'{set_name}_{system_name}_{LOSS_NAME}'
                     stats[loss_name] = to_json(model_loss)
 
-                # Skip trajectory predictions.
+                # Skip trajectory predictions, but store the input trajectories.
+                if system_name == LEARNED_SYSTEM_NAME:
+                    trajectories = [t.unsqueeze(0) for t in trajectories]
+
+                    # Get the state in tensor form.
+                    x = [system.construct_state_tensor(xi) for xi in \
+                         trajectories]
+
+                    t_skip = self.config.data_config.slice_config.t_skip
+                    t_begin = t_skip + 1
+                    targets = [x_i[..., t_begin:, :].squeeze(0) for x_i in x]
+                    stats[f'{set_name}_{system_name}_{TARGET_NAME}'] = \
+                        to_json(targets[:n_saved_trajectories])
 
                 # Skip extra metrics and auxillary losses.
 
@@ -562,6 +578,33 @@ class VisionRobotExperiment(VisionExperiment):
 
         stats.update(summary_stats)
         return stats
+
+    def make_input_trajectory_visualization(
+            self, statistics: Dict, learned_system: System):
+        """Generate a video to show the input data, overlaid with both the
+        geometry from BundleSDF and the learned geometry."""
+        visualization_system = self.get_visualization_system(learned_system)
+        space = self.get_drake_system().space
+        videos = {}
+
+        for traj_num in [0]:
+            for set_name in ['train', 'valid']:
+                target_key = f'{set_name}_{LEARNED_SYSTEM_NAME}_{TARGET_NAME}'
+                if not target_key in statistics:
+                    continue
+                target_trajectory = Tensor(statistics[target_key][traj_num])
+                prediction_trajectory = target_trajectory
+                visualization_trajectory = torch.cat(
+                    (space.q(target_trajectory),
+                     space.q(prediction_trajectory),
+                     space.v(target_trajectory),
+                     space.v(prediction_trajectory)), -1)
+                video, framerate = vis_utils.visualize_trajectory(
+                    visualization_system, visualization_trajectory)
+                videos[f'{set_name}_input_trajectory_{traj_num}'] = \
+                    (video, framerate)
+
+        return SystemSummary(scalars={}, videos=videos, meshes={})
 
     # TODO: Possibly add in something to visualize robot interactions.
     def build_epoch_vars_and_system_summary(self, statistics: Dict,
@@ -593,6 +636,17 @@ class VisionRobotExperiment(VisionExperiment):
 
         learned_system_summary = learned_system.summary(statistics)
 
+        # Include input trajectory visualization.
+        if force_generate_videos:
+            input_trajectory_visualization = \
+                self.make_input_trajectory_visualization(
+                    statistics, learned_system)
+        else:
+            input_trajectory_visualization = SystemSummary(
+                scalars={}, videos={}, meshes={})
+
+        # # Include comparison summary, which should only create the geometry
+        # # inspection video since no predictions to visualize.
         # comparison_summary = self.base_and_learned_comparison_summary(
         #     statistics, learned_system,
         #     force_generate_videos=force_generate_videos)
@@ -603,12 +657,52 @@ class VisionRobotExperiment(VisionExperiment):
         epoch_vars.update(
             {duration: statistics[duration] for duration in ALL_DURATIONS})
 
+        epoch_vars.update(input_trajectory_visualization.scalars)
+        learned_system_summary.videos.update(
+            input_trajectory_visualization.videos)
+        learned_system_summary.meshes.update(
+            input_trajectory_visualization.meshes)
+
         # epoch_vars.update(comparison_summary.scalars)
         # learned_system_summary.videos.update(comparison_summary.videos)
         # learned_system_summary.meshes.update(comparison_summary.meshes)
 
         return epoch_vars, learned_system_summary
 
+    def _evaluation(self, learned_system: System) -> StatisticsDict:
+        r"""Evaluate both oracle and learned system on training, validation,
+        and testing data, and saves results to disk.
+
+        Implemented as a wrapper for :meth:`evaluate_systems_on_sets`.
+
+        Args:
+            learned_system: Trained system.
+
+        Returns:
+            Statistics dictionary.
+
+        Warnings:
+            Currently assumes prediction horizon of 1.
+        """
+        assert self.learning_data_manager is not None
+        sets = dict(
+            zip(ALL_SETS,
+                self.learning_data_manager.get_updated_trajectory_sets()))
+        systems = {
+            ORACLE_SYSTEM_NAME: self.get_oracle_system(),
+            LEARNED_SYSTEM_NAME: learned_system
+        }
+
+        evaluation = self.evaluate_systems_on_sets(systems, sets)
+        file_utils.save_evaluation(self.config.storage, self.config.run_name,
+                                   evaluation)
+
+        # Generate final toss/geometry inspection videos with best parameters.
+        input_trajectory_vis = self.make_input_trajectory_visualization(
+            evaluation, learned_system, force_generate_videos=True)
+        self.wandb_manager.update(int(1e4), {}, input_trajectory_vis.videos, {})
+
+        return evaluation
 
 
 """Precomputed mass matrix and lagrangian forces expressions for robot
