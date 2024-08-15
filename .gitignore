@@ -183,3 +183,6 @@ helpers/*.csv
 
 # All vision-related trajectories
 assets/vision_*/
+
+# Bash scripts
+*.sh
