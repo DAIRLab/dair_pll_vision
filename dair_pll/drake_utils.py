@@ -246,11 +246,6 @@ def add_plant_from_urdfs(
         model_ids.extend(new_ids)
         plant.RenameModelInstance(new_ids[0], name)
 
-    # Flip the model ID list.  This ensures that the model ID ordering matches
-    # the MultibodyPlant state ordering, which always prepends the states of new
-    # models added to the plant.
-    model_ids.reverse()
-
     return model_ids, plant, scene_graph
 
 
@@ -422,11 +417,28 @@ class MultibodyPlantDiagram:
         if visualization_file == "meshcat":
             input("Start Meshcat now!")
 
+        # Ensure the model_ids order matches the state order.
+        first_joint_indices = []
+        for model_id in model_ids:
+            model_name = plant.GetModelInstanceName(model_id)
+            print(f'Model Index: {model_id}, Model Name: {model_name}')
+
+            if model_name == 'WorldModelInstance':
+                # Always put the world model first.
+                first_joint_indices.append(-1)
+            else:
+                first_joint_index = plant.GetJointIndices(model_id)[0]
+                int_index = int(
+                    str(first_joint_index).split('(')[1].split(')')[0])
+                first_joint_indices.append(int_index)
+
+        sorted_pairs = sorted(zip(first_joint_indices, model_ids))
+        self.model_ids = [element for _, element in sorted_pairs]
+
         self.sim = sim
         self.plant = plant
         self.scene_graph = scene_graph
         self.visualizer = visualizer
-        self.model_ids = model_ids
         self.space = self.generate_state_space()
 
     def generate_state_space(self) -> state_space.ProductSpace:
