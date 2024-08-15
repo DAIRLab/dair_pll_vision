@@ -523,28 +523,55 @@ class MultibodyLearnableSystem(System):
 
         # pylint: disable=E1103
         sliding_velocities = pbmm(J_t, v_plus.unsqueeze(-1))
-        sliding_speeds = sliding_velocities.reshape(phi.shape[:-1] +
-                                                    (n_contacts, 2)).norm(
-                                                        dim=-1, keepdim=True)
+        sliding_speeds = sliding_velocities.reshape(
+            phi.shape[:-1] + (n_contacts, 2)).norm(dim=-1, keepdim=True)
 
+        # Prepare to exclude the robot predictions from the prediction loss.
+        batch_dims = x.shape[:-1]
+        velocity_map = torch.diag(self.learnable_state_map[self.space.n_q:])
+        for _ in batch_dims:
+            velocity_map = velocity_map.unsqueeze(0)
+        velocity_map = velocity_map.expand(batch_dims + \
+                                           (self.space.n_v, self.space.n_v))
+        velocity_map = velocity_map.type(torch.double)
+
+        M_inv = torch.inverse(M)
+        Q = pbmm(J,
+                 pbmm(velocity_map,
+                      pbmm(M_inv,
+                           pbmm(velocity_map,
+                                J.transpose(-1, -2)))))
         J_M = pbmm(reorder_mat.transpose(-1, -2),
-                   pbmm(J, torch.linalg.cholesky(torch.inverse((M)))))
+                   pbmm(J,
+                        pbmm(velocity_map,
+                             torch.linalg.cholesky(M_inv))))
 
         dv = (v_plus - (v + non_contact_acceleration * dt)).unsqueeze(-2)
 
-        q_pred = -pbmm(J, dv.transpose(-1, -2))
+        q_pred = -pbmm(J,
+                       pbmm(velocity_map,
+                            pbmm(M_inv,
+                                 pbmm(velocity_map,
+                                      pbmm(M,
+                                           dv.transpose(-1, -2))))))
         q_comp = torch.abs(phi_then_zero).unsqueeze(-1)
         q_diss = dt * torch.cat((sliding_speeds, sliding_velocities), dim=-2)
-        q = q_pred + q_comp + q_diss
 
-        penetration_penalty = (torch.maximum(
-            -phi, torch.zeros_like(phi))**2).sum(dim=-1)
+        # Implement ContactNets loss weighting -- for solving for the forces,
+        # normalize based on w_pred.
+        q = q_pred + (self.w_comp/self.w_pred)*q_comp + \
+                     (self.w_diss/self.w_pred)*q_diss
 
-        penetration_penalty = penetration_penalty.reshape(
-            penetration_penalty.shape + (1, 1)) * 100.
+        c_pen = (torch.maximum(-phi, torch.zeros_like(phi))**2).sum(dim=-1)
+        c_pen = c_pen.reshape(c_pen.shape + (1, 1))
 
-        constant = 0.5 * pbmm(dv, pbmm(M, dv.transpose(
-            -1, -2))) + penetration_penalty
+        c_pred = 0.5 * pbmm(dv,
+                            pbmm(M,
+                                 pbmm(velocity_map,
+                                      pbmm(M_inv,
+                                           pbmm(velocity_map,
+                                                pbmm(M,
+                                                     dv.transpose(-1, -2)))))))
 
         # Envelope theorem guarantees that gradient of loss w.r.t. parameters
         # can ignore the gradient of the force w.r.t. the QCQP parameters.
@@ -563,7 +590,8 @@ class MultibodyLearnableSystem(System):
             (impulses.abs() > 1e3) | impulses.isnan() | impulses.isinf(),
             dim=-2, keepdim=True)
 
-        constant[invalid] *= 0.
+        c_pred[invalid] *= 0.
+        c_pen[invalid] *= 0.
         impulses[invalid.expand(impulses.shape)] = 0.
 
         # Get the normal forces
