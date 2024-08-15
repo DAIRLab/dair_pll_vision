@@ -41,9 +41,12 @@ VISION_SYSTEMS = ['vision_bottle', VISION_CUBE_SYSTEM, 'vision_egg',
                   'vision_chocolate', 'vision_cream', 'vision_croc',
                   'vision_crushedcan', 'vision_duck', 'vision_gallon',
                   'vision_greencan', 'vision_hotdog', 'vision_icetray',
-                  'vision_mug', 'vision_oatly', 'vision_pinkcan', 'vision_stapler',
-                  'vision_styrofoam', 'vision_toothpaste',
-                  'vision_robot_bakingbox_sticky_A']
+                  'vision_mug', 'vision_oatly', 'vision_pinkcan',
+                  'vision_stapler', 'vision_styrofoam', 'vision_toothpaste',
+                  'vision_robot_bakingbox_sticky_A', 'vision_robot_bakingbox',
+                  'vision_robot_greencan', 'vision_robot_oatly',
+                  'vision_robot_stapler', 'vision_robot_milk'
+                  ]
 
 
 @dataclass
@@ -606,7 +609,6 @@ class VisionRobotExperiment(VisionExperiment):
 
         return SystemSummary(scalars={}, videos=videos, meshes={})
 
-    # TODO: Possibly add in something to visualize robot interactions.
     def build_epoch_vars_and_system_summary(self, statistics: Dict,
             learned_system: System, force_generate_videos: bool = False
         ) -> Tuple[Dict, SystemSummary]:
@@ -699,7 +701,7 @@ class VisionRobotExperiment(VisionExperiment):
 
         # Generate final toss/geometry inspection videos with best parameters.
         input_trajectory_vis = self.make_input_trajectory_visualization(
-            evaluation, learned_system, force_generate_videos=True)
+            evaluation, learned_system)
         self.wandb_manager.update(int(1e4), {}, input_trajectory_vis.videos, {})
 
         return evaluation

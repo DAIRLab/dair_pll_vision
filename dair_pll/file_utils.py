@@ -386,14 +386,11 @@ def get_bundlesdf_geometry_data(asset_subdirs: str, bundlesdf_id: str,
         f'missing {BSDF_SUPPORT_DIRECTIONS_NAME} or {BSDF_SUPPORT_POINTS_NAME}.'
 
     bsdf_dirs = torch.load(
-        path.join(geom_input_dir, BSDF_SUPPORT_DIRECTIONS_NAME),
-        weights_only=True)
+        path.join(geom_input_dir, BSDF_SUPPORT_DIRECTIONS_NAME))
     bsdf_pts = torch.load(
-        path.join(geom_input_dir, BSDF_SUPPORT_POINTS_NAME),
-        weights_only=True)
+        path.join(geom_input_dir, BSDF_SUPPORT_POINTS_NAME))
     bsdf_ds = torch.load(
-        path.join(geom_input_dir, BSDF_SUPPORT_SCALARS_NAME),
-        weights_only=True)
+        path.join(geom_input_dir, BSDF_SUPPORT_SCALARS_NAME))
 
     assert bsdf_dirs.shape == bsdf_pts.shape, f'Expected BundleSDF support ' + \
         f'directions and points to have same shape, got {bsdf_dirs.shape} ' + \
@@ -488,7 +485,7 @@ def get_trajectory_assets_from_config(storage_name: str, run_name: str) -> str:
     for file in os.listdir(traj_dir):
         if file.endswith('.pt'):
             toss = int(file.split('.')[0])
-            traj = torch.load(path.join(traj_dir, file), weights_only=True)
+            traj = torch.load(path.join(traj_dir, file))
             toss_trajs[toss] = traj
 
     return toss_trajs

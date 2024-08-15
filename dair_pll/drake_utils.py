@@ -421,7 +421,6 @@ class MultibodyPlantDiagram:
         first_joint_indices = []
         for model_id in model_ids:
             model_name = plant.GetModelInstanceName(model_id)
-            print(f'Model Index: {model_id}, Model Name: {model_name}')
 
             if model_name == 'WorldModelInstance':
                 # Always put the world model first.

@@ -451,6 +451,16 @@ class ContactTerms(Module):
                 collision_candidates[geometry_index] = (geometry_pair[1],
                                                         geometry_pair[0])
 
+            # Ensure the learnable body is listed second.
+            # TODO: Make this more generalizable.  For now, this is necessary
+            # because ``forward`` returns the witness points on the learnable
+            # geometry, as distinct from the witness points on the nonlearnable
+            # geometries.
+            assert geometries[
+                collision_candidates[geometry_index][1]].learnable, \
+                f'Collision pair {collision_candidates[geometry_index]} ' + \
+                f'requires learnable object to be listed second.'
+
         self.geometry_rotations = make_configuration_callback(
             np.stack(rotations), q)
 
@@ -611,6 +621,9 @@ class ContactTerms(Module):
         Returns:
             (\*, n_collisions) signed distance phi(q).
             (\*, 3 * n_collisions, n_v) contact Jacobian J(q).
+            (\*, n_collisions, 3) contact point in body B frame, where body B is
+                the second body in each collision pair.  From the ``__init__``,
+                this body is always a learnable body.
         """
         # Pylint bug: cannot recognize instance attributes as Callable.
         # pylint: disable=too-many-locals,not-callable
@@ -653,6 +666,7 @@ class ContactTerms(Module):
 
         Jv_v_W_BcAc_F = []
         phi_list = []
+        p_BiBc_B_list = []
         obj_pair_list = []
         R_FW_list = []
         mu_list = []
@@ -685,6 +699,7 @@ class ContactTerms(Module):
             # contact relative velocity, (*, n_c, 3, 3)
             Jv_v_W_BcAc_F.append(pbmm(R_FW, Jv_v_WBc_W - Jv_v_WAc_W))
             phi_list.append(phi_i)
+            p_BiBc_B_list.append(p_BiBc_B)
             obj_pair_list.extend(n_c * [(geo_a.name, geo_b.name)])
             mu_list.extend(n_c * [mu_i])
             R_FW_list.extend([R_FW[..., i, :, :] for i in range(n_c)])
@@ -695,9 +710,17 @@ class ContactTerms(Module):
         phi = torch.cat(phi_list, dim=-1)  # type: Tensor
         J = ContactTerms.relative_velocity_to_contact_jacobian(
             torch.cat(Jv_v_W_BcAc_F, dim=-3), mu_repeated)
+        p_BiBc_B = torch.cat(p_BiBc_B_list, dim=-2)
 
         if torch.any(J.isnan()):
             pdb.set_trace()
+
+        # Some size checking.
+        n_lambda = phi.shape[-1]
+        n_v = J.shape[-1]
+        assert J.shape[-2:] == (3 * n_lambda, n_v)
+        assert p_BiBc_B.shape[-2:] == (n_lambda, 3)
+        assert len(obj_pair_list) == len(R_FW_list) == len(mu_list) == n_lambda
 
         return phi, J, p_BiBc_B, obj_pair_list, R_FW_list, mu_list
 

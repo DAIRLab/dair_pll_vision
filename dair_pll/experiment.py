@@ -1130,5 +1130,6 @@ class SupervisedLearningExperiment(ABC):
         # Generate some BundleSDF training data based on the above results.
         bundlesdf_interface.generate_training_data_for_run(
             run_name=self.config.run_name,
-            storage_name=self.config.storage
+            storage_name=self.config.storage,
+            system=learned_system
         )

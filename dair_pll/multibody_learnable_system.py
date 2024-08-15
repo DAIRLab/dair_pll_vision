@@ -536,11 +536,6 @@ class MultibodyLearnableSystem(System):
         velocity_map = velocity_map.type(torch.double)
 
         M_inv = torch.inverse(M)
-        Q = pbmm(J,
-                 pbmm(velocity_map,
-                      pbmm(M_inv,
-                           pbmm(velocity_map,
-                                J.transpose(-1, -2)))))
         J_M = pbmm(reorder_mat.transpose(-1, -2),
                    pbmm(J,
                         pbmm(velocity_map,

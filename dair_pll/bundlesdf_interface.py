@@ -25,6 +25,7 @@ from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
     EXPORT_FORCES_DEFAULT_NAME, \
     EXPORT_STATES_DEFAULT_NAME, \
     EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME
+from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 
 
 TEST_RUN_NAME = 'pll_id_00' #'pll_id_p15'  #'test_004'
@@ -775,10 +776,11 @@ def generate_point_sdf_gradient_pairs(
     return extended_points, extended_normals, extended_toss_frames
 
 
-def generate_training_data_for_run(run_name: str, storage_name: str):
+def generate_training_data_for_run(
+        run_name: str, storage_name: str, system: MultibodyLearnableSystem):
     # First make sure the toss and frame indices are available.
     localize_toss_and_frame_from_states(
-        storage_name=storage_name, run_name=run_name)
+        storage_name=storage_name, run_name=run_name, system=system)
 
     # Load the exported outputs from the experiment run.
     output_dir = file_utils.geom_for_bsdf_dir(storage_name, run_name)
@@ -1396,8 +1398,9 @@ def load_deep_support_convex_network(run_name: str, system: str
     return deep_support
 
 
-def localize_toss_and_frame_from_states(storage_name: str, run_name: str
-                                        ) -> None:
+def localize_toss_and_frame_from_states(
+        storage_name: str, run_name: str, system: MultibodyLearnableSystem
+) -> None:
     """The states associated with contact points/directions/forces can be used
     to localize which toss and which frame within the toss the data comes from.
     Identify these indices and store to file, if not found already."""
@@ -1410,7 +1413,8 @@ def localize_toss_and_frame_from_states(storage_name: str, run_name: str
 
     # Otherwise, generate it.
     states = torch.load(
-        op.join(output_dir, EXPORT_STATES_DEFAULT_NAME), weights_only=True).detach()
+            op.join(output_dir, EXPORT_STATES_DEFAULT_NAME), weights_only=True
+        ).detach()
 
     # Get the trajectories.
     toss_trajs = file_utils.get_trajectory_assets_from_config(
@@ -1419,22 +1423,25 @@ def localize_toss_and_frame_from_states(storage_name: str, run_name: str
     tosses_frames = torch.zeros((states.shape[0], 2), dtype=torch.int)
 
     # Iterate over every state to find which trajectory it's from.
-    used_ambiguous_frames = []
     for i, state in enumerate(states):
         toss = -1
-        for toss_i, traj_i in toss_trajs.items():
+        for toss_i, unprocessed_traj_i in toss_trajs.items():
+            traj_i = system.construct_state_tensor(unprocessed_traj_i)
             if torch.where((traj_i == state).all(dim=1))[0].shape[0] >= 1:
                 assert toss == -1, f'Found multiple tosses for state ' + \
                     f'{state}: {toss_i} and {toss}.'
                 toss = toss_i
         assert toss != -1, f'Could not find toss for state {state}.'
 
-        frame_in_toss = torch.where((toss_trajs[toss] == state).all(dim=1))[0]
+        frame_in_toss = torch.where((
+                system.construct_state_tensor(toss_trajs[toss]) == state
+            ).all(dim=1))[0]
         
         # If there are two states that are exactly the same, it doesn't matter
         # which is selected, so pick the first.
         if frame_in_toss.shape[0] != 1:
-            print(f'Found duplicate matching states {frame_in_toss}; using first.')
+            print(f'Found duplicate matching states {frame_in_toss}; ' + \
+                  f'using first.')
             frame_in_toss = frame_in_toss[0]
 
         tosses_frames[i] = torch.tensor([toss, frame_in_toss.item()])

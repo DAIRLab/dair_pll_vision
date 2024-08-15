@@ -89,6 +89,11 @@ LRS = {VISION_CUBE_SYSTEM: CUBE_LR,
        'vision_styrofoam': 1e-3,
        'vision_toothpaste': 1e-3,
        'vision_robot_bakingbox_sticky_A': 1e-3,
+       'vision_robot_bakingbox': 1e-3,
+       'vision_robot_greencan': 1e-3,
+       'vision_robot_oatly': 1e-3,
+       'vision_robot_stapler': 1e-3,
+       'vision_robot_milk': 1e-3,
        }
 CUBE_WD = 0.0
 PRISM_WD = 0.0
@@ -121,6 +126,11 @@ WDS = {VISION_CUBE_SYSTEM: CUBE_WD,
        'vision_styrofoam': 0.0,
        'vision_toothpaste': 0.0,
        'vision_robot_bakingbox_sticky_A': 0.0,
+       'vision_robot_bakingbox': 0.0,
+       'vision_robot_greencan': 0.0,
+       'vision_robot_oatly': 0.0,
+       'vision_robot_stapler': 0.0,
+       'vision_robot_milk': 0.0,
 }
 EPOCHS = 200 #500
 PATIENCE = 100 #EPOCHS
