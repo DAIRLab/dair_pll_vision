@@ -596,12 +596,22 @@ class VisionRobotExperiment(VisionExperiment):
                 if not target_key in statistics:
                     continue
                 target_trajectory = Tensor(statistics[target_key][traj_num])
-                prediction_trajectory = target_trajectory
+
+                # HACK:  hard-code the state ordering.
+                single_q, single_v = space.q_v(target_trajectory)
+                _world_q, robot_q, object_q = space.q_split(single_q)
+                _world_v, robot_v, object_v = space.v_split(single_v)
+
+                assert robot_q.shape[-1] == object_q.shape[-1] == 7
+                assert robot_v.shape[-1] == 7
+                assert object_v.shape[-1] == 6
+
+                # The visualization system should have both robots first and
+                # both objects second.
                 visualization_trajectory = torch.cat(
-                    (space.q(target_trajectory),
-                     space.q(prediction_trajectory),
-                     space.v(target_trajectory),
-                     space.v(prediction_trajectory)), -1)
+                    (robot_q, robot_q, object_q, object_q,
+                     robot_v, robot_v, object_v, object_v), -1)
+
                 video, framerate = vis_utils.visualize_trajectory(
                     visualization_system, visualization_trajectory)
                 videos[f'{set_name}_input_trajectory_{traj_num}'] = \
