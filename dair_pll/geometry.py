@@ -226,11 +226,15 @@ class SparseVertexConvexCollisionGeometry(BoundedConvexCollisionGeometry):
             [vertices[batch_range, selection] for selection in selections], -2)
         # reshape to (*, n_query, 3)
         queries = top_vertices.view(original_shape[:-1] + (self.n_query, 3))
-        if self.n_query > 1 and (hint is not None) and hint.shape == directions.shape:
+        if self.n_query > 1 and (hint is not None) and \
+            (hint.shape == directions.shape):
             # Find linear combination of queries 
-            # Lst Sq: queries (*, 3, n_query) * ? (*, n_query, 1) == hint (*, 1, 3)
-            # TODO: HACK, does this differentiate correctly? Should I attach queries?
-            sol = torch.linalg.lstsq(queries.detach().transpose(-1, -2), hint.unsqueeze(-1)).solution
+            # Lst Sq: queries (*, 3, n_query) * ? (*, n_query, 1) == hint
+            # (*, 1, 3)
+            # TODO: HACK, does this differentiate correctly? Should I attach
+            # queries?
+            sol = torch.linalg.lstsq(
+                queries.detach().transpose(-1, -2), hint.unsqueeze(-1)).solution
             return pbmm(queries.transpose(-1, -2), sol).transpose(-1, -2)
 
         return queries
@@ -775,10 +779,11 @@ class GeometryCollider:
         hints_b = torch.zeros_like(p_AoBo_A)
 
         # setup fcl=
-        a_obj = fcl.CollisionObject(geometry_a.get_fcl_geometry(),
-                                    fcl.Transform())
-        b_obj = fcl.CollisionObject(geometry_b.get_fcl_geometry(),
-                                    fcl.Transform())
+        a_fcl_geometry = geometry_a.get_fcl_geometry()
+        b_fcl_geometry = geometry_b.get_fcl_geometry()
+        a_obj = fcl.CollisionObject(a_fcl_geometry, fcl.Transform())
+        b_obj = fcl.CollisionObject(b_fcl_geometry, fcl.Transform())
+
         collision_request = fcl.CollisionRequest()
         collision_request.enable_contact = True
         distance_request = fcl.DistanceRequest()
@@ -792,7 +797,8 @@ class GeometryCollider:
             if fcl.collide(a_obj, b_obj, collision_request, result) > 0:
                 # Collision detected.
                 # Assume only 1 contact point.
-                directions[transform_index] += result.contacts[0].normal
+                directions[transform_index] += fcl_collision_direction_cleaner(
+                    a_fcl_geometry, b_fcl_geometry, result)
                 nearest_points = [
                     result.contacts[0].pos + \
                         result.contacts[0].penetration_depth/2.0 * \
@@ -803,11 +809,12 @@ class GeometryCollider:
                 ]
             else:
                 result = fcl.DistanceResult()
-                fcl.distance(a_obj, b_obj, distance_request, result)
-                directions[transform_index] += Tensor(result.nearest_points[1] -
-                                                      result.nearest_points[0])
+                a_pt_A, b_pt_A = fcl_distance_nearest_points_cleaner(
+                    a_fcl_geometry, b_fcl_geometry, a_obj, b_obj,
+                    distance_request, result)
+                directions[transform_index] += b_pt_A - a_pt_A
 
-                nearest_points = result.nearest_points
+                nearest_points = (a_pt_A, b_pt_A)
 
             # Record Hints == expected contact point in each object's frame
             hints_a[transform_index] = torch.tensor(nearest_points[0])
@@ -837,3 +844,106 @@ class GeometryCollider:
         p_AoAc_A = p_AoAc_A.reshape(original_batch_dims + (1, 3))
         p_BoBc_B = p_BoBc_B.reshape(original_batch_dims + (1, 3))
         return phi, R_AC, p_AoAc_A, p_BoBc_B
+
+
+def fcl_collision_direction_cleaner(
+        a_geom: fcl.CollisionGeometry,
+        b_geom: fcl.CollisionGeometry,
+        result: fcl.CollisionResult) -> Tuple[Tensor, Tensor]:
+    """Compensates for bugs in FCL's collision reults.  The primary issue is
+    that it can swap the order of the objects in the result, meaning the normal
+    direction is also swapped.  This function detects when this is the case,
+    corrects the result, and returns the processed direction vector.
+
+    NOTE:  This assumes the result was already used in a collision request i.e.
+    ``fcl.collide()`` was called.
+
+    NOTE:  This assumes a single contact by always grabbing the 0th index
+    result.
+
+    Args:
+        a_geom: first collision geometry
+        b_geom: second collision geometry
+        result: collision result
+
+    Returns:
+        (3,) contact normal vector from A to B
+    """
+    # Detect if the order of the result's objects matches the input arguments.
+    if result.contacts[0].o1 == a_geom:
+        assert result.contacts[0].o2 == b_geom
+        normal_direction = Tensor(result.contacts[0].normal)
+
+    else:
+        assert result.contacts[0].o1 == b_geom
+        assert result.contacts[0].o2 == a_geom
+        normal_direction = -Tensor(result.contacts[0].normal)
+
+    return normal_direction
+
+
+def fcl_distance_nearest_points_cleaner(
+        a_geom: fcl.CollisionGeometry,
+        b_geom: fcl.CollisionGeometry,
+        a_obj: fcl.CollisionObject,
+        b_obj: fcl.CollisionObject,
+        distance_request: fcl.DistanceRequest,
+        result: fcl.DistanceResult) -> Tuple[Tensor, Tensor]:
+    """Compensates for bugs in FCL's distance reults.  The primary issue is that
+    while the distance reported by the call to ``fcl.distance()`` is correct,
+    the nearest points can be incorrect.  Through experimentation, it was
+    discovered that usually this issue is due to the nearest points being
+    expressed in different frames.  This function detects when this is the case,
+    corrects the result, and returns the processed nearest points both expressed
+    in object A frame.
+
+    Args:
+        a_geom: first collision geometry
+        b_geom: second collision geometry
+        a_obj: first collision object, containing a_geom as its geometry
+        b_obj: second collision object, containing b_geom as its geometry
+        distance_request: distance request
+        result: distance result
+
+    Returns:
+        (3,) p_AoAc_A
+        (3,) p_AoBc_A
+    """
+    # Threshold for checking the distance result conversion worked.
+    eps = 1e-5      # 1e-5 is a hundredth of a millimeter.
+
+    # Compute the distance request.
+    distance = fcl.distance(a_obj, b_obj, distance_request, result)
+
+    # Determine the order of the objects in the result.
+    a_index = 0 if result.o1 == a_geom else 1
+    b_index = 0 if result.o1 == b_geom else 1
+    assert a_index != b_index
+    if a_index == 0:
+        assert result.o1 == a_geom
+        assert result.o2 == b_geom
+        flipped = False
+    else:
+        assert result.o1 == b_geom
+        assert result.o2 == a_geom
+        flipped = True
+
+    # Ensure the nearest points make sense.
+    if not flipped:
+        a_pt_A = Tensor(result.nearest_points[a_index])
+        b_pt_A = Tensor(result.nearest_points[b_index])
+    else:
+        a_pt_A = Tensor(result.nearest_points[a_index])
+        b_pt_B = Tensor(result.nearest_points[b_index])
+
+        assert np.all(a_obj.getQuatRotation() == np.array([1, 0, 0, 0]))
+        assert np.all(a_obj.getTranslation() == np.array([0, 0, 0]))
+
+        p_AoBo_A = Tensor(b_obj.getTranslation())
+        R_AB = Tensor(b_obj.getRotation())
+
+        b_pt_A = pbmm(b_pt_B, R_AB.transpose(-1, -2)) + p_AoBo_A
+
+    assert torch.abs(distance - torch.linalg.norm(b_pt_A - a_pt_A)).item() < eps
+
+    return a_pt_A, b_pt_A
