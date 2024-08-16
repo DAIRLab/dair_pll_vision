@@ -186,3 +186,6 @@ assets/vision_*/
 
 # Bash scripts
 *.sh
+
+# FCL repo for testing
+test/python-fcl/
