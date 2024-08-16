@@ -591,7 +591,13 @@ class MultibodyLearnableSystem(System):
 
         # Get the normal forces
         normal_impulses = impulses[:, :n_contacts].reshape(-1, n_contacts)
-        orientation = q_plus[..., :4]
+
+        # Get the object orientation.
+        position_names = \
+            self.multibody_terms.plant_diagram.plant.GetPositionNames()
+        q_object_orientation_mask = torch.tensor(
+            [s.startswith('object_body_q') for s in position_names])
+        orientation = q_plus[..., q_object_orientation_mask]
 
         # Get the contact points that correspond to high normal forces
         def ground_orientation_in_body_frame(object_orientation, n_lambda):
