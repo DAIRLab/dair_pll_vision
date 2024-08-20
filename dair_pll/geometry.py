@@ -132,7 +132,8 @@ class BoundedConvexCollisionGeometry(CollisionGeometry):
     """
 
     @abstractmethod
-    def support_points(self, directions: Tensor, hint: Optional[Tensor] = None) -> Tensor:
+    def support_points(
+        self, directions: Tensor, hint: Optional[Tensor] = None) -> Tensor:
         """Returns a set of witness points representing contact with another
         shape off in the direction(s) ``directions``.
 
@@ -240,7 +241,7 @@ class SparseVertexConvexCollisionGeometry(BoundedConvexCollisionGeometry):
         return queries
 
     @abstractmethod
-    def get_vertices(self, directions: Tensor) -> Tensor:
+    def get_vertices(self, directions: Tensor, *kwargs: None) -> Tensor:
         """Returns sparse witness point set as collection of vertices.
 
         Specifically, given search directions, returns a set of points
@@ -287,7 +288,7 @@ class Polygon(SparseVertexConvexCollisionGeometry):
     def get_fcl_geometry(self) -> fcl.CollisionGeometry:
         raise NotImplementedError
 
-    def get_vertices(self, directions: Tensor) -> Tensor:
+    def get_vertices(self, directions: Tensor, *kwargs: None) -> Tensor:
         """Return batched view of static vertex set"""
         scaled_vertices = _NOMINAL_HALF_LENGTH * self.vertices_parameter
         return scaled_vertices.expand(
@@ -365,11 +366,15 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         self.perturbations = torch.cat((torch.zeros(
             (1, 3)), perturbation * (torch.rand((n_query - 1, 3)) - 0.5)))
 
-    def get_vertices(self, directions: Tensor) -> Tensor:
+    def get_vertices(
+            self, directions: Tensor, sample_entire_mesh: bool = False
+    ) -> Tensor:
         """Return batched view of support points of interest.
 
         Given a direction :math:`d`, this function finds the support point of
-        the object in that direction, calculated via envelope
+        the object in that direction, calculated via envelope theorem.  If
+        ``sample_entire_mesh`` is set to True, this function samples points
+        broadly across the whole surface of the object geometry.
 
         Args:
             directions: ``(*, 3)`` batch of support directions sample.
@@ -377,6 +382,12 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         Returns:
             ``(*, n_query, 3)`` sampled support points.
         """
+        if sample_entire_mesh:
+            mesh = extract_mesh_from_support_function(self.network)
+            single_vertices = mesh.vertices
+            return single_vertices.expand(
+                directions.shape[:-1] + single_vertices.shape)
+
         # Can query different number of directions during training/evaluation.
         n_to_add = self.n_query if self.network.training else \
             _DEEP_SUPPORT_EVAL_N_QUERY
@@ -472,7 +483,7 @@ class Box(SparseVertexConvexCollisionGeometry):
         the box as its absolute value."""
         return torch.abs(self.length_params) * _NOMINAL_HALF_LENGTH
 
-    def get_vertices(self, directions: Tensor) -> Tensor:
+    def get_vertices(self, directions: Tensor, *kwargs: None) -> Tensor:
         """Returns view of cuboid's static vertex set."""
         return (self.unit_vertices *
                 self.get_half_lengths()).expand(directions.shape[:-1] +
@@ -524,7 +535,8 @@ class Sphere(BoundedConvexCollisionGeometry):
         sphere as its absolute value."""
         return torch.abs(self.length_param)
 
-    def support_points(self, directions: Tensor, _: Optional[Tensor] = None) -> Tensor:
+    def support_points(
+            self, directions: Tensor, _: Optional[Tensor] = None) -> Tensor:
         """Implements ``BoundedConvexCollisionGeometry.support_points()``
         via analytic expression::
 
@@ -691,12 +703,14 @@ class GeometryCollider:
         assert not geometry_a > geometry_b
 
         # case 1: half-space to compact-convex collision
-        # TODO: make function allow planes in general, not just in 1st slot and
-        # at z=0.
         if isinstance(geometry_a, Plane) and isinstance(
                 geometry_b, BoundedConvexCollisionGeometry):
             return GeometryCollider.collide_plane_convex(
                 geometry_b, R_AB, p_AoBo_A)
+        if isinstance(geometry_a, Sphere) and isinstance(
+                geometry_b, SparseVertexConvexCollisionGeometry):
+            return GeometryCollider.collide_sphere_sparse_convex(
+                geometry_a, geometry_b, R_AB, p_AoBo_A)
         if isinstance(geometry_a, BoundedConvexCollisionGeometry) and \
             isinstance(geometry_b, BoundedConvexCollisionGeometry):
             return GeometryCollider.collide_convex_convex(
@@ -744,13 +758,108 @@ class GeometryCollider:
         return phi, R_AC, p_AoAc_A, p_BoBc_B
 
     @staticmethod
+    def collide_sphere_sparse_convex(
+        geometry_a: Sphere,
+        geometry_b: SparseVertexConvexCollisionGeometry,
+        R_AB: Tensor,
+        p_AoBo_A: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Custom implementation of ``GeometryCollider.collide()`` when the
+        first geometry is a sphere and the second geometry is a sparse vertex
+        convex collision geometry.
+
+        TODO:  This might be able to go faster if we keep the mesh at the same
+        location and change the sphere location.  This way, we can query the
+        trimesh mesh object's signed distances with a batch of sphere locations.
+        """
+        # Call network directly for DeepSupportConvex objects.
+        support_fn_a = geometry_a.support_points
+        support_fn_b = geometry_b.support_points
+        if isinstance(geometry_b, DeepSupportConvex):
+            support_fn_b = geometry_b.network
+
+        ORIGIN_XYZ = np.array([0,0,0]).reshape(1, 3)
+
+        # Get shapes of inputs, ensuring of correct dimensions.
+        p_AoBo_A = p_AoBo_A.unsqueeze(-2)
+        original_batch_dims = p_AoBo_A.shape[:-2]
+        p_AoBo_A = p_AoBo_A.view(-1, 3)
+        R_AB = R_AB.view(-1, 3, 3)
+        batch_range = p_AoBo_A.shape[0]
+
+        # Get the vertex set of the second geometry and define a trimesh object
+        # from it.
+        directions = torch.zeros_like(p_AoBo_A)
+        b_vertices_B = geometry_b.get_vertices(
+            directions, sample_entire_mesh=True)
+        trimesh_mesh = trimesh.Trimesh(
+            vertices=b_vertices_B[0].detach().numpy()).convex_hull
+        trimesh_mesh.process()
+
+        for transform_index in range(batch_range):
+            # Transform the mesh.
+            T_AB = np.eye(4)
+            T_AB[:3, :3] = R_AB[transform_index].detach().numpy()
+            T_AB[:3, 3] = p_AoBo_A[transform_index].detach().numpy()
+            trimesh_mesh.apply_transform(T_AB)
+
+            # Find nearest points.
+            closest_points, _distances, _triangle_ids = \
+                trimesh.proximity.closest_point(trimesh_mesh, ORIGIN_XYZ)
+            closest_point = closest_points[0]
+
+            # Rely on Trimesh's signed # distance function.  NOTE: Negative sign
+            # here because Trimesh uses points inside the mesh have positive
+            # signed distance, which is opposite of our convention.
+            signed_distance = -trimesh.proximity.signed_distance(
+                trimesh_mesh, ORIGIN_XYZ)[0] - geometry_a.get_radius()
+
+            # Regardless of whether a collision has occurred, the (unscaled)
+            # direction of the contact is the closest point on the mesh, since
+            # the sphere is located at the origin.  This direction has to be
+            # flipped if the origin is inside the mesh.
+            directions[transform_index] += closest_point
+            if signed_distance < -geometry_a.get_radius():
+                directions[transform_index] *= -1
+
+            # Undo the transformation in preparation for the next
+            # transformation.
+            trimesh_mesh.apply_transform(np.linalg.inv(T_AB))
+
+        R_AC = rotation_matrix_from_one_vector(directions, 2)
+
+        # Get normal directions in each object frame.
+        directions_A = directions / directions.norm(dim=-1, keepdim=True)
+        directions_B = -pbmm(directions_A.unsqueeze(-2), R_AB).squeeze(-2)
+
+        p_AoAc_A = support_fn_a(directions_A).squeeze(-2)
+        p_BoBc_B = support_fn_b(directions_B)
+        p_BoBc_A = pbmm(p_BoBc_B.unsqueeze(-2),
+                        R_AB.transpose(-1, -2)).squeeze(-2)
+
+        p_AcBc_A = -p_AoAc_A + p_AoBo_A + p_BoBc_A
+
+        phi = (p_AcBc_A * R_AC[..., 2]).sum(dim=-1)
+
+        phi = phi.reshape(original_batch_dims + (1,))
+        R_AC = R_AC.reshape(original_batch_dims + (1, 3, 3))
+        p_AoAc_A = p_AoAc_A.reshape(original_batch_dims + (1, 3))
+        p_BoBc_B = p_BoBc_B.reshape(original_batch_dims + (1, 3))
+        return phi, R_AC, p_AoAc_A, p_BoBc_B
+
+    @staticmethod
     def collide_convex_convex(
             geometry_a: BoundedConvexCollisionGeometry,
             geometry_b: BoundedConvexCollisionGeometry,
             R_AB: Tensor,
             p_AoBo_A: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Implementation of ``GeometryCollider.collide()`` when
-        both geometries are ``BoundedConvexCollisionGeometry``\es."""
+        both geometries are ``BoundedConvexCollisionGeometry``\es.
+
+        CAUTION:  FCL was found to be unreliable in some cases.  Some of the
+        issues were addressed with ``fcl_direction_cleaner`` and
+        ``fcl_distance_nearest_points_cleaner``, but there are other observed
+        issues in the collision detection and the associated contact normals.
+        """
         # pylint: disable=too-many-locals
 
         # Call network directly for DeepSupportConvex objects
