@@ -709,7 +709,7 @@ class GeometryCollider:
                 geometry_b, R_AB, p_AoBo_A)
         if isinstance(geometry_a, Sphere) and isinstance(
                 geometry_b, SparseVertexConvexCollisionGeometry):
-            return GeometryCollider.collide_sphere_sparse_convex(
+            return GeometryCollider.collide_sphere_sparse_convex_parallel(
                 geometry_a, geometry_b, R_AB, p_AoBo_A)
         if isinstance(geometry_a, BoundedConvexCollisionGeometry) and \
             isinstance(geometry_b, BoundedConvexCollisionGeometry):
@@ -767,9 +767,9 @@ class GeometryCollider:
         first geometry is a sphere and the second geometry is a sparse vertex
         convex collision geometry.
 
-        TODO:  This might be able to go faster if we keep the mesh at the same
-        location and change the sphere location.  This way, we can query the
-        trimesh mesh object's signed distances with a batch of sphere locations.
+        NOTE:  This implementation is not parallelized and was developed / can
+        be used for debugging purposes.  Otherwise it is unused in favor of
+        ``collide_sphere_sparse_convex_parallel``.
         """
         # Call network directly for DeepSupportConvex objects.
         support_fn_a = geometry_a.support_points
@@ -847,6 +847,92 @@ class GeometryCollider:
         return phi, R_AC, p_AoAc_A, p_BoBc_B
 
     @staticmethod
+    def collide_sphere_sparse_convex_parallel(
+        geometry_a: Sphere,
+        geometry_b: SparseVertexConvexCollisionGeometry,
+        R_AB: Tensor,
+        p_AoBo_A: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Implementation of ``GeometryCollider.collide()`` when the first
+        geometry is a sphere and the second geometry is a sparse vertex convex
+        collision geometry.  Leverages trimesh for signed distance queries.
+
+        This is a parallelized version of ``collide_sphere_sparse_convex`` that
+        seems to have similar quality of results while running anywhere from
+        2.5x to 10x faster."""
+        # Call network directly for DeepSupportConvex objects.
+        support_fn_a = geometry_a.support_points
+        support_fn_b = geometry_b.support_points
+        if isinstance(geometry_b, DeepSupportConvex):
+            support_fn_b = geometry_b.network
+
+        # Get shapes of inputs, ensuring of correct dimensions.
+        p_AoBo_A = p_AoBo_A.unsqueeze(-2)
+        original_batch_dims = p_AoBo_A.shape[:-2]
+        p_AoBo_A = p_AoBo_A.view(-1, 3)
+        R_AB = R_AB.view(-1, 3, 3)
+
+        # Fix the geometry B origin, and compute new locations for A expressed
+        # in B frame.  This allows us to query the mesh at the same location for
+        # multiple relative sphere locations at a time, speeding up the signed
+        # distance queries.
+        p_BoAo_B = -pbmm(p_AoBo_A.unsqueeze(-2), R_AB).squeeze(-2)
+        R_BA = R_AB.transpose(-1, -2)
+
+        # Get the vertex set of the second geometry and define a trimesh object
+        # from it.
+        directions_A_to_B_in_B = torch.zeros_like(p_BoAo_B)
+        b_vertices_B = geometry_b.get_vertices(
+            directions_A_to_B_in_B, sample_entire_mesh=True)
+        trimesh_mesh = trimesh.Trimesh(
+            vertices=b_vertices_B[0].detach().numpy()).convex_hull
+        trimesh_mesh.process()
+
+        # Find nearest points on mesh to the centers of the sphere at its
+        # various locations.
+        closest_points, _distances, _triangle_ids = \
+            trimesh.proximity.closest_point(trimesh_mesh, p_BoAo_B)
+
+        # Query the signed distances from the mesh to the sphere centers.
+        # NOTE: Negative sign here because trimesh uses points inside the mesh
+        # have positive signed distance, which is opposite of our convention.
+        signed_distances = -trimesh.proximity.signed_distance(
+            trimesh_mesh, p_BoAo_B) - geometry_a.get_radius().item()
+
+        # Use the vector from the sphere center to the closest point on the mesh
+        # as the contact direction.  If the sphere's origin is inside the mesh,
+        # flip the direction to ensure it always points from the sphere into the
+        # mesh.
+        directions_A_to_B_in_B = closest_points - p_BoAo_B.detach().numpy()
+        to_flip_mask = signed_distances < -geometry_a.get_radius().item()
+        directions_A_to_B_in_B[to_flip_mask] *= -1
+
+        directions_A_to_B_in_B = Tensor(directions_A_to_B_in_B)
+
+        directions_A_to_B_in_A = pbmm(
+            directions_A_to_B_in_B.unsqueeze(-2), R_BA).squeeze(-2)
+        R_AC = rotation_matrix_from_one_vector(directions_A_to_B_in_A, 2)
+
+        # Get normal directions in each object frame.
+        directions_B = -directions_A_to_B_in_B / directions_A_to_B_in_B.norm(
+            dim=-1, keepdim=True)
+        directions_A = -pbmm(directions_B.unsqueeze(-2), R_BA).squeeze(-2)
+
+        p_AoAc_A = support_fn_a(directions_A).squeeze(-2)
+        p_BoBc_B = support_fn_b(directions_B)
+        p_BoBc_A = pbmm(p_BoBc_B.unsqueeze(-2),
+                        R_AB.transpose(-1, -2)).squeeze(-2)
+
+        p_AcBc_A = -p_AoAc_A + p_AoBo_A + p_BoBc_A
+
+        phi = (p_AcBc_A * R_AC[..., 2]).sum(dim=-1)
+
+        phi = phi.reshape(original_batch_dims + (1,))
+        R_AC = R_AC.reshape(original_batch_dims + (1, 3, 3))
+        p_AoAc_A = p_AoAc_A.reshape(original_batch_dims + (1, 3))
+        p_BoBc_B = p_BoBc_B.reshape(original_batch_dims + (1, 3))
+        return phi, R_AC, p_AoAc_A, p_BoBc_B
+
+    @staticmethod
     def collide_convex_convex(
             geometry_a: BoundedConvexCollisionGeometry,
             geometry_b: BoundedConvexCollisionGeometry,
@@ -860,6 +946,8 @@ class GeometryCollider:
         ``fcl_distance_nearest_points_cleaner``, but there are other observed
         issues in the collision detection and the associated contact normals.
         """
+        raise RuntimeError(
+            "This function is not currently supported due to issues with FCL.")
         # pylint: disable=too-many-locals
 
         # Call network directly for DeepSupportConvex objects
