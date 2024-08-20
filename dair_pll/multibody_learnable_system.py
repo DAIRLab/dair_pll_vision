@@ -231,7 +231,8 @@ class MultibodyLearnableSystem(System):
         return loss
 
     def calculate_contactnets_loss_terms(
-            self, x: Tensor, u: Tensor, x_plus: Tensor
+            self, x: Tensor, u: Tensor, x_plus: Tensor,
+            return_impulses: bool = False
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Helper function for
         :py:meth:`MultibodyLearnableSystem.contactnets_loss` that returns the
@@ -252,12 +253,6 @@ class MultibodyLearnableSystem(System):
             (*,) penetration loss.
             (*,) dissipation violation loss.
         """
-        if self.w_pred == 0:
-            assert self.w_comp==self.w_pen==self.w_diss==0, f'w_pred is 0 ' + \
-                f'so required the rest are zero too.'
-            return torch.zeros_like(x[..., 0]), torch.zeros_like(x[..., 0]), \
-                   torch.zeros_like(x[..., 0]), torch.zeros_like(x[..., 0])
-
         # pylint: disable-msg=too-many-locals
         v = self.space.v(x)
         q_plus, v_plus = self.space.q_v(x_plus)
@@ -295,18 +290,22 @@ class MultibodyLearnableSystem(System):
         velocity_map = velocity_map.type(torch.double)
 
         M_inv = torch.inverse(M)
+        # Q is unscaled by any loss weights.
         Q = pbmm(J,
                  pbmm(velocity_map,
                       pbmm(M_inv,
                            pbmm(velocity_map,
                                 J.transpose(-1, -2)))))
-        J_M = pbmm(reorder_mat.transpose(-1, -2),
-                   pbmm(J,
-                        pbmm(velocity_map,
-                             torch.linalg.cholesky(M_inv))))
+        # J_M is scaled:  Define J_M such that J_M^T * J_M = w_pred * Q.
+        J_M = np.sqrt(self.w_pred) * \
+            pbmm(reorder_mat.transpose(-1, -2),
+                 pbmm(J,
+                      pbmm(velocity_map,
+                           torch.linalg.cholesky(M_inv))))
 
         dv = (v_plus - (v + non_contact_acceleration * dt)).unsqueeze(-2)
 
+        # q_pred, q_comp, and q_diss are unscaled by any loss weights.
         q_pred = -pbmm(J,
                        pbmm(velocity_map,
                             pbmm(M_inv,
@@ -316,11 +315,10 @@ class MultibodyLearnableSystem(System):
         q_comp = torch.abs(phi_then_zero).unsqueeze(-1)
         q_diss = dt * torch.cat((sliding_speeds, sliding_velocities), dim=-2)
 
-        # Implement ContactNets loss weighting -- for solving for the forces,
-        # normalize based on w_pred.
-        q = q_pred + (self.w_comp/self.w_pred)*q_comp + \
-                     (self.w_diss/self.w_pred)*q_diss
+        # Introduce q loss weighting for solving for the forces.
+        q = self.w_pred*q_pred + self.w_comp*q_comp + self.w_diss*q_diss
 
+        # c_pen and c_pred are unscaled by any loss weights.
         c_pen = (torch.maximum(-phi, torch.zeros_like(phi))**2).sum(dim=-1)
         c_pen = c_pen.reshape(c_pen.shape + (1, 1))
 
@@ -358,6 +356,11 @@ class MultibodyLearnableSystem(System):
         c_pen[invalid] *= 0.
         impulses[invalid.expand(impulses.shape)] = 0.
 
+        # Return only the batched impulses if requested.
+        if return_impulses:
+            return impulses
+
+        # Get the unscaled loss terms.
         loss_pred = 0.5 * pbmm(impulses.transpose(-1, -2), pbmm(Q, impulses)) \
                     + pbmm(impulses.transpose(-1, -2), q_pred) + c_pred
         loss_comp = pbmm(impulses.transpose(-1, -2), q_comp)
@@ -501,95 +504,18 @@ class MultibodyLearnableSystem(System):
                          u: Tensor,
                          x_plus: Tensor,
                          loss_pool: Optional[pool.Pool] = None):
-        # pylint: disable-msg=too-many-locals
-        v = self.space.v(x)
+        # Get multibody terms.
         q_plus, v_plus = self.space.q_v(x_plus)
-        dt = self.dt
-
-        delassus, M, J, phi, non_contact_acceleration, p_BiBc_B, \
+        _delassus, _M, _J, phi, _non_contact_acceleration, p_BiBc_B, \
             _obj_pair_list, _R_FW_list, _mu_list = \
                 self.multibody_terms(q_plus, v_plus, u)
-
         n_contacts = phi.shape[-1]
-        reorder_mat = tensor_utils.sappy_reorder_mat(n_contacts)
-        reorder_mat = reorder_mat.reshape((1,) * (delassus.dim() - 2) +
-                                          reorder_mat.shape).expand(
-                                              delassus.shape)
-        J_t = J[..., n_contacts:, :]
 
-        # pylint: disable=E1103
-        double_zero_vector = torch.zeros(phi.shape[:-1] + (2 * n_contacts,))
-        phi_then_zero = torch.cat((phi, double_zero_vector), dim=-1)
+        # Get the impulses in the same way as the loss calculation.
+        impulses = self.calculate_contactnets_loss_terms(
+            x, u, x_plus, return_impulses=True)
 
-        # pylint: disable=E1103
-        sliding_velocities = pbmm(J_t, v_plus.unsqueeze(-1))
-        sliding_speeds = sliding_velocities.reshape(
-            phi.shape[:-1] + (n_contacts, 2)).norm(dim=-1, keepdim=True)
-
-        # Prepare to exclude the robot predictions from the prediction loss.
-        batch_dims = x.shape[:-1]
-        velocity_map = torch.diag(self.learnable_state_map[self.space.n_q:])
-        for _ in batch_dims:
-            velocity_map = velocity_map.unsqueeze(0)
-        velocity_map = velocity_map.expand(batch_dims + \
-                                           (self.space.n_v, self.space.n_v))
-        velocity_map = velocity_map.type(torch.double)
-
-        M_inv = torch.inverse(M)
-        J_M = pbmm(reorder_mat.transpose(-1, -2),
-                   pbmm(J,
-                        pbmm(velocity_map,
-                             torch.linalg.cholesky(M_inv))))
-
-        dv = (v_plus - (v + non_contact_acceleration * dt)).unsqueeze(-2)
-
-        q_pred = -pbmm(J,
-                       pbmm(velocity_map,
-                            pbmm(M_inv,
-                                 pbmm(velocity_map,
-                                      pbmm(M,
-                                           dv.transpose(-1, -2))))))
-        q_comp = torch.abs(phi_then_zero).unsqueeze(-1)
-        q_diss = dt * torch.cat((sliding_speeds, sliding_velocities), dim=-2)
-
-        # Implement ContactNets loss weighting -- for solving for the forces,
-        # normalize based on w_pred.
-        q = q_pred + (self.w_comp/self.w_pred)*q_comp + \
-                     (self.w_diss/self.w_pred)*q_diss
-
-        c_pen = (torch.maximum(-phi, torch.zeros_like(phi))**2).sum(dim=-1)
-        c_pen = c_pen.reshape(c_pen.shape + (1, 1))
-
-        c_pred = 0.5 * pbmm(dv,
-                            pbmm(M,
-                                 pbmm(velocity_map,
-                                      pbmm(M_inv,
-                                           pbmm(velocity_map,
-                                                pbmm(M,
-                                                     dv.transpose(-1, -2)))))))
-
-        # Envelope theorem guarantees that gradient of loss w.r.t. parameters
-        # can ignore the gradient of the force w.r.t. the QCQP parameters.
-        # Therefore, we can detach ``force`` from pytorch's computation graph
-        # without causing error in the overall loss gradient.
-        # pylint: disable=E1103
-        impulses = pbmm(
-            reorder_mat,
-            self.solver(
-                J_M,
-                pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1),
-            ).detach().unsqueeze(-1))
-
-        # Hack: remove elements of ``impulses`` where solver likely failed.
-        invalid = torch.any(
-            (impulses.abs() > 1e3) | impulses.isnan() | impulses.isinf(),
-            dim=-2, keepdim=True)
-
-        c_pred[invalid] *= 0.
-        c_pen[invalid] *= 0.
-        impulses[invalid.expand(impulses.shape)] = 0.
-
-        # Get the normal forces
+        # Get the normal forces.
         normal_impulses = impulses[:, :n_contacts].reshape(-1, n_contacts)
 
         # Get the object orientation.
@@ -618,7 +544,7 @@ class MultibodyLearnableSystem(System):
         state = torch.tile(x_plus.unsqueeze(1), (1, n_lambda, 1))
         for force_i, points_i, orientation_i, state_i in \
             zip(normal_impulses, p_BiBc_B, orientation, state):
-            
+
             support_points = points_i
             orientation_i = ground_orientation_in_body_frame(orientation_i,
                                                              n_lambda)
