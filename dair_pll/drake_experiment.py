@@ -191,6 +191,18 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
 
         return self.visualization_system
 
+    def construct_trajectory_for_comparison_vis(
+            self, target_trajectory: Tensor, prediction_trajectory: Tensor
+    ) -> Tensor:
+        assert target_trajectory.shape == prediction_trajectory.shape
+
+        space = self.get_drake_system().space
+        return torch.cat(
+            (space.q(target_trajectory),
+             space.q(prediction_trajectory),
+             space.v(target_trajectory),
+             space.v(prediction_trajectory)), -1)
+
     def base_and_learned_comparison_summary(
             self, statistics: Dict, learned_system: System,
             force_generate_videos: bool = False) -> SystemSummary:
@@ -223,8 +235,6 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
             return SystemSummary(scalars={}, videos={}, meshes={})
 
         visualization_system = self.get_visualization_system(learned_system)
-
-        space = self.get_drake_system().space
         videos = {}
 
         # First do overlay prediction videos.
@@ -241,10 +251,9 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
                     target_trajectory = Tensor(statistics[target_key][traj_num])
                     prediction_trajectory = Tensor(
                         statistics[prediction_key][traj_num])
-                    visualization_trajectory = torch.cat(
-                        (space.q(target_trajectory), space.q(prediction_trajectory),
-                        space.v(target_trajectory),
-                        space.v(prediction_trajectory)), -1)
+                    visualization_trajectory = \
+                        self.construct_trajectory_for_comparison_vis(
+                            target_trajectory, prediction_trajectory)
                     video, framerate = vis_utils.visualize_trajectory(
                         visualization_system, visualization_trajectory)
                     videos[f'{set_name}_trajectory_prediction_{traj_num}'] = \
@@ -257,9 +266,9 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
                 vis_utils.get_geometry_inspection_trajectory(learned_system)
             target_trajectory = geometry_inspection_traj
             prediction_trajectory = geometry_inspection_traj
-            visualization_trajectory = torch.cat(
-                (space.q(target_trajectory), space.q(prediction_trajectory),
-                space.v(target_trajectory), space.v(prediction_trajectory)), -1)
+            visualization_trajectory = \
+                self.construct_trajectory_for_comparison_vis(
+                    target_trajectory, prediction_trajectory)
             video, framerate = vis_utils.visualize_trajectory(
                 visualization_system, visualization_trajectory)
             videos['geometry_inspection'] = (video, framerate)

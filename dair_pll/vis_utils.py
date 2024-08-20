@@ -46,6 +46,8 @@ ARTICULATION_FULL_SPIN_HALF_TIME = torch.stack([
         for i in range(HALF_STEPS)
     ])
 LINEAR_LOCATION_HALF_TIME = Tensor([1.2, 0, 0.15]).repeat(HALF_STEPS, 1)
+ROBOT_JOINTS_HALF_TIME = Tensor([0, -1, 0, -2.5, 0, 1.5, 0]
+                                ).repeat(HALF_STEPS, 1)
 
 
 def get_geometry_inspection_trajectory(learned_system: DrakeSystem) -> Tensor:
@@ -83,6 +85,12 @@ def get_geometry_inspection_trajectory(learned_system: DrakeSystem) -> Tensor:
              ARTICULATION_FULL_SPIN_HALF_TIME, vels), dim=1)
 
         trajectory = torch.cat((rotation_piece, rotate_and_articulate), dim=0)
+
+    # Detect if this is a robot-object system.
+    elif n_q == 14:
+        trajectory = torch.cat(
+            (ROBOT_JOINTS_HALF_TIME, FULL_SPIN_HALF_TIME,
+             LINEAR_LOCATION_HALF_TIME, vels), dim=1)
 
     else:
         raise NotImplementedError(f'Don\'t know how to handle a system ' + \

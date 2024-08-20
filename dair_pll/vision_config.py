@@ -582,10 +582,69 @@ class VisionRobotExperiment(VisionExperiment):
         stats.update(summary_stats)
         return stats
 
-    def make_input_trajectory_visualization(
-            self, statistics: Dict, learned_system: System):
-        """Generate a video to show the input data, overlaid with both the
-        geometry from BundleSDF and the learned geometry."""
+    def construct_trajectory_for_comparison_vis(
+            self, target_trajectory: Tensor, prediction_trajectory: Tensor
+    ) -> Tensor:
+        assert target_trajectory.shape == prediction_trajectory.shape
+
+        space = self.get_drake_system().space
+
+        # HACK:  hard-code the state ordering.
+        target_q, target_v = space.q_v(target_trajectory)
+        _world_q, target_robot_q, target_object_q = space.q_split(target_q)
+        _world_v, target_robot_v, target_object_v = space.v_split(target_v)
+
+        pred_q, pred_v = space.q_v(prediction_trajectory)
+        _world_q, pred_robot_q, pred_object_q = space.q_split(pred_q)
+        _world_v, pred_robot_v, pred_object_v = space.v_split(pred_v)
+
+        assert target_robot_q.shape[-1] == target_object_q.shape[-1] == 7
+        assert target_robot_v.shape[-1] == 7
+        assert target_object_v.shape[-1] == 6
+
+        # The visualization system should have both robots first and
+        # both objects second.
+        return torch.cat(
+            (target_robot_q, pred_robot_q, target_object_q, pred_object_q,
+             target_robot_v, pred_robot_v, target_object_v, pred_object_v), -1)
+
+    def base_and_learned_comparison_summary(
+            self, statistics: Dict, learned_system: System,
+            force_generate_videos: bool = False) -> SystemSummary:
+        r"""Extracts a :py:class:`~dair_pll.system.SystemSummary` that compares
+        the base system to the learned system.
+
+        For Drake-based experiments, this comparison is implemented as
+        overlaid videos of corresponding ground-truth and predicted
+        trajectories. The nature of this video is described further in
+        :py:mod:`dair_pll.vis_utils`\ .
+
+        Additionally, manually defined trajectories are used to show the learned
+        geometries.  This is particularly useful for more expressive geometry
+        types like meshes.
+
+        Args:
+            statistics: Dictionary of training statistics.
+            learned_system: Most updated version of learned system during
+              training.
+            force_generate_videos: Whether to force generate videos for
+              comparison, even if the experiment's config says to skip.  This is
+              useful for generating videos at the first and last epochs.
+
+        Returns:
+            Summary containing overlaid video(s).
+        """
+        if (not force_generate_videos) and \
+            (not self.config.generate_video_predictions_throughout) and \
+            (not self.config.generate_video_geometries_throughout):
+            return SystemSummary(scalars={}, videos={}, meshes={})
+
+        # Include all of the base and learned comparison videos from the parent
+        # class.
+        summary = super().base_and_learned_comparison_summary(
+            statistics, learned_system, force_generate_videos)
+
+        # Add an input visualization to see the trajectory with the robot.
         visualization_system = self.get_visualization_system(learned_system)
         space = self.get_drake_system().space
         videos = {}
@@ -597,27 +656,21 @@ class VisionRobotExperiment(VisionExperiment):
                     continue
                 target_trajectory = Tensor(statistics[target_key][traj_num])
 
-                # HACK:  hard-code the state ordering.
-                single_q, single_v = space.q_v(target_trajectory)
-                _world_q, robot_q, object_q = space.q_split(single_q)
-                _world_v, robot_v, object_v = space.v_split(single_v)
-
-                assert robot_q.shape[-1] == object_q.shape[-1] == 7
-                assert robot_v.shape[-1] == 7
-                assert object_v.shape[-1] == 6
-
-                # The visualization system should have both robots first and
-                # both objects second.
-                visualization_trajectory = torch.cat(
-                    (robot_q, robot_q, object_q, object_q,
-                     robot_v, robot_v, object_v, object_v), -1)
+                # The visualization system should have the same trajectory for
+                # both the learned and predicted systems.
+                visualization_trajectory = \
+                    self.construct_trajectory_for_comparison_vis(
+                        target_trajectory, target_trajectory)
 
                 video, framerate = vis_utils.visualize_trajectory(
                     visualization_system, visualization_trajectory)
                 videos[f'{set_name}_input_trajectory_{traj_num}'] = \
                     (video, framerate)
 
-        return SystemSummary(scalars={}, videos=videos, meshes={})
+        # Add the input trajectory visualization to the summary.
+        summary.videos.update(videos)
+
+        return summary
 
     def build_epoch_vars_and_system_summary(self, statistics: Dict,
             learned_system: System, force_generate_videos: bool = False
@@ -648,20 +701,11 @@ class VisionRobotExperiment(VisionExperiment):
 
         learned_system_summary = learned_system.summary(statistics)
 
-        # Include input trajectory visualization.
-        if force_generate_videos:
-            input_trajectory_visualization = \
-                self.make_input_trajectory_visualization(
-                    statistics, learned_system)
-        else:
-            input_trajectory_visualization = SystemSummary(
-                scalars={}, videos={}, meshes={})
-
-        # # Include comparison summary, which should only create the geometry
-        # # inspection video since no predictions to visualize.
-        # comparison_summary = self.base_and_learned_comparison_summary(
-        #     statistics, learned_system,
-        #     force_generate_videos=force_generate_videos)
+        # Include comparison summary, which should only create the geometry
+        # inspection video since no predictions to visualize.
+        comparison_summary = self.base_and_learned_comparison_summary(
+            statistics, learned_system,
+            force_generate_videos=force_generate_videos)
 
         epoch_vars.update(learned_system_summary.scalars)
         logging_duration = time.time() - start_log_time
@@ -669,52 +713,11 @@ class VisionRobotExperiment(VisionExperiment):
         epoch_vars.update(
             {duration: statistics[duration] for duration in ALL_DURATIONS})
 
-        epoch_vars.update(input_trajectory_visualization.scalars)
-        learned_system_summary.videos.update(
-            input_trajectory_visualization.videos)
-        learned_system_summary.meshes.update(
-            input_trajectory_visualization.meshes)
-
-        # epoch_vars.update(comparison_summary.scalars)
-        # learned_system_summary.videos.update(comparison_summary.videos)
-        # learned_system_summary.meshes.update(comparison_summary.meshes)
+        epoch_vars.update(comparison_summary.scalars)
+        learned_system_summary.videos.update(comparison_summary.videos)
+        learned_system_summary.meshes.update(comparison_summary.meshes)
 
         return epoch_vars, learned_system_summary
-
-    def _evaluation(self, learned_system: System) -> StatisticsDict:
-        r"""Evaluate both oracle and learned system on training, validation,
-        and testing data, and saves results to disk.
-
-        Implemented as a wrapper for :meth:`evaluate_systems_on_sets`.
-
-        Args:
-            learned_system: Trained system.
-
-        Returns:
-            Statistics dictionary.
-
-        Warnings:
-            Currently assumes prediction horizon of 1.
-        """
-        assert self.learning_data_manager is not None
-        sets = dict(
-            zip(ALL_SETS,
-                self.learning_data_manager.get_updated_trajectory_sets()))
-        systems = {
-            ORACLE_SYSTEM_NAME: self.get_oracle_system(),
-            LEARNED_SYSTEM_NAME: learned_system
-        }
-
-        evaluation = self.evaluate_systems_on_sets(systems, sets)
-        file_utils.save_evaluation(self.config.storage, self.config.run_name,
-                                   evaluation)
-
-        # Generate final toss/geometry inspection videos with best parameters.
-        input_trajectory_vis = self.make_input_trajectory_visualization(
-            evaluation, learned_system)
-        self.wandb_manager.update(int(1e4), {}, input_trajectory_vis.videos, {})
-
-        return evaluation
 
 
 """Precomputed mass matrix and lagrangian forces expressions for robot
