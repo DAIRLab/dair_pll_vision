@@ -49,6 +49,7 @@ import pdb
 import torch
 import trimesh
 
+from dair_pll.deep_support_function import extract_mesh_from_support_function
 from dair_pll.tensor_utils import pbmm
 from dair_pll.geometry import fcl_distance_nearest_points_cleaner
 
@@ -177,4 +178,78 @@ sphere_pt_sphere, mesh_pt_sphere = fcl_distance_nearest_points_cleaner(
 
 
 pdb.set_trace()
+
+
+###### Visualize the mesh and sphere.  From FCL and convex-convex collisions.
+# Make a trimesh sphere object, and make it slightly transparent.
+SPHERE_RADIUS = 0.0195
+ALPHA = 0.5
+sphere_tm = trimesh.creation.icosphere(subdivisions=2, radius=SPHERE_RADIUS)
+colors = np.ones((len(sphere_tm.vertices), 4)) * 255  # RGBA
+colors[:, 3] = ALPHA * 255
+sphere_tm.visual.vertex_colors = colors
+
+# Make a trimesh mesh object from the DSF.
+mesh = extract_mesh_from_support_function(geometry_b.network)
+vertices = mesh.vertices.numpy()
+faces = mesh.faces.numpy()
+mesh_tm = trimesh.Trimesh(vertices=vertices, faces=faces)
+colors = np.ones((len(mesh_tm.vertices), 4)) * 255  # RGBA
+colors[:, 3] = ALPHA * 255
+mesh_tm.visual.vertex_colors = colors
+
+# Transform the mesh accordingly.
+T_AoBo_A = np.eye(4)
+T_AoBo_A[:3, 3] = b_t.getTranslation()
+T_AoBo_A[:3, :3] = b_t.getRotation()
+T_AoBo_A = T_AB
+mesh_tm.apply_transform(T_AoBo_A)
+
+# Create a point cloud for the contact point.
+contact_point = result.contacts[0].pos
+additional_points = np.linspace(contact_point, contact_point + result.contacts[0].normal*0.1, 10)[1:]
+contact_color = np.array([255, 0, 0])
+additional_colors = np.tile(np.array([0, 255, 0]), (len(additional_points), 1))
+additional_colors[-1] = np.array([0, 0, 255])
+points = np.vstack((contact_point, additional_points))
+colors = np.vstack((contact_color, additional_colors))
+point_cloud_tm = trimesh.points.PointCloud(points, colors=colors)
+
+# Visualize the mesh and sphere.
+scene = trimesh.Scene([sphere_tm, mesh_tm, point_cloud_tm])
+scene.show()
+
+
+
+###### Visualize the mesh and sphere.  From trimesh and sphere-sparse_convex
+###### collisions.
+# Make a trimesh sphere object, and make it slightly transparent.
+SPHERE_RADIUS = 0.0195
+ALPHA = 0.5
+sphere_tm = trimesh.creation.icosphere(subdivisions=2, radius=SPHERE_RADIUS)
+colors = np.ones((len(sphere_tm.vertices), 4)) * 255  # RGBA
+colors[:, 3] = ALPHA * 255
+sphere_tm.visual.vertex_colors = colors
+
+# Make a trimesh mesh object from the DSF.
+mesh_tm = trimesh_mesh
+colors = np.ones((len(mesh_tm.vertices), 4)) * 255  # RGBA
+colors[:, 3] = ALPHA * 255
+mesh_tm.visual.vertex_colors = colors
+
+# Create a point cloud for the contact point.
+contact_point = closest_point
+normal_dir = closest_point / np.linalg.norm(closest_point)
+if signed_distance < -geometry_a.get_radius():  normal_dir *= -1
+additional_points = np.linspace(contact_point, contact_point + normal_dir*0.1, 10)[1:]
+contact_color = np.array([255, 0, 0])
+additional_colors = np.tile(np.array([0, 255, 0]), (len(additional_points), 1))
+additional_colors[-1] = np.array([0, 0, 255])
+points = np.vstack((contact_point, additional_points))
+colors = np.vstack((contact_color, additional_colors))
+point_cloud_tm = trimesh.points.PointCloud(points, colors=colors)
+
+# Visualize the mesh and sphere.
+scene = trimesh.Scene([sphere_tm, mesh_tm, point_cloud_tm])
+scene.show()
 
