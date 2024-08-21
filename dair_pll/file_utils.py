@@ -630,7 +630,7 @@ def make_serializable(obj: Any) -> Dict[str, Any]:
     with values of regular types so the result can be written to a json file,
     for example.  Recursively serializes subcomponents, skipping only cases
     when a deepest traced item cannot be serialized."""
-    dict = deepcopy(obj.__dict__)
+    dict = deepcopy(obj) if isinstance(obj, Dict) else deepcopy(obj.__dict__)
     for key, value in dict.items():
         try:
             json.dumps(value)
