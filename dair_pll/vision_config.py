@@ -451,8 +451,8 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
                     'w_diss': self.config.learnable_config.w_diss,
                     'w_pen': self.config.learnable_config.w_pen,
                     'w_bsdf': self.config.learnable_config.w_bsdf},
-                inertia_mode=self.config.learnable_config.inertia_mode,
-                constant_bodies=self.config.learnable_config.constant_bodies,
+                learnable_body_dict = \
+                    self.config.learnable_config.learnable_body_dict,
                 represent_geometry_as = \
                     self.config.learnable_config.represent_geometry_as,
                 precomputed_functions=self.precomputed_functions,
@@ -470,8 +470,7 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         return MultibodyLearnableSystem(
             learnable_config.urdfs,
             self.config.data_config.dt,
-            inertia_mode=learnable_config.inertia_mode,
-            constant_bodies=learnable_config.constant_bodies,
+            learnable_body_dict=learnable_config.learnable_body_dict,
             loss_weights_dict={
                 'w_pred': learnable_config.w_pred,
                 'w_comp': learnable_config.w_comp,

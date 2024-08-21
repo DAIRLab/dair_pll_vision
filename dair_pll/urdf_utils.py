@@ -10,7 +10,7 @@ these representations into a URDF "link" tag.
 """
 import os.path
 import pdb
-from typing import Dict, List, Optional, Tuple, cast
+from typing import Dict, List, Optional, Tuple, cast, Any
 from xml.etree import ElementTree
 from xml.etree.ElementTree import register_namespace
 
@@ -319,9 +319,8 @@ def fill_link_with_parameterization(element: ElementTree.Element, pi_cm: Tensor,
         ]
 
         (shape_tag, shape_attributes) = \
-            UrdfGeometryRepresentationFactory.representation(geometry,
-                                                             output_dir,
-                                                             link_name=link_name)
+            UrdfGeometryRepresentationFactory.representation(
+                geometry, output_dir, link_name=link_name)
         for geometry_element in geometry_elements:
             shape_element = UrdfFindOrDefault.find(geometry_element, shape_tag)
             shape_element.attrib = shape_attributes
@@ -335,13 +334,14 @@ def fill_link_with_parameterization(element: ElementTree.Element, pi_cm: Tensor,
 
 def represent_multibody_terms_as_urdfs(
         multibody_terms: MultibodyTerms, output_dir: str,
-        constant_bodies: List[str]) -> Dict[str, str]:
+        learnable_body_dict: Dict[str, Any]) -> Dict[str, str]:
     """Renders the current parameterization of multibody terms as a
     set of urdfs.
 
     Args:
         multibody_terms: Multibody dynamics representation to convert.
         output_dir: File directory to store helper files (e.g., meshes).
+        learnable_body_dict: Dictionary of LearnableBodySettings objects.
     Returns:
         Dictionary of (urdf name, urdf XML string) pairs.
     Warning:
@@ -374,7 +374,7 @@ def represent_multibody_terms_as_urdfs(
             if element.tag == "link":
                 link_name = element.get("name")
                 assert link_name is not None
-                if link_name in constant_bodies:
+                if link_name not in learnable_body_dict.keys():
                     continue
 
                 body_id = drake_utils.unique_body_identifier(
@@ -405,6 +405,34 @@ def represent_multibody_terms_as_urdfs(
         register_namespace('drake', _DRAKE_URL)
         system_urdf_representation = ElementTree.tostring(
             urdf_tree.getroot(), encoding="utf-8").decode("utf-8")
+        system_urdf_representation = remove_dead_space(
+            system_urdf_representation)
         urdf_xml[
             urdf_name] = f'<?xml version="1.0"?>\n{system_urdf_representation}'
     return urdf_xml
+
+
+def remove_dead_space(xml_string: str) -> str:
+    """Removes trailing spaces and more than 1 empty line in a row from an xml
+    string (or really any string).
+
+    Args:
+        xml_string: XML string to be cleaned.
+
+    Returns:
+        Cleaned XML string.
+    """
+    cleaned_lines = []
+    previous_line_empty = False
+
+    for line in xml_string.splitlines():
+        line = line.rstrip()
+        if line != '':
+            cleaned_lines.append(line)
+            previous_line_empty = False
+        elif not previous_line_empty:
+            cleaned_lines.append('')
+            previous_line_empty = True
+
+    # Join the cleaned lines back into a single string.
+    return '\n'.join(cleaned_lines)

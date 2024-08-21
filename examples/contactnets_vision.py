@@ -22,7 +22,7 @@ from dair_pll.experiment import default_epoch_callback
 from dair_pll.experiment_config import OptimizerConfig
 from dair_pll.hyperparameter import Float, Int
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
-from dair_pll.multibody_terms import InertiaLearn
+from dair_pll.multibody_terms import LearnableBodySettings
 from dair_pll.system import System
 
 
@@ -45,12 +45,6 @@ URDFS = {VISION_CUBE_SYSTEM: CUBE_URDFS,
          VISION_TOBLERONE_SYSTEM: TOBLERONE_URDFS,
          VISION_MILK_SYSTEM: MILK_URDFS}
 
-ROBOT_CONSTANT_BODIES = [
-    'panda_link0', 'panda_link1', 'panda_link2', 'panda_link3', 'panda_link4',
-    'panda_link5', 'panda_link6', 'panda_link7', 'end_effector_base',
-    'end_effector_link', 'end_effector_tip'
-]
-
 # Data configuration.
 DT = 0.0333 #0.0068 # 1/frame rate of the camera
 
@@ -58,81 +52,9 @@ DT = 0.0333 #0.0068 # 1/frame rate of the camera
 T_PREDICTION = 1
 
 # Optimization configuration.
-CUBE_LR = 1e-3
-PRISM_LR = 1e-3
-TOBLERONE_LR = 1e-3
-MILK_LR = 1e-3
-LRS = {VISION_CUBE_SYSTEM: CUBE_LR,
-       VISION_PRISM_SYSTEM: PRISM_LR,
-       VISION_TOBLERONE_SYSTEM: TOBLERONE_LR,
-       VISION_MILK_SYSTEM: MILK_LR, 
-       'vision_bottle': 1e-3,
-       'vision_half': 1e-3,
-       'vision_egg': 1e-3,
-       'vision_napkin': 1e-3,
-       'vision_bakingbox': 1e-3,
-       'vision_burger': 1e-3,
-       'vision_cardboard': 1e-3,
-       'vision_chocolate': 1e-3,
-       'vision_cream': 1e-3,
-       'vision_croc': 1e-3,
-       'vision_crushedcan': 1e-3,
-       'vision_duck': 1e-3,
-       'vision_gallon': 1e-3,
-       'vision_greencan': 1e-3,
-       'vision_hotdog': 1e-3,
-       'vision_icetray': 1e-3,
-       'vision_mug': 1e-3,
-       'vision_oatly': 1e-3,
-       'vision_pinkcan': 1e-3,
-       'vision_stapler': 1e-3,
-       'vision_styrofoam': 1e-3,
-       'vision_toothpaste': 1e-3,
-       'vision_robot_bakingbox_sticky_A': 1e-3,
-       'vision_robot_bakingbox': 1e-3,
-       'vision_robot_greencan': 1e-3,
-       'vision_robot_oatly': 1e-3,
-       'vision_robot_stapler': 1e-3,
-       'vision_robot_milk': 1e-3,
-       }
-CUBE_WD = 0.0
-PRISM_WD = 0.0
-TOBLERONE_WD = 0.0
-MILK_WD = 0.0
-WDS = {VISION_CUBE_SYSTEM: CUBE_WD,
-       VISION_PRISM_SYSTEM: PRISM_WD,
-       VISION_TOBLERONE_SYSTEM: TOBLERONE_WD,
-       VISION_MILK_SYSTEM: MILK_WD,
-       'vision_bottle': 0.0,
-       'vision_half': 0.0,
-       'vision_egg': 0.0,
-       'vision_napkin': 0.0,
-       'vision_bakingbox': 0.0,
-       'vision_burger': 0.0,
-       'vision_cardboard': 0.0,
-       'vision_chocolate': 0.0,
-       'vision_cream': 0.0,
-       'vision_croc': 0.0,
-       'vision_crushedcan': 0.0,
-       'vision_duck': 0.0,
-       'vision_gallon': 0.0,
-       'vision_greencan': 0.0,
-       'vision_hotdog': 0.0,
-       'vision_icetray': 0.0,
-       'vision_mug': 0.0,
-       'vision_oatly': 0.0,
-       'vision_pinkcan': 0.0,
-       'vision_stapler': 0.0,
-       'vision_styrofoam': 0.0,
-       'vision_toothpaste': 0.0,
-       'vision_robot_bakingbox_sticky_A': 0.0,
-       'vision_robot_bakingbox': 0.0,
-       'vision_robot_greencan': 0.0,
-       'vision_robot_oatly': 0.0,
-       'vision_robot_stapler': 0.0,
-       'vision_robot_milk': 0.0,
-}
-EPOCHS = 200 #500
+LEARNING_RATE = 1e-3
+WEIGHT_DECAY = 0.0
+EPOCHS = 1 #500
 PATIENCE = 100 #EPOCHS
 
 WANDB_PROJECT = 'dair_pll-vision'
@@ -290,15 +212,15 @@ def main(pll_run_id: str = "",
     # Next, build the configuration of the learning experiment.
 
     # Describes the optimizer settings; by default, the optimizer is Adam.
-    optimizer_config = OptimizerConfig(lr=Float(LRS[system]),
-                                       wd=Float(WDS[system]),
+    optimizer_config = OptimizerConfig(lr=Float(LEARNING_RATE),
+                                       wd=Float(WEIGHT_DECAY),
                                        patience=PATIENCE,
                                        epochs=EPOCHS)
 
     # Describes the ground truth system; infers everything from the URDFs.
     # This is a configuration for a DrakeSystem, which wraps a Drake simulation
     # for the described URDFs.
-    if use_bundlesdf_mesh and tracker != 'tagslam' and w_bsdf > 0:
+    if use_bundlesdf_mesh and tracker != 'tagslam':  # and w_bsdf > 0:
         urdf = make_urdf_with_bundlesdf_mesh(
             system=system, vision_asset=asset_name, bundlesdf_id=bundlesdf_id,
             cycle_iteration=cycle_iteration, storage_name=storage_name,
@@ -323,17 +245,36 @@ def main(pll_run_id: str = "",
     else:
         precomputed_function_directories = {}
 
+    # Build the learnable body settings dictionary.  Don't learn the mass even
+    # if learning the rest of the inertia.
+    # TODO could reconsider this for robot experiments.
+    learnable_body_dict = {
+        'body': LearnableBodySettings(
+            inertia_mass=False,
+            inertia_com=learn_inertia=='all',
+            inertia_moments_products=learn_inertia=='all',
+            geometry=True,
+            friction=True
+        )
+    }
+    # For robot experiments, also enable learning the end effector tip friction
+    # so the object-ground and object-robot friction parameters can be learned.
+    if is_robot_experiment:
+        learnable_body_dict['end_effector_tip'] = LearnableBodySettings(
+            inertia_mass=False,
+            inertia_com=False,
+            inertia_moments_products=False,
+            geometry=False,
+            friction=True
+        )
+
     # Describes the learnable system. The MultibodyLearnableSystem type learns
     # a multibody system, which is initialized as the system in the given URDFs.
-    # Don't learn the mass even if learning the rest of the inertia.
-    # TODO could reconsider this for robot experiments.
     learnable_config = MultibodyLearnableSystemConfig(
         urdfs=urdfs,
         loss = MultibodyLosses.VISION_LOSS if contactnets else \
             MultibodyLosses.PREDICTION_LOSS,
-        constant_bodies = ROBOT_CONSTANT_BODIES if is_robot_experiment else [],
-        inertia_mode = InertiaLearn(
-            mass=False, com=learn_inertia=='all', inertia=learn_inertia=='all'),
+        learnable_body_dict = learnable_body_dict,
         pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
         w_pred=w_pred, w_comp=w_comp, w_diss=w_diss, w_pen=w_pen,
         w_bsdf=w_bsdf, represent_geometry_as='mesh',

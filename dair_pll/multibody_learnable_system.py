@@ -35,7 +35,7 @@ from tensordict.tensordict import TensorDictBase
 from dair_pll import urdf_utils, tensor_utils, file_utils, quaternion
 from dair_pll.drake_system import DrakeSystem
 from dair_pll.integrator import VelocityIntegrator
-from dair_pll.multibody_terms import MultibodyTerms, InertiaLearn
+from dair_pll.multibody_terms import MultibodyTerms, LearnableBodySettings
 from dair_pll.solvers import DynamicCvxpyLCQPLayer
 from dair_pll.system import System, SystemSummary
 from dair_pll.tensor_utils import pbmm, broadcast_lorentz
@@ -65,8 +65,7 @@ class MultibodyLearnableSystem(System):
                  init_urdfs: Dict[str, str],
                  dt: float,
                  loss_weights_dict: dict,
-                 inertia_mode: InertiaLearn = InertiaLearn(),
-                 constant_bodies: List[str] = [],
+                 learnable_body_dict: Dict[str, LearnableBodySettings] = {},
                  output_urdfs_dir: Optional[str] = None,
                  pretrained_icnn_weights_filepath: Optional[str] = None,
                  represent_geometry_as: str = 'box',
@@ -83,10 +82,8 @@ class MultibodyLearnableSystem(System):
             init_urdfs: Names and corresponding URDFs to model with
                 :py:class:`MultibodyTerms`.
             dt: Time step of system in seconds.
-            inertia_mode: An InertiaLearn() object specifying which inertial
-              parameters to learn
-            constant_bodies: list of body names whose properties should NOT
-              be learned
+            learnable_body_dict: A dictionary of LearnableBodySettings() objects
+                specifying which body parameters to learn.
             loss_weights_dict: Dictionary of weights for the vision loss.
                 Requires keys 'w_pred', 'w_comp', 'w_pen', 'w_diss', and
                 'w_bsdf'.
@@ -106,8 +103,7 @@ class MultibodyLearnableSystem(System):
 
         multibody_terms = MultibodyTerms(
             init_urdfs,
-            inertia_mode=inertia_mode,
-            constant_bodies=constant_bodies,
+            learnable_body_dict=learnable_body_dict,
             represent_geometry_as=represent_geometry_as,
             pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
             precomputed_functions=precomputed_functions,
@@ -135,7 +131,7 @@ class MultibodyLearnableSystem(System):
         self.w_bsdf = loss_weights_dict['w_bsdf']
 
         # Store which states correspond to learnable bodies.
-        self.constant_bodies = constant_bodies
+        self.learnable_body_dict = learnable_body_dict
         self.learnable_state_map = self.state_map_for_learnable_bodies()
 
     def state_map_for_learnable_bodies(self) -> Tensor:
@@ -162,21 +158,23 @@ class MultibodyLearnableSystem(System):
         assert self.output_urdfs_dir is not None
         old_urdfs = self.init_urdfs
         new_urdf_strings = urdf_utils.represent_multibody_terms_as_urdfs(
-            self.multibody_terms, self.output_urdfs_dir, self.constant_bodies)
+            self.multibody_terms, self.output_urdfs_dir,
+            self.learnable_body_dict
+        )
         new_urdfs = {}
 
         # Save new urdfs with original file basenames plus optional suffix in
         # new folder.
         for urdf_name, new_urdf_string in new_urdf_strings.items():
-            if urdf_name == 'robot':
-                # HACK:  Assumes robots are unlearnable and reuses the original
-                # robot URDF.
-                new_urdfs[urdf_name] = old_urdfs[urdf_name]
-                continue
-
             old_urdf_filename = path.basename(old_urdfs[urdf_name])
 
-            if suffix is not None:
+            if urdf_name == 'robot':
+                # HACK:  Assumes robot geometries are unlearnable so does not
+                # look for new obj filenames.
+                print(f'Exporting learned robot URDF: will not replace ' + \
+                      f'any obj names.')
+
+            elif suffix is not None:
                 # Rename {base}.obj to {base}_{suffix}.obj.
                 obj_filename = file_utils.get_obj_name_from_urdf_string(
                     new_urdf_string)

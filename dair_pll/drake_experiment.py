@@ -20,7 +20,7 @@ from dair_pll.experiment import SupervisedLearningExperiment, \
     TRAJECTORY_PENETRATION_NAME, LOGGING_DURATION
 from dair_pll.experiment_config import SystemConfig, \
     SupervisedLearningExperimentConfig
-from dair_pll.multibody_terms import InertiaLearn
+from dair_pll.multibody_terms import LearnableBodySettings
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 from dair_pll.system import System, SystemSummary
 
@@ -44,10 +44,10 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """Whether to use ContactNets or prediction loss."""
     pretrained_icnn_weights_filepath: str = None
     """If provided, filepath to pretrained ICNN weights."""
-    inertia_mode: InertiaLearn = field(default_factory=InertiaLearn)
-    """What inertial parameters to learn."""
-    constant_bodies: List[str] = field(default_factory=list)
-    """List of body names whose properties should NOT be learned."""
+    learnable_body_dict: Dict[str, LearnableBodySettings] = field(
+        default_factory={})
+    """What body parameters to learn.  Any body not in this dictionary will be
+    considered unlearnable."""
     w_pred: float = 1.0
     """Weight of prediction term in ContactNets loss (suggested keep at 1.0)."""
     w_comp: float = 1.0
@@ -292,8 +292,8 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
                     'w_diss': self.config.learnable_config.w_diss,
                     'w_pen': self.config.learnable_config.w_pen,
                     'w_bsdf': self.config.learnable_config.w_bsdf},
-                inertia_mode = self.config.learnable_config.inertia_mode,
-                constant_bodies = self.config.learnable_config.constant_bodies,
+                learnable_body_dict = \
+                    self.config.learnable_config.learnable_body_dict,
                 represent_geometry_as = \
                     self.config.learnable_config.represent_geometry_as)
             
@@ -349,8 +349,7 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
         return MultibodyLearnableSystem(
             learnable_config.urdfs,
             self.config.data_config.dt,
-            inertia_mode = learnable_config.inertia_mode,
-            constant_bodies = learnable_config.constant_bodies,
+            learnable_body_dict = learnable_config.learnable_body_dict,
             loss_weights_dict={
                 'w_pred': learnable_config.w_pred,
                 'w_comp': learnable_config.w_comp,
