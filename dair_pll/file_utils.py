@@ -49,6 +49,9 @@ EXPORT_DIRECTIONS_DEFAULT_NAME = 'support_directions.pt'
 EXPORT_FORCES_DEFAULT_NAME = 'support_point_normal_forces.pt'
 EXPORT_STATES_DEFAULT_NAME = 'support_point_states.pt'
 EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME = 'tosses_and_frames.pt'
+EXPORT_ALL_FORCES_DEFAULT_NAME = 'support_point_all_forces.pt'
+EXPORT_PHIS_DEFAULT_NAME = 'support_point_phis.pt'
+EXPORT_JACOBIANS_DEFAULT_NAME = 'support_point_jacobians.pt'
 EXPORT_POINTS_WITH_SDF_DEFAULT_NAME = 'ps.pt'
 EXPORT_SDFS_FOR_POINTS_DEFAULT_NAME = 'sdfs.pt'
 EXPORT_PS_TOSS_FRAMES_DEFAULT_NAME = 'p_toss_frames.pt'
@@ -445,9 +448,9 @@ def store_debugging_for_bsdf(storage_name: str, run_name: str, forces: Tensor,
                              phis: Tensor, jacobians: Tensor) -> None:
     """Store geometry-related data exports for BundleSDF."""
     output_dir = geom_for_bsdf_dir(storage_name, run_name)
-    torch.save(forces, path.join(output_dir, 'support_point_all_forces.pt'))
-    torch.save(phis, path.join(output_dir, 'support_point_phis.pt'))
-    torch.save(jacobians, path.join(output_dir, 'support_point_jacobians.pt'))
+    torch.save(forces, path.join(output_dir, EXPORT_ALL_FORCES_DEFAULT_NAME))
+    torch.save(phis, path.join(output_dir, EXPORT_PHIS_DEFAULT_NAME))
+    torch.save(jacobians, path.join(output_dir, EXPORT_JACOBIANS_DEFAULT_NAME))
 
 
 def store_sdf_for_bsdf(storage_name: str, run_name: str,
