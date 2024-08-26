@@ -441,6 +441,15 @@ def store_geom_for_bsdf(storage_name: str, run_name: str, points: Tensor,
     torch.save(states, path.join(output_dir, EXPORT_STATES_DEFAULT_NAME))
 
 
+def store_debugging_for_bsdf(storage_name: str, run_name: str, forces: Tensor,
+                             phis: Tensor, jacobians: Tensor) -> None:
+    """Store geometry-related data exports for BundleSDF."""
+    output_dir = geom_for_bsdf_dir(storage_name, run_name)
+    torch.save(forces, path.join(output_dir, 'support_point_all_forces.pt'))
+    torch.save(phis, path.join(output_dir, 'support_point_phis.pt'))
+    torch.save(jacobians, path.join(output_dir, 'support_point_jacobians.pt'))
+
+
 def store_sdf_for_bsdf(storage_name: str, run_name: str,
                        from_support_not_mesh: bool, ps: Tensor, sdfs: Tensor,
                        p_idx: Tensor, vs: Tensor, sdf_bounds: Tensor, 

@@ -1096,9 +1096,12 @@ class SupervisedLearningExperiment(ABC):
         
         # Instantiate tensors that will hold all the points, directions, forces.
         # Points and directions are 3D while forces are 1D for a given point.
-        points, directions = torch.zeros((0,3)), torch.zeros((0,3))
+        points, directions = torch.zeros((0, 3)), torch.zeros((0, 3))
         normal_forces = torch.zeros((0))
         states = torch.zeros((0, learned_system.space.n_x))
+        forces = torch.zeros((0, 3))
+        phis = torch.zeros((0))
+        jacobians = torch.zeros((0, 3, learned_system.space.n_v))
 
         training_set, validation_set, _ = \
             self.learning_data_manager.get_updated_trajectory_sets()
@@ -1111,9 +1114,11 @@ class SupervisedLearningExperiment(ABC):
             for batch_x, batch_y in slices_loader:
                 # The bulk of the computation is done in the like-named method
                 # of the associated learned system for a single batch of data.
-                points_i, directions_i, normal_forces_i, states_i = \
-                    learned_system.bundlesdf_data_generation_from_cnets(
-                        **self.get_loss_args(batch_x, batch_y, learned_system))
+                points_i, directions_i, normal_forces_i, states_i, forces_i, \
+                    phis_i, jacs_i = \
+                        learned_system.bundlesdf_data_generation_from_cnets(
+                            **self.get_loss_args(
+                                batch_x, batch_y, learned_system))
 
                 # Store the results in a growing tensor.
                 points = torch.cat((points, points_i), dim=0)
@@ -1121,10 +1126,17 @@ class SupervisedLearningExperiment(ABC):
                 normal_forces = torch.cat((normal_forces,normal_forces_i),dim=0)
                 states = torch.cat((states, states_i), dim=0)
 
-        # Store the results to file.
+                forces = torch.cat((forces, forces_i), dim=0)
+                phis = torch.cat((phis, phis_i), dim=0)
+                jacobians = torch.cat((jacobians, jacs_i), dim=0)
+
+        # Store the results (and debugging information) to file.
         file_utils.store_geom_for_bsdf(
             self.config.storage, self.config.run_name, points, directions,
             normal_forces, states
+        )
+        file_utils.store_debugging_for_bsdf(
+            self.config.storage, self.config.run_name, forces, phis, jacobians
         )
 
         # Generate some BundleSDF training data based on the above results.

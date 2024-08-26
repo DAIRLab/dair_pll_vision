@@ -504,17 +504,17 @@ class MultibodyLearnableSystem(System):
                          loss_pool: Optional[pool.Pool] = None):
         # Get multibody terms.
         q_plus, v_plus = self.space.q_v(x_plus)
-        _delassus, _M, _J, phi, _non_contact_acceleration, p_BiBc_B, \
+        _delassus, _M, J, phi, _non_contact_acceleration, p_BiBc_B, \
             _obj_pair_list, _R_FW_list, _mu_list = \
                 self.multibody_terms(q_plus, v_plus, u)
         n_contacts = phi.shape[-1]
 
         # Get the impulses in the same way as the loss calculation.
         impulses = self.calculate_contactnets_loss_terms(
-            x, u, x_plus, return_impulses=True)
+            x, u, x_plus, return_impulses=True).reshape(-1, 3*n_contacts)
 
         # Get the normal forces.
-        normal_impulses = impulses[:, :n_contacts].reshape(-1, n_contacts)
+        normal_impulses = impulses[:, :n_contacts]
 
         # Get the object orientation.
         position_names = \
@@ -532,27 +532,62 @@ class MultibodyLearnableSystem(System):
             n_hat_repeated = torch.tile(n_hat.unsqueeze(0), (n_lambda,1))
             return quaternion.rotate(quaternion.inverse(object_orientation),
                                      n_hat_repeated)
-        
-        points, directions = torch.zeros((0,3)), torch.zeros((0,3))
-        impulses_flat = torch.zeros((0))
+
+        points, directions = torch.zeros((0, 3)), torch.zeros((0, 3))
+        n_impulses = torch.zeros((0))
         states = torch.zeros((0, self.space.n_x))
-        n_lambda = normal_impulses.shape[1]
-        
-        orientation = torch.tile(orientation.unsqueeze(1), (1, n_lambda, 1))
-        state = torch.tile(x_plus.unsqueeze(1), (1, n_lambda, 1))
-        for force_i, points_i, orientation_i, state_i in \
-            zip(normal_impulses, p_BiBc_B, orientation, state):
+        full_impulses = torch.zeros((0, 3))
+        phis = torch.zeros((0))
+        jacs = torch.zeros((0, 3, self.space.n_v))
 
-            support_points = points_i
-            orientation_i = ground_orientation_in_body_frame(orientation_i,
-                                                             n_lambda)
-            support_function = orientation_i
-            points = torch.cat((points, support_points), dim=0)
-            directions = torch.cat((directions, support_function), dim=0)
-            impulses_flat = torch.cat((impulses_flat, force_i), dim=0)
+        orientation = torch.tile(orientation.unsqueeze(1), (1, n_contacts, 1))
+        state = torch.tile(x_plus.unsqueeze(1), (1, n_contacts, 1))
+        for n_impulses_i, points_i, orientation_i, state_i, impulses_i, \
+            phis_i, jac_i in zip(normal_impulses, p_BiBc_B, orientation, state,
+                                 impulses, phi, J):
+
+            support_directions = ground_orientation_in_body_frame(
+                orientation_i, n_contacts)
+
+            points = torch.cat((points, points_i), dim=0)
+            directions = torch.cat((directions, support_directions), dim=0)
+            n_impulses = torch.cat((n_impulses, n_impulses_i), dim=0)
             states = torch.cat((states, state_i), dim=0)
+            phis = torch.cat((phis, phis_i.reshape(1, -1)), dim=0)
 
-        return points, directions, impulses_flat/self.dt, states
+            # Iterate over every contact.
+            for i in range(n_contacts):
+                single_contact_impulse = Tensor([
+                    impulses_i[i],                      # normal impulse
+                    impulses_i[n_contacts + 2*i],       # x tangential impulse
+                    impulses_i[n_contacts + 2*i + 1]    # y tangential impulse
+                ]).reshape(1, 3)
+
+                single_contact_jac = torch.stack((
+                    jac_i[i, :],                        # maps normal impulse
+                    jac_i[n_contacts + 2*i, :],         # maps x tang. impulse
+                    jac_i[n_contacts + 2*i + 1, :],     # maps y tang. impulse
+                ), dim=0).reshape(1, 3, self.space.n_v)
+
+                full_impulses = torch.cat(
+                    (full_impulses, single_contact_impulse), dim=0)
+                jacs = torch.cat((jacs, single_contact_jac), dim=0)
+
+        points = points.reshape(-1, 3)
+        directions = directions.reshape(-1, 3)
+        n_forces = (n_impulses/self.dt).reshape(-1)
+        states = states.reshape(-1, self.space.n_x)
+        full_forces = (full_impulses/self.dt).reshape(-1, 3)
+        phis = phis.reshape(-1)
+        jacs = jacs.reshape(-1, 3, self.space.n_v)
+
+        assert points.shape[0] == directions.shape[0] == n_forces.shape[0] \
+            == states.shape[0] == full_forces.shape[0] == phis.shape[0] \
+            == jacs.shape[0], f'{points.shape=} {directions.shape=} ' + \
+            f'{n_forces.shape=} {states.shape=} {full_forces.shape=} ' + \
+            f'{phis.shape=} {jacs.shape=} but expected same batch dimension.'
+
+        return points, directions, n_forces, states, full_forces, phis, jacs
 
     def construct_state_tensor(
             self, data_state: Union[Tensor, TensorDictBase]) -> Tensor:
