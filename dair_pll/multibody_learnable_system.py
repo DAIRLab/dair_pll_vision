@@ -118,7 +118,7 @@ class MultibodyLearnableSystem(System):
         self.init_urdfs = init_urdfs
 
         self.visualization_system = None
-        self.solver = DynamicCvxpyLCQPLayer(self.space.n_v)
+        self.solver = DynamicCvxpyLCQPLayer()
         self.dt = dt
         self.set_carry_sampler(lambda: Tensor([False]))
         self.max_batch_dim = 1
@@ -294,12 +294,7 @@ class MultibodyLearnableSystem(System):
                       pbmm(M_inv,
                            pbmm(velocity_map,
                                 J.transpose(-1, -2)))))
-        # J_M is scaled:  Define J_M such that J_M^T * J_M = w_pred * Q.
-        J_M = np.sqrt(self.w_pred) * \
-            pbmm(reorder_mat.transpose(-1, -2),
-                 pbmm(J,
-                      pbmm(velocity_map,
-                           torch.linalg.cholesky(M_inv))))
+        Q_solve = Q * self.w_pred
 
         dv = (v_plus - (v + non_contact_acceleration * dt)).unsqueeze(-2)
 
@@ -337,8 +332,10 @@ class MultibodyLearnableSystem(System):
             impulses = pbmm(
                 reorder_mat,
                 self.solver(
-                    J_M,
-                    pbmm(reorder_mat.transpose(-1, -2), q).squeeze(-1)
+                    pbmm(reorder_mat.transpose(-1, -2),
+                         pbmm(Q_solve, reorder_mat)),
+                    pbmm(reorder_mat.transpose(-1, -2),
+                         q).squeeze(-1),
                 ).detach().unsqueeze(-1))
         except Exception as e:
             import traceback
