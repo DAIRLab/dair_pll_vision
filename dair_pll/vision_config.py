@@ -4,8 +4,8 @@ project."""
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, cast, Dict, Union, Any, Callable
 
-import os.path as op
 import numpy as np
+import os.path as op
 import pdb
 import re
 import time
@@ -28,6 +28,8 @@ from dair_pll.experiment import LossCallbackCallable, TrainingState, \
 from dair_pll.geometry import DeepSupportConvex
 from dair_pll.system import System, SystemSummary
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
+from dair_pll.multibody_terms import PRECOMPUTED_FUNCTION_KEY, \
+    PRECOMPUTED_FUNCTION_STATES_KEY
 
 
 VISION_CUBE_SYSTEM = 'vision_cube'
@@ -36,7 +38,7 @@ VISION_TOBLERONE_SYSTEM = 'vision_toblerone'
 VISION_MILK_SYSTEM = 'vision_milk'
 VISION_SYSTEMS = ['vision_bottle', VISION_CUBE_SYSTEM, 'vision_egg',
                   'vision_half', VISION_MILK_SYSTEM, 'vision_napkin',
-                  VISION_PRISM_SYSTEM, VISION_TOBLERONE_SYSTEM, 
+                  VISION_PRISM_SYSTEM, VISION_TOBLERONE_SYSTEM,
                   'vision_bakingbox', 'vision_burger', 'vision_cardboard',
                   'vision_chocolate', 'vision_cream', 'vision_croc',
                   'vision_crushedcan', 'vision_duck', 'vision_gallon',
@@ -59,7 +61,7 @@ class VisionDataConfig(DataConfig):
             bundlesdf_iteration_X.
         - bundlesdf_id:  BundleSDF experiment ID for pose estimation.  This will
             be ensured to have the bundlesdf_id_ prefix.
-    
+
     From the above information, the following attributes are set upon creation:
         - full_asset_directory_path (str):  Full path to the asset directory,
             directly inside of which are the *.pt files to load.
@@ -155,7 +157,7 @@ class VisionExperimentDataManager(ExperimentDataManager):
                         config.dataset_size
         if initial_split:
             self.extend_trajectory_sets(initial_split)
-        
+
     def get_updated_trajectory_sets(
             self) -> Tuple[TrajectorySet, TrajectorySet, TrajectorySet]:
         """Returns an up-to-date partition of trajectories on disk, up to the
@@ -176,15 +178,15 @@ class VisionExperimentDataManager(ExperimentDataManager):
         assert n_on_disk == self.config.dataset_size, \
             f"Dataset_size is {self.config.dataset_size} but" \
             f" only found {n_on_disk} trajectories on disk."
-        
+
         if n_on_disk != self.n_sorted:
             assert self.n_sorted == 0, f"Expecting for vision experiments to " \
                 f"sort all needed trajectories at once, but have " \
                 f"{self.n_sorted} already sorted and {n_on_disk} on disk."
-            
+
             traj_nums = Tensor(file_utils.get_run_indices_in_dir(
                 self.trajectory_dir))
-            
+
             n_to_add = n_on_disk
 
             n_train = round(n_to_add * config.train_fraction)
@@ -219,15 +221,17 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         file_utils.save_configuration(config.storage, config.run_name, config,
                                       human_readable=True)
 
-        # Get precomputed functions in dictionary[string, callable] form.
+        # Get precomputed functions each in the format:
+        # {'function': callable, 'state_names': list[str]}
         precomputed_functions = {}
         dirs = config.learnable_config.precomputed_function_directories
         if 'mass_matrix' in dirs.keys():
             precomputed_functions['mass_matrix'] = \
-                get_precomputed_mass_matrix_function(dirs['mass_matrix'])
+                get_precomputed_mass_matrix_function_and_states(
+                    dirs['mass_matrix'])
         if 'lagrangian_forces' in dirs.keys():
             precomputed_functions['lagrangian_forces'] = \
-                get_precomputed_lagrangian_forces_function(
+                get_precomputed_lagrangian_forces_function_and_states(
                     dirs['lagrangian_forces'])
         self.precomputed_functions = precomputed_functions
 
@@ -255,7 +259,7 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         except FileNotFoundError:
             self.learning_data_manager = VisionExperimentDataManager(
                 self.config.data_config)
-            
+
         return is_resumed, training_state
 
     def vision_loss(
@@ -645,7 +649,6 @@ class VisionRobotExperiment(VisionExperiment):
 
         # Add an input visualization to see the trajectory with the robot.
         visualization_system = self.get_visualization_system(learned_system)
-        space = self.get_drake_system().space
         videos = {}
 
         for traj_num in [0]:
@@ -729,8 +732,15 @@ class TensorCallable(Protocol):
     def __call__(self, *args: torch.Tensor) -> torch.Tensor: ...
 
 
-def get_precomputed_mass_matrix_function(
-        txt_function_directory: str) -> Callable[[Tensor], Tensor]:
+def get_precomputed_mass_matrix_function_and_states(txt_function_directory: str
+) -> Dict[str, Union[ List[str], Callable[[Tensor], Tensor] ]]:
+    # Get the expected system state names at mass_matrix_state_names.txt.
+    state_names_file = op.join(
+        txt_function_directory, 'mass_matrix_state_names.txt')
+    assert op.exists(state_names_file), f'Need {state_names_file} to exist.'
+    with open(state_names_file, 'r') as file:
+        state_names = file.read().splitlines()
+
     # Look for mass_matrix_{row}_{col}_func.txt.
     empty_row = [None] * 13
     matrix_of_functions = [copy.copy(empty_row) for _ in range(13)]
@@ -758,10 +768,21 @@ def get_precomputed_mass_matrix_function(
                     matrix_of_functions[row][col](*torch_args)
         return mass_matrix
 
-    return mass_matrix_func
+    return {PRECOMPUTED_FUNCTION_KEY: mass_matrix_func,
+            PRECOMPUTED_FUNCTION_STATES_KEY: state_names}
 
-def get_precomputed_lagrangian_forces_function(
-        txt_function_directory: str) -> Callable[[Tensor], Tensor]:
+
+def get_precomputed_lagrangian_forces_function_and_states(
+        txt_function_directory: str
+) -> Dict[str, Union[ List[str], Callable[[Tensor], Tensor] ]]:
+
+    # Get the expected system state names at lagrangian_forces_state_names.txt.
+    state_names_file = op.join(
+        txt_function_directory, 'lagrangian_forces_state_names.txt')
+    assert op.exists(state_names_file), f'Need {state_names_file} to exist.'
+    with open(state_names_file, 'r') as file:
+        state_names = file.read().splitlines()
+
     # Look for lagrangian_forces_{row}_func.txt.
     vector_of_functions = [None] * 13
     for row in range(13):
@@ -785,4 +806,5 @@ def get_precomputed_lagrangian_forces_function(
             lagrangian_forces[..., row] = vector_of_functions[row](*torch_args)
         return lagrangian_forces
 
-    return lagrangian_forces_func
+    return {PRECOMPUTED_FUNCTION_KEY: lagrangian_forces_func,
+            PRECOMPUTED_FUNCTION_STATES_KEY: state_names}

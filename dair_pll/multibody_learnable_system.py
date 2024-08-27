@@ -69,7 +69,7 @@ class MultibodyLearnableSystem(System):
                  output_urdfs_dir: Optional[str] = None,
                  pretrained_icnn_weights_filepath: Optional[str] = None,
                  represent_geometry_as: str = 'box',
-                 precomputed_functions: Dict[str, Callable] = {},
+                 precomputed_functions: Dict[str, Union[List[str],Callable]]={},
                  export_drake_pytorch_dir: str = None) -> None:
         """Inits :py:class:`MultibodyLearnableSystem` with provided model URDFs.
 
@@ -95,7 +95,11 @@ class MultibodyLearnableSystem(System):
                 the geometry should be represented.
             precomputed_functions: Dictionary of function names that have been
                 precomputed offline.  Only eligible keys that will get checked
-                for are 'mass_matrix' and 'lagrangian_forces'.
+                for are 'mass_matrix' and 'lagrangian_forces'.  The values at
+                those keys are nested dictionaries with keys 'function' with the
+                callable and 'state_names' with a list of strings for the
+                plant's state names that were used when the function was pre-
+                computed.
             export_drake_pytorch_dir: The folder in which exported elements of
                 the mass matrix and lagrangian force expressions will be saved.
                 If provided, the code terminates after the export.

@@ -30,7 +30,7 @@ associated :py:class:`MultibodyPlantDiagram`. The :py:class:`MultibodyTerms`
 object manages the symbolic calculation and has corresponding
 :py:class:`LagrangianTerms` and :py:class:`ContactTerms` members.
 """
-from typing import List, Tuple, Callable, Dict, cast, Optional
+from typing import List, Tuple, Callable, Dict, cast, Optional, Union
 from dataclasses import dataclass
 
 import drake_pytorch  # type: ignore
@@ -72,6 +72,9 @@ StateInputInertialCallback = Callable[[Tensor, Tensor, Tensor, Tensor], Tensor]
 CENTER_OF_MASS_DOF = 3
 INERTIA_TENSOR_DOF = 6
 DEFAULT_SIMPLIFIER = drake_pytorch.Simplifier.QUICKTRIG
+
+PRECOMPUTED_FUNCTION_KEY = 'function'
+PRECOMPUTED_FUNCTION_STATES_KEY = 'state_names'
 
 
 @dataclass
@@ -149,7 +152,7 @@ class LagrangianTerms(Module):
 
     def __init__(self, plant_diagram: MultibodyPlantDiagram,
                  learnable_body_dict: Dict[str, LearnableBodySettings] = {},
-                 precomputed_functions: Dict[str, Callable[[Tensor],Tensor]]={},
+                 precomputed_functions: Dict[str, Union[List[str],Callable]]={},
                  export_drake_pytorch_dir: str = None
                  ) -> None:
         """Inits :py:class:`LagrangianTerms` with prescribed parameters and
@@ -160,7 +163,12 @@ class LagrangianTerms(Module):
             learnable_body_dict: dictionary of which body parameters to learn.
             precomputed_functions: Dictionary of precomputed functions.  Keys
                 that will be considered are 'mass_matrix' and
-                'lagrangian_forces'.
+                'lagrangian_forces'.  The values at those keys are nested
+                dictionaries with keys 'function' with the callable and
+                'state_names' with a list of strings for the plant's state names
+                that were used when the function was pre-computed.  The state
+                names are checked to match the state names of the newly created
+                plant.
             export_drake_pytorch_dir: The folder in which exported elements of
                 the mass matrix and lagrangian force expressions will be saved.
                 If provided, the code terminates after the export.
@@ -217,7 +225,14 @@ class LagrangianTerms(Module):
 
         else:
             print(f'Using pre-computed mass_matrix expression.')
-            self.mass_matrix = precomputed_functions['mass_matrix']
+            expected_state_names = precomputed_functions['mass_matrix'][
+                PRECOMPUTED_FUNCTION_STATES_KEY]
+            assert expected_state_names == plant.GetStateNames(), \
+                f'Precomputed mass matrix uses {expected_state_names=} but ' + \
+                f'plant has {plant.GetStateNames()}.'
+
+            self.mass_matrix = precomputed_functions['mass_matrix'][
+                PRECOMPUTED_FUNCTION_KEY]
 
         if 'lagrangian_forces' not in precomputed_functions.keys():
             u = MakeVectorVariable(plant.num_actuated_dofs(), 'u',
@@ -262,7 +277,14 @@ class LagrangianTerms(Module):
 
         else:
             print(f'Using pre-computed lagrangian_forces expression.')
-            self.lagrangian_forces = precomputed_functions['lagrangian_forces']
+            expected_state_names = precomputed_functions['lagrangian_forces'][
+                PRECOMPUTED_FUNCTION_STATES_KEY]
+            assert expected_state_names == plant.GetStateNames(), \
+                f'Precomputed lagrangian forces use {expected_state_names=}' + \
+                f' but plant has {plant.GetStateNames()}.'
+
+            self.lagrangian_forces = precomputed_functions['lagrangian_forces'][
+                PRECOMPUTED_FUNCTION_KEY]
 
         # pylint: disable=E1103
         self.body_parameters = ParameterList()
@@ -876,7 +898,7 @@ class MultibodyTerms(Module):
                  learnable_body_dict: Dict[str, LearnableBodySettings] = {},
                  pretrained_icnn_weights_filepath: str = None,
                  represent_geometry_as: str = 'box',
-                 precomputed_functions: Dict[str, Callable[[Tensor], Tensor]]={},
+                 precomputed_functions: Dict[str, Union[List[str],Callable]]={},
                  export_drake_pytorch_dir: str = None
                  ) -> None:
         """Inits :py:class:`MultibodyTerms` for system described in URDFs
@@ -898,9 +920,14 @@ class MultibodyTerms(Module):
                 pretrained ICNN weights.
             represent_geometry_as: String box/mesh/polygon to determine how
                 the geometry should be represented.
-            precomputed_functions: Dictionary of function names that have been
-                precomputed offline.  Only eligible keys that will get checked
-                for are 'mass_matrix' and 'lagrangian_forces'.
+            precomputed_functions: Dictionary of precomputed functions.  Keys
+                that will be considered are 'mass_matrix' and
+                'lagrangian_forces'.  The values at those keys are nested
+                dictionaries with keys 'function' with the callable and
+                'state_names' with a list of strings for the plant's state names
+                that were used when the function was pre-computed.  The state
+                names are checked to match the state names of the newly created
+                plant.
             export_drake_pytorch_dir: The folder in which exported elements of
                 the mass matrix and lagrangian force expressions will be saved.
                 If provided, the code terminates after the export.
