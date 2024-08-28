@@ -427,6 +427,11 @@ def get_vision_urdf_template_path() -> str:
     return get_asset('vision_template.urdf')
 
 
+def debug_plot_filepath(storage_name: str, run_name: str) -> str:
+    """Return the path to the debug plot file."""
+    return path.join(run_dir(storage_name, run_name), 'debug_plot.png')
+
+
 def geom_for_bsdf_dir(storage_name: str, run_name: str) -> str:
     """Absolute path of geometry for BundleSDF (a PLL output) storage folder"""
     return assure_created(

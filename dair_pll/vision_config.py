@@ -4,6 +4,7 @@ project."""
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, cast, Dict, Union, Any, Callable
 
+import matplotlib.pyplot as plt
 import numpy as np
 import os.path as op
 import pdb
@@ -25,11 +26,21 @@ from dair_pll.experiment import LossCallbackCallable, TrainingState, \
     AVERAGE_TAG, TRAIN_TIME_SETS, EVALUATION_VARIABLES, LEARNED_SYSTEM_NAME, \
     ALL_DURATIONS, TARGET_NAME, MAX_SAVED_TRAJECTORIES, ALL_SETS, \
     ORACLE_SYSTEM_NAME
+from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
+    EXPORT_DIRECTIONS_DEFAULT_NAME, \
+    EXPORT_FORCES_DEFAULT_NAME, \
+    EXPORT_STATES_DEFAULT_NAME, \
+    EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME, \
+    EXPORT_ALL_FORCES_DEFAULT_NAME, \
+    EXPORT_PHIS_DEFAULT_NAME, \
+    EXPORT_JACOBIANS_DEFAULT_NAME
 from dair_pll.geometry import DeepSupportConvex
 from dair_pll.system import System, SystemSummary
-from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
+from dair_pll.multibody_learnable_system import MultibodyLearnableSystem, \
+    ContactNetsLossReturnType
 from dair_pll.multibody_terms import PRECOMPUTED_FUNCTION_KEY, \
     PRECOMPUTED_FUNCTION_STATES_KEY
+from dair_pll.tensor_utils import pbmm
 
 
 VISION_CUBE_SYSTEM = 'vision_cube'
@@ -637,6 +648,7 @@ class VisionRobotExperiment(VisionExperiment):
         Returns:
             Summary containing overlaid video(s).
         """
+        # return SystemSummary(scalars={}, videos={}, meshes={})
         if (not force_generate_videos) and \
             (not self.config.generate_video_predictions_throughout) and \
             (not self.config.generate_video_geometries_throughout):
@@ -720,6 +732,200 @@ class VisionRobotExperiment(VisionExperiment):
         learned_system_summary.meshes.update(comparison_summary.meshes)
 
         return epoch_vars, learned_system_summary
+
+    def debug_training(self, learned_system: System,
+                       store_to_file: bool = False) -> None:
+        """Debugging function for vision robot experiments."""
+        # First load all the BundleSDF exported data.
+        run_name = self.config.run_name
+        storage_name = self.config.storage
+        output_dir = file_utils.geom_for_bsdf_dir(storage_name, run_name)
+
+        normal_forces_stacked = torch.load(
+            op.join(output_dir, EXPORT_FORCES_DEFAULT_NAME),
+            weights_only=True).detach()
+        support_points_stacked = torch.load(
+            op.join(output_dir, EXPORT_POINTS_DEFAULT_NAME),
+            weights_only=True).detach()
+        support_directions_stacked = torch.load(
+            op.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME),
+            weights_only=True).detach()
+        states_stacked = torch.load(
+            op.join(output_dir, EXPORT_STATES_DEFAULT_NAME),
+            weights_only=True).detach()
+        all_forces_stacked = torch.load(
+            op.join(output_dir, EXPORT_ALL_FORCES_DEFAULT_NAME),
+            weights_only=True).detach()
+        phis_stacked = torch.load(
+            op.join(output_dir, EXPORT_PHIS_DEFAULT_NAME),
+            weights_only=True).detach()
+        jacobians_stacked = torch.load(
+            op.join(output_dir, EXPORT_JACOBIANS_DEFAULT_NAME),
+            weights_only=True).detach()
+
+        # Split by contact:  [timestep_i, contact_i, ...]
+        n_contacts = 6
+        n_timesteps = normal_forces_stacked.shape[0] // n_contacts
+        n_state = learned_system.space.n_x
+        n_velocity = learned_system.space.n_v
+        assert normal_forces_stacked.ndim == 1 and \
+            normal_forces_stacked.shape[0] / n_contacts == \
+            normal_forces_stacked.shape[0] // n_contacts
+
+        normal_forces = torch.zeros((0, n_contacts))
+        support_points = torch.zeros((0, n_contacts, 3))
+        support_directions = torch.zeros((0, n_contacts, 3))
+        states = torch.zeros((0, n_contacts, n_state))
+        all_forces = torch.zeros((0, n_contacts, 3))
+        phis = torch.zeros((0, n_contacts))
+        jacobians = torch.zeros((0, n_contacts, 3, n_velocity))
+
+        forces_on_object = torch.zeros((0, n_contacts, 3))
+        # unscaled_losses = torch.zeros((0, 4))
+
+        for i in range(n_timesteps):
+            idx1 = i*n_contacts
+            idx2 = (i+1)*n_contacts
+            normal_forces = torch.cat(
+                (normal_forces,
+                 normal_forces_stacked[idx1:idx2].unsqueeze(0)
+                ), dim=0)
+            support_points = torch.cat(
+                (support_points,
+                 support_points_stacked[idx1:idx2].unsqueeze(0)
+                ), dim=0)
+            support_directions = torch.cat(
+                (support_directions,
+                 support_directions_stacked[idx1:idx2].unsqueeze(0)
+                ), dim=0)
+            states = torch.cat(
+                (states,
+                 states_stacked[idx1:idx2].unsqueeze(0)
+                ), dim=0)
+            all_forces = torch.cat(
+                (all_forces,
+                 all_forces_stacked[idx1:idx2].unsqueeze(0)
+                ), dim=0)
+            phis = torch.cat(
+                (phis,
+                 phis_stacked[idx1:idx2].unsqueeze(0)
+                ), dim=0)
+            jacobians = torch.cat(
+                (jacobians,
+                 jacobians_stacked[idx1:idx2].unsqueeze(0)
+                ), dim=0)
+
+            # Compute the forces on the object.
+            J = jacobians_stacked[idx1:idx2]    # (n_lambda, 3, n_velocity)
+            contact_force = all_forces_stacked[idx1:idx2].unsqueeze(-1)
+                                                # (n_lambda, 3, 1)
+            generalized_forces = pbmm(
+                J.transpose(-1, -2), contact_force).reshape(
+                    n_contacts, n_velocity)       # (n_lambda, n_velocity)
+            force_on_object = generalized_forces[:, -3:]
+            forces_on_object = torch.cat(
+                (forces_on_object,
+                 force_on_object.unsqueeze(0)
+            ), dim=0)
+
+        # Rebuild the impulses vector of shape (N, n_contact*3).
+        normal_z_forces = all_forces[1:, :, 0]
+        tangential_x_forces = all_forces[1:, :, 1]
+        tangential_y_forces = all_forces[1:, :, 2]
+
+        tx_idx = [idx for idx in range(n_contacts, 3*n_contacts, 2)]
+        ty_idx = [idx for idx in range(n_contacts+1, 3*n_contacts, 2)]
+
+        impulses = torch.zeros((n_timesteps-1, 3*n_contacts))
+        for i in range(n_timesteps-1):
+            impulses[i, :n_contacts] = normal_z_forces[i, :] * 1.0/30
+            impulses[i, tx_idx] = tangential_x_forces[i, :] * 1.0/30
+            impulses[i, ty_idx] = tangential_y_forces[i, :] * 1.0/30
+        impulses = impulses.unsqueeze(-1)
+
+        # Compute the unscaled loss terms.
+        states_prev = states[:-1, 0, :].reshape(n_timesteps-1, n_state)
+        states_next = states[1:, 0, :].reshape(n_timesteps-1, n_state)
+        control = torch.zeros((n_timesteps-1, 7))
+        Q, q_pred, q_comp, q_diss, c_pen, c_pred = \
+            learned_system.calculate_contactnets_loss_terms(
+                states_prev, control, states_next,
+                return_type=ContactNetsLossReturnType.UNSCALED_LOSS_STRUCTURE)
+        l_pred = 0.5 * pbmm(impulses.transpose(-1, -2), pbmm(Q, impulses)) \
+            + pbmm(impulses.transpose(-1, -2), q_pred) + c_pred
+        l_pred = l_pred.squeeze()
+        l_comp = pbmm(impulses.transpose(-1, -2), q_comp).squeeze()
+        l_diss = pbmm(impulses.transpose(-1, -2), q_diss).squeeze()
+        l_pen = c_pen.squeeze()
+
+        times = torch.arange(normal_forces.shape[0]) * (1.0/30)
+
+        # Visualize the forces and signed distances.
+        if not store_to_file:
+            plt.ion()
+        fig, ax = plt.subplots(4, 2, figsize=(15, 15), sharex='all')
+        for i in range(n_contacts):
+            ax[0, 0].plot(times, normal_forces[:, i], linewidth=6-i,
+                          label=f'Contact {i}')
+            ax[1, 0].plot(times, phis[:, i], linewidth=6-i,
+                          label=f'Contact {i}')
+        ax[2, 0].plot(times, states[:, 0, -3], label='Object v_x')
+        ax[2, 0].plot(times, states[:, 0, -2], label='Object v_y')
+        ax[2, 0].plot(times, states[:, 0, -1], label='Object v_z')
+
+        for i in range(n_contacts):
+            ax[0, 1].plot(times, forces_on_object[:, i, 0], linewidth=6-i,
+                          label=f'Contact {i}')
+            ax[1, 1].plot(times, forces_on_object[:, i, 1], linewidth=6-i,
+                          label=f'Contact {i}')
+            ax[2, 1].plot(times, forces_on_object[:, i, 2], linewidth=6-i,
+                          label=f'Contact {i}')
+        total_forces_xyz = torch.sum(forces_on_object, dim=1)
+        ax[0, 1].plot(times, total_forces_xyz[:, 0], linestyle='--', color='k',
+                      label='Total')
+        ax[1, 1].plot(times, total_forces_xyz[:, 1], linestyle='--', color='k',
+                      label='Total')
+        ax[2, 1].plot(times, total_forces_xyz[:, 2], linestyle='--', color='k',
+                      label='Total')
+
+        ax[3, 0].plot(times[1:], l_pred.detach().numpy(), linewidth=4,
+                      label='Prediction')
+        ax[3, 0].plot(times[1:], l_comp.detach().numpy(), linewidth=3,
+                      label='Complementarity')
+        ax[3, 0].plot(times[1:], l_diss.detach().numpy(), linewidth=2,
+                      label='Dissipation')
+        ax[3, 0].plot(times[1:], l_pen.detach().numpy(), linewidth=1,
+                      label='Penetration')
+
+        ax[3, 0].set_xlabel('Time [s]')
+        ax[3, 1].set_xlabel('Time [s]')
+        for ax_i in ax.flatten():
+            ax_i.tick_params(labelbottom=True)
+        ax[0, 0].set_ylabel('Normal Forces [N]')
+        ax[1, 0].set_ylabel('Signed Distances [m]')
+        ax[2, 0].set_ylabel('Object Velocities [m/s]')
+        ax[3, 0].set_ylabel('Unscaled Loss Terms')
+        ax[0, 1].set_ylabel('Forces on Object X [N]')
+        ax[1, 1].set_ylabel('Forces on Object Y [N]')
+        ax[2, 1].set_ylabel('Forces on Object Z [N]')
+        # ax[0, 0].set_title('Normal Forces')
+        # ax[1, 0].set_title('Signed Distances')
+        # ax[2, 0].set_title('Object Velocities')
+        ax[1, 0].legend()
+        ax[2, 0].legend()
+        ax[3, 0].legend()
+        ax[1, 1].legend()
+        fig.suptitle(f'Debugging {run_name}')
+
+        if store_to_file:
+            # Save the figure to file.
+            filepath = file_utils.debug_plot_filepath(storage_name, run_name)
+            fig.savefig(filepath)
+            print(f'Saved debug plot to {filepath}')
+        else:
+            pdb.set_trace()
+
+
 
 
 """Precomputed mass matrix and lagrangian forces expressions for robot

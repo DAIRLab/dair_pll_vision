@@ -33,6 +33,7 @@ PRISM_MESH_URDF_ASSET = 'bundlesdf_prism_mesh.urdf'
 TOBLERONE_MESH_URDF_ASSET = 'bundlesdf_toblerone_mesh.urdf'
 MILK_MESH_URDF_ASSET = 'bundlesdf_milk_mesh.urdf'
 # Franka URDF for robot experiments.
+# FRANKA_URDF_ASSET = 'local_franka_with_ee.urdf'
 FRANKA_URDF_ASSET = 'franka_with_ee.urdf'
 
 MESH_TYPE = 'mesh'
@@ -54,7 +55,7 @@ T_PREDICTION = 1
 # Optimization configuration.
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 0.0
-EPOCHS = 1 #500
+EPOCHS = 200 #500
 PATIENCE = 100 #EPOCHS
 
 WANDB_PROJECT = 'dair_pll-vision'
@@ -355,6 +356,9 @@ def main(pll_run_id: str = "",
     print(f'Saving points and directions...', end=' ')
     experiment.generate_bundlesdf_data(learned_system)
     print(f'Done!')
+
+    if is_robot_experiment:
+        experiment.debug_training(learned_system, store_to_file=True)
 
     
 @click.command()

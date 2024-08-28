@@ -21,6 +21,7 @@ https://doi.org/10.1007/s10107-005-0590-7
 Contact Dynamics with Smooth, Implicit Representations," Conference on
 Robotic Learning, 2020, https://proceedings.mlr.press/v155/pfrommer21a.html
 """
+from enum import Enum
 from multiprocessing import pool
 import os
 from os import path
@@ -49,6 +50,12 @@ ROTATION_SCALING = 0.2/torch.pi
 # same, whether link 1 or link 2 are in the right place.
 ELBOW_COM_TO_AXIS_DISTANCE = 0.035
 JOINT_SCALING = 2*ELBOW_COM_TO_AXIS_DISTANCE/torch.pi + ROTATION_SCALING
+
+
+class ContactNetsLossReturnType(Enum):
+    LOSS_VALUES = 1
+    IMPULSES = 2
+    UNSCALED_LOSS_STRUCTURE = 3
 
 
 class MultibodyLearnableSystem(System):
@@ -234,7 +241,8 @@ class MultibodyLearnableSystem(System):
 
     def calculate_contactnets_loss_terms(
             self, x: Tensor, u: Tensor, x_plus: Tensor,
-            return_impulses: bool = False
+            return_type: ContactNetsLossReturnType = \
+                ContactNetsLossReturnType.LOSS_VALUES
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Helper function for
         :py:meth:`MultibodyLearnableSystem.contactnets_loss` that returns the
@@ -327,6 +335,9 @@ class MultibodyLearnableSystem(System):
                                                 pbmm(M,
                                                      dv.transpose(-1, -2)))))))
 
+        if return_type == ContactNetsLossReturnType.UNSCALED_LOSS_STRUCTURE:
+            return Q, q_pred, q_comp, q_diss, c_pen, c_pred
+
         # Envelope theorem guarantees that gradient of loss w.r.t. parameters
         # can ignore the gradient of the impulses w.r.t. the QCQP parameters.
         # Therefore, we can detach ``impulses`` from pytorch's computation graph
@@ -356,8 +367,9 @@ class MultibodyLearnableSystem(System):
         impulses[invalid.expand(impulses.shape)] = 0.
 
         # Return only the batched impulses if requested.
-        if return_impulses:
+        if return_type == ContactNetsLossReturnType.IMPULSES:
             return impulses
+        assert return_type == ContactNetsLossReturnType.LOSS_VALUES
 
         # Get the unscaled loss terms.
         loss_pred = 0.5 * pbmm(impulses.transpose(-1, -2), pbmm(Q, impulses)) \
@@ -512,7 +524,8 @@ class MultibodyLearnableSystem(System):
 
         # Get the impulses in the same way as the loss calculation.
         impulses = self.calculate_contactnets_loss_terms(
-            x, u, x_plus, return_impulses=True).reshape(-1, 3*n_contacts)
+            x, u, x_plus, return_type=ContactNetsLossReturnType.IMPULSES
+        ).reshape(-1, 3*n_contacts)
 
         # Get the normal forces.
         normal_impulses = impulses[:, :n_contacts]
