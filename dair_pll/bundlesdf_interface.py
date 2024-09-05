@@ -28,9 +28,9 @@ from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 
 
-TEST_RUN_NAME = 'pll_id_00' #'pll_id_p15'  #'test_004'
-SYSTEM_NAME = 'vision_bakingbox' #'vision_cube'  #'bundlesdf_cube'
-ASSET_NAME = 'bakingbox_1-2' #'cube_1'  #'cube_2'
+TEST_RUN_NAME = 'pll_id_00-cvwo-occleft' #'pll_id_00-cvwo'#'pll_id_00' #'pll_id_p15'  #'test_004'
+SYSTEM_NAME = 'vision_bakingbox' #'vision_gallon' #'vision_bakingbox'#'vision_gallon'#'vision_bakingbox' #'vision_cube'  #'bundlesdf_cube'
+ASSET_NAME = 'bakingbox_2' #'gallon_5'#'bakingbox_1'#'gallon_5'#'bakingbox_1-2' #'cube_1'  #'cube_2'
 STORAGE_NAME = op.join(file_utils.RESULTS_DIR, SYSTEM_NAME, ASSET_NAME,
                        'bundlesdf_iteration_1')
     # file_utils.assure_created(op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
@@ -90,7 +90,7 @@ DO_GRADIENT_DATA_TEST = False
 DO_UNIQUENESS_SCORE_TEST = False
 DO_DOUBLE_UNIQUENESS_SCORE_TEST = False
 DO_SUPPORT_POINT_SNAPPING_TEST = False
-DO_ALL_VISUALIZATIONS_FOR_RUN_TEST = False
+DO_ALL_VISUALIZATIONS_FOR_RUN_TEST = True
 DO_HYPERPLANE_CONSTRAINED_DEBUGGING = False
 FRAME_BY_FRAME_DEV = False
 
@@ -173,7 +173,7 @@ def filter_mesh_samples_based_on_supports(
         sample_points: Tensor, sample_normals: Tensor, contact_points: Tensor,
         support_directions: Tensor, contact_toss_frames: Tensor,
         threshold: float = HULL_PROXIMITY_THRESH
-) -> Tuple[Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor]:
     """Given a set of points sampled on the convex hull mesh and their outward
     normal directions, filter out any that are located beyond a threshold away
     from support point hyperplanes.
@@ -979,6 +979,8 @@ def visualize_sampled_points(
         for i in range(len(mesh.faces)):
             face = mesh.faces[i]
             vertices = mesh.vertices[face]
+            if isinstance(vertices, np.ndarray):
+                vertices = torch.from_numpy(vertices)
             vertices = torch.cat((vertices, vertices[0].unsqueeze(0)), dim=0)
             vertices = vertices.numpy()
             ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2], color='b',
@@ -1768,6 +1770,9 @@ if __name__ == '__main__':
             op.join(output_dir, EXPORT_POINTS_DEFAULT_NAME)).detach()
         support_directions = torch.load(
             op.join(output_dir, EXPORT_DIRECTIONS_DEFAULT_NAME)).detach()
+        toss_frames = torch.load(
+            op.join(output_dir, EXPORT_TOSS_FRAME_IDX_DEFAULT_NAME),
+            weights_only=True).detach()
 
         # Sample points on the support point mesh surface and visualize them.
         mesh = create_mesh_from_set_of_points(support_points)
@@ -1778,9 +1783,9 @@ if __name__ == '__main__':
 
         # Filter support points via simple thresholding of normal forces, then
         # filter the sample points based on this contact knowledge.
-        contact_points, contact_directions = \
+        contact_points, contact_directions, contact_toss_frames = \
             filter_points_and_directions_based_on_contact(
-                support_points, support_directions, normal_forces
+                support_points, support_directions, normal_forces, toss_frames
             )
         adapted_threshold = find_adaptive_force_threshold(normal_forces)
         print(f'\tFiltered support points with force threshold ' + \
@@ -1791,10 +1796,10 @@ if __name__ == '__main__':
         print('\tVisualizing distribution of normal forces.')
         visualize_force_distribution(normal_forces, threshold=adapted_threshold)
 
-        sample_points_cf, sample_normals_cf = \
+        sample_points_cf, sample_normals_cf, sample_toss_frames = \
             filter_mesh_samples_based_on_supports(
                 sample_points, sample_normals, contact_points,
-                contact_directions, threshold=HULL_PROXIMITY_THRESH
+                contact_directions, contact_toss_frames, threshold=HULL_PROXIMITY_THRESH
             )
         print('\tFiltered mesh samples with contact plane distance ' + \
               f'threshold {HULL_PROXIMITY_THRESH} meters.')

@@ -236,6 +236,9 @@ class MultibodyLearnableSystem(System):
 
         loss = (self.w_pred * loss_pred) + (self.w_comp * loss_comp) + \
                (self.w_pen * loss_pen) + (self.w_diss * loss_diss)
+        # loss = (self.w_comp * loss_comp) + \
+        #        (self.w_pen * loss_pen) + (self.w_diss * loss_diss)
+        # print("Warning: Prediction loss is not included in the loss calculation.")
 
         return loss
 

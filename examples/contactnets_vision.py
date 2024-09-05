@@ -233,6 +233,11 @@ def main(pll_run_id: str = "",
     urdfs = {'object': urdf}
     if is_robot_experiment:
         urdfs['robot'] = file_utils.get_asset(FRANKA_URDF_ASSET)
+    
+    # urdf = "/mnt/data0/minghz/repos/bundlenets/dair_pll/results/vision_bakingbox" + \
+    #     "/bakingbox_2/bundlesdf_iteration_1/pll_id_00-cvwo-occleft-bsdf0/urdfs/with_gt_mesh.urdf"
+    # urdfs = {"object": urdf}
+    # print("Warning: using the URDF with ground truth mesh.")
     base_config = DrakeSystemConfig(urdfs=urdfs)
 
     # If this is a robot experiment, use precomputed mass matrix and lagrangian
@@ -278,7 +283,7 @@ def main(pll_run_id: str = "",
         learnable_body_dict = learnable_body_dict,
         pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
         w_pred=w_pred, w_comp=w_comp, w_diss=w_diss, w_pen=w_pen,
-        w_bsdf=w_bsdf, represent_geometry_as='mesh',
+        w_bsdf=w_bsdf, represent_geometry_as='mesh', #'mesh' for deep support,'polygon' for mesh
         precomputed_function_directories=precomputed_function_directories,
         export_drake_pytorch_dir = DRAKE_PYTORCH_FUNCTION_EXPORT_DIR if \
             export_drake_pytorch else None

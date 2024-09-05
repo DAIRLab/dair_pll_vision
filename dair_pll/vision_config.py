@@ -287,6 +287,8 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         contactnets_loss = self.contactnets_loss(
             x_past, x_future, system, keep_batch)
         bundlesdf_loss = self.bundlesdf_geometry_loss(system)
+        # bundlesdf_loss = torch.zeros_like(contactnets_loss)
+        # print("Warning: bundlesdf_loss is currently disabled.")
 
         # Combine the two terms.  The ContactNets loss is already scaled by the
         # appropriate weights, so only need to scale the BundleSDF loss.
@@ -382,6 +384,8 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
                 learned_system.calculate_contactnets_loss_terms(
                     **self.get_loss_args(x_i, y_i, learned_system))
             loss_bsdf = self.bundlesdf_geometry_loss(learned_system)
+            # loss_bsdf = torch.zeros_like(loss_pred)
+            # print("Warning: bundlesdf_loss is currently disabled in write_to_wandb.")
 
             losses_pred.append(loss_pred.clone().detach())
             losses_comp.append(loss_comp.clone().detach())
