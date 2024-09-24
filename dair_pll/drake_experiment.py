@@ -283,6 +283,12 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
             oracle_system = self.get_oracle_system()
             dt = oracle_system.dt
             urdfs = oracle_system.urdfs
+
+            # Ensure any mesh geometries preserve the vertex set.
+            represent_geometry_as = 'polygon' if \
+                self.config.learnable_config.represent_geometry_as == 'mesh' \
+                else self.config.learnable_config.represent_geometry_as
+
             self.true_geom_multibody_system = MultibodyLearnableSystem(
                 init_urdfs=urdfs,
                 dt=dt,
@@ -294,10 +300,7 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
                     'w_bsdf': self.config.learnable_config.w_bsdf},
                 learnable_body_dict = \
                     self.config.learnable_config.learnable_body_dict,
-                represent_geometry_as = \
-                    self.config.learnable_config.represent_geometry_as)
-            
-        return self.true_geom_multibody_system
+                represent_geometry_as = represent_geometry_as)
 
     def penetration_metric(self, x_pred: Tensor, _x_target: Tensor) -> Tensor:
         true_geom_system = self.get_true_geometry_multibody_learnable_system()

@@ -461,6 +461,11 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
             dt = oracle_system.dt
             urdfs = oracle_system.urdfs
 
+            # Ensure any mesh geometries preserve the vertex set.
+            represent_geometry_as = 'polygon' if \
+                self.config.learnable_config.represent_geometry_as == 'mesh' \
+                else self.config.learnable_config.represent_geometry_as
+
             self.true_geom_multibody_system = MultibodyLearnableSystem(
                 init_urdfs=urdfs,
                 dt=dt,
@@ -472,8 +477,7 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
                     'w_bsdf': self.config.learnable_config.w_bsdf},
                 learnable_body_dict = \
                     self.config.learnable_config.learnable_body_dict,
-                represent_geometry_as = \
-                    self.config.learnable_config.represent_geometry_as,
+                represent_geometry_as = represent_geometry_as,
                 precomputed_functions=self.precomputed_functions,
                 export_drake_pytorch_dir=self.export_drake_pytorch_dir)
 
