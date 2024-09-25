@@ -183,7 +183,7 @@ class MultibodyLearnableSystem(System):
                 # HACK:  Assumes robot geometries are unlearnable so does not
                 # look for new obj filenames.
                 print(f'Exporting learned robot URDF: will not replace ' + \
-                      f'any obj names.')
+                      f'any obj names (suffix={suffix}).')
 
             elif suffix is not None:
                 # Rename {base}.obj to {base}_{suffix}.obj.
@@ -236,9 +236,6 @@ class MultibodyLearnableSystem(System):
 
         loss = (self.w_pred * loss_pred) + (self.w_comp * loss_comp) + \
                (self.w_pen * loss_pen) + (self.w_diss * loss_diss)
-        # loss = (self.w_comp * loss_comp) + \
-        #        (self.w_pen * loss_pen) + (self.w_diss * loss_diss)
-        # print("Warning: Prediction loss is not included in the loss calculation.")
 
         return loss
 
@@ -293,33 +290,22 @@ class MultibodyLearnableSystem(System):
         sliding_speeds = sliding_velocities.reshape(
             phi.shape[:-1] + (n_contacts, 2)).norm(dim=-1, keepdim=True)
 
-        # Prepare to exclude the robot predictions from the prediction loss.
-        batch_dims = x.shape[:-1]
-        velocity_map = torch.diag(self.learnable_state_map[self.space.n_q:])
-        for _ in batch_dims:
-            velocity_map = velocity_map.unsqueeze(0)
-        velocity_map = velocity_map.expand(batch_dims + \
-                                           (self.space.n_v, self.space.n_v))
-        velocity_map = velocity_map.type(torch.double)
-
-        M_inv = torch.inverse(M)
-        # Q is unscaled by any loss weights.
-        Q = pbmm(J,
-                 pbmm(velocity_map,
-                      pbmm(M_inv,
-                           pbmm(velocity_map,
-                                J.transpose(-1, -2)))))
-        Q_solve = Q * self.w_pred
-
         dv = (v_plus - (v + non_contact_acceleration * dt)).unsqueeze(-2)
 
+        # Prepare to exclude the robot predictions from the prediction loss.
+        velocity_mask = self.learnable_state_map[self.space.n_q:]
+        J_small = J[..., velocity_mask]
+        M_small = M[..., velocity_mask, :][..., velocity_mask]
+        M_inv = torch.inverse(M)
+        M_inv_small = M_inv[..., velocity_mask, :][..., velocity_mask]
+        dv_small = dv[..., velocity_mask]
+
+        # Q is unscaled by any loss weights.
+        Q = pbmm(J_small, pbmm(M_inv_small, J_small.transpose(-1, -2)))
+        Q_solve = Q * self.w_pred
+
         # q_pred, q_comp, and q_diss are unscaled by any loss weights.
-        q_pred = -pbmm(J,
-                       pbmm(velocity_map,
-                            pbmm(M_inv,
-                                 pbmm(velocity_map,
-                                      pbmm(M,
-                                           dv.transpose(-1, -2))))))
+        q_pred = -pbmm(J_small, dv_small.transpose(-1, -2))
         q_comp = torch.abs(phi_then_zero).unsqueeze(-1)
         q_diss = dt * torch.cat((sliding_speeds, sliding_velocities), dim=-2)
 
@@ -330,13 +316,7 @@ class MultibodyLearnableSystem(System):
         c_pen = (torch.maximum(-phi, torch.zeros_like(phi))**2).sum(dim=-1)
         c_pen = c_pen.reshape(c_pen.shape + (1, 1))
 
-        c_pred = 0.5 * pbmm(dv,
-                            pbmm(M,
-                                 pbmm(velocity_map,
-                                      pbmm(M_inv,
-                                           pbmm(velocity_map,
-                                                pbmm(M,
-                                                     dv.transpose(-1, -2)))))))
+        c_pred = 0.5 * pbmm(dv_small, pbmm(M_small, dv_small.transpose(-1, -2)))
 
         if return_type == ContactNetsLossReturnType.UNSCALED_LOSS_STRUCTURE:
             return Q, q_pred, q_comp, q_diss, c_pen, c_pred
