@@ -267,6 +267,7 @@ class MultibodyLearnableSystem(System):
         v = self.space.v(x)
         q_plus, v_plus = self.space.q_v(x_plus)
         dt = self.dt
+        EPS = 0
 
         # Begin loss calculation.
         delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, \
@@ -296,13 +297,12 @@ class MultibodyLearnableSystem(System):
         velocity_mask = self.learnable_state_map[self.space.n_q:]
         J_small = J[..., velocity_mask]
         M_small = M[..., velocity_mask, :][..., velocity_mask]
-        M_inv = torch.inverse(M)
-        M_inv_small = M_inv[..., velocity_mask, :][..., velocity_mask]
+        M_inv_small = torch.inverse(M_small)
         dv_small = dv[..., velocity_mask]
 
         # Q is unscaled by any loss weights.
         Q = pbmm(J_small, pbmm(M_inv_small, J_small.transpose(-1, -2)))
-        Q_solve = Q * self.w_pred
+        Q_solve = (Q + EPS*torch.eye(Q.shape[-1])) * self.w_pred
 
         # q_pred, q_comp, and q_diss are unscaled by any loss weights.
         q_pred = -pbmm(J_small, dv_small.transpose(-1, -2))
