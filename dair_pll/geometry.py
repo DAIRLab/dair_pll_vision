@@ -58,6 +58,8 @@ _DEEP_SUPPORT_EVAL_N_QUERY = 10
 _DEEP_SUPPORT_DEFAULT_DEPTH = 2
 _DEEP_SUPPORT_DEFAULT_WIDTH = 256
 
+DEBUG_TRIMESH_COLLISIONS = True
+
 
 
 class CollisionGeometry(ABC, Module):
@@ -229,11 +231,10 @@ class SparseVertexConvexCollisionGeometry(BoundedConvexCollisionGeometry):
         queries = top_vertices.view(original_shape[:-1] + (self.n_query, 3))
         if self.n_query > 1 and (hint is not None) and \
             (hint.shape == directions.shape):
-            # Find linear combination of queries 
+            # Find linear combination of queries
             # Lst Sq: queries (*, 3, n_query) * ? (*, n_query, 1) == hint
             # (*, 1, 3)
-            # TODO: HACK, does this differentiate correctly? Should I attach
-            # queries?
+            # NOTE:  Solution is detached from the gradient chain.
             sol = torch.linalg.lstsq(
                 queries.detach().transpose(-1, -2), hint.unsqueeze(-1)).solution
             return pbmm(queries.transpose(-1, -2), sol).transpose(-1, -2)
@@ -394,7 +395,7 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
 
         perturbed = directions.unsqueeze(-2)
         perturbed = tile_dim(perturbed, n_to_add, -2)
-        
+
         perturbed += torch.cat((torch.zeros(
                 (1, 3)), 1.99 * (torch.rand((n_to_add - 1, 3)) - 0.5)
             )).expand(perturbed.shape)
@@ -440,10 +441,10 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
     def scalars(self) -> Dict[str, float]:
         """no scalars!"""
         return {}
-    
+
     def save_weights(self, file_path: str) -> None:
         torch.save(self.network.state_dict(), file_path)
-    
+
     def load_weights(self, file_path: str) -> None:
         self.network.load_state_dict(torch.load(file_path))
         self.network.train()
@@ -689,7 +690,7 @@ class GeometryCollider:
             geometry_a: first collision geometry
             geometry_b: second collision geometry, with type
               ordering ``not geometry_A > geometry_B``.
-            R_AB: (\*,3,3) rotation between geometry frames
+            R_AB: (\*, 3, 3) rotation between geometry frames
             p_AoBo_A: (\*, 3) offset of geometry frame origins
 
         Returns:
@@ -709,8 +710,12 @@ class GeometryCollider:
                 geometry_b, R_AB, p_AoBo_A)
         if isinstance(geometry_a, Sphere) and isinstance(
                 geometry_b, SparseVertexConvexCollisionGeometry):
-            return GeometryCollider.collide_sphere_sparse_convex_parallel(
-                geometry_a, geometry_b, R_AB, p_AoBo_A)
+            if DEBUG_TRIMESH_COLLISIONS:
+                return GeometryCollider.collide_sphere_sparse_convex(
+                    geometry_a, geometry_b, R_AB, p_AoBo_A)
+            else:
+                return GeometryCollider.collide_sphere_sparse_convex_parallel(
+                    geometry_a, geometry_b, R_AB, p_AoBo_A)
         if isinstance(geometry_a, BoundedConvexCollisionGeometry) and \
             isinstance(geometry_b, BoundedConvexCollisionGeometry):
             return GeometryCollider.collide_convex_convex(
@@ -750,11 +755,7 @@ class GeometryCollider:
         # axis of A points out of the plane.
         # pylint: disable=E1103
         R_AC = torch.eye(3).expand(p_AoAc_A.shape + (3,))
-        
-        # filename = f"contact_points.npy"
-        # file_path = f"./samples/{filename}"
-        # if p_BoBc_B.shape[0] >= 256:
-        #     np.save(file_path, p_BoBc_B.detach().numpy())
+
         return phi, R_AC, p_AoAc_A, p_BoBc_B
 
     @staticmethod
@@ -770,6 +771,18 @@ class GeometryCollider:
         NOTE:  This implementation is not parallelized and was developed / can
         be used for debugging purposes.  Otherwise it is unused in favor of
         ``collide_sphere_sparse_convex_parallel``.
+
+        Args:
+            R_AB: (\*, 3, 3) rotation between geometry frames
+            p_AoBo_A: (\*, 3) offset of geometry frame origins
+
+        Returns:
+            (\*, N) batch of witness point pair distances
+            (\*, N, 3, 3) contact frame C rotation in A, R_AC, where the z
+            axis of C is contained in the normal cone of body A at contact
+            point Ac and is parallel (or antiparallel) to AcBc.
+            (\*, N, 3) witness points Ac on A, p_AoAc_A
+            (\*, N, 3) witness points Bc on B, p_BoBc_B
         """
         # Call network directly for DeepSupportConvex objects.
         support_fn_a = geometry_a.support_points
@@ -821,11 +834,109 @@ class GeometryCollider:
             if signed_distance < -geometry_a.get_radius():
                 directions[transform_index] *= -1
 
+            if DEBUG_TRIMESH_COLLISIONS:
+                def set_transparency(mesh, alpha):
+                    n_vertices = len(mesh.vertices)
+                    colors = np.ones((n_vertices, 4)) * 255
+                    colors[:, 3] = alpha * 255
+                    mesh.visual.vertex_colors = colors
+
+                '''Debugging visuals:
+                 - Red dot:  closest point on mesh.
+                 - Cyan dot:  point on mesh generated from query direction.
+                 - Blue/chartreuse dot:  closest point on sphere (will be on top
+                    of dot generated from query direction, so only chartreuse
+                    will be visible).
+                 - Dark green dots:  query directions for each object.
+                '''
+
+                # Show sphere and mesh geometries.
+                trimesh_sphere = trimesh.creation.icosphere(
+                    radius=geometry_a.get_radius().item())
+                set_transparency(trimesh_sphere, 0.5)
+                set_transparency(trimesh_mesh, 0.5)
+
+                # Label the trimesh-generated witness points.
+                mesh_witness_pt = closest_point
+                sphere_witness_pt = closest_point/np.linalg.norm(closest_point)\
+                    * geometry_a.get_radius().item()
+
+                trimesh_mesh_witness = trimesh.points.PointCloud(
+                    mesh_witness_pt.reshape(1, 3),
+                    colors=np.array([[255, 0, 0, 255]]))
+                trimesh_sphere_witness = trimesh.points.PointCloud(
+                    sphere_witness_pt.reshape(1, 3),
+                    colors=np.array([[0, 0, 255, 255]]))
+
+                # Show triad for each object.
+                triad_A = trimesh.creation.axis(
+                    origin_size=0, transform=np.eye(4), axis_radius=0.0025,
+                    axis_length=0.05)
+                triad_B = trimesh.creation.axis(
+                    origin_size=0, transform=T_AB, axis_radius=0.0025,
+                    axis_length=0.05)
+
+                # Get query directions and points.
+                direction_A = directions[transform_index]
+                direction_A = direction_A / np.linalg.norm(direction_A)
+                direction_B = -pbmm(direction_A.unsqueeze(0),
+                                    R_AB[transform_index]).squeeze(0)
+                p_AoAc_A = support_fn_a(direction_A).squeeze(0)
+                p_BoBc_B = support_fn_b(direction_B).squeeze(0)
+                p_BoBc_A = pbmm(p_BoBc_B.unsqueeze(0),
+                                R_AB[transform_index].transpose(-1, -2)
+                                ).squeeze(0)
+                p_AcBc_A = -p_AoAc_A + p_AoBo_A[transform_index] + p_BoBc_A
+                p_AoBc_A = p_AoBo_A[transform_index] + p_BoBc_A
+
+                # Label the support function generated witness points.
+                support_sphere_witness = trimesh.points.PointCloud(
+                    p_AoAc_A.detach().numpy().reshape(1, 3),
+                    colors=np.array([[255, 255, 0, 255]]))
+                support_mesh_witness = trimesh.points.PointCloud(
+                    p_AoBc_A.detach().numpy().reshape(1, 3),
+                    colors=np.array([[0, 255, 255, 255]]))
+
+                # Show the query direction for each object, starting from their
+                # origins.
+                direction_A_np = direction_A.detach().numpy()
+                scalars = np.linspace(0, 0.05, 10)
+                ps_AoQueryA_A = scalars[:, np.newaxis] * direction_A_np
+                ps_BoQueryB_A = T_AB[:3, 3] - ps_AoQueryA_A
+                trimesh_query_A = trimesh.points.PointCloud(
+                    ps_AoQueryA_A, colors=np.array([[0, 255, 0, 255]]))
+                trimesh_query_B = trimesh.points.PointCloud(
+                    ps_BoQueryB_A, colors=np.array([[0, 255, 0, 255]]))
+
+
+                # Print debugging aids.
+                R_AC = rotation_matrix_from_one_vector(
+                    directions[transform_index], 2)
+                phi = (p_AcBc_A * R_AC[..., 2]).sum(dim=-1)
+                trimesh_phi = signed_distance
+                print(f'{T_AB=}')
+                print(f'{direction_A=}')
+                print(f'{direction_B=}')
+                print(f'{p_AoAc_A=}')
+                print(f'{p_BoBc_B=}')
+                print(f'{p_BoBc_A=}')
+                print(f'{p_AcBc_A=}')
+                print(f'{R_AC=}')
+                print(f'{phi=}')
+                print(f'{trimesh_phi=}')
+                # pdb.set_trace()
+
+                scene = trimesh.Scene([
+                    trimesh_mesh, trimesh_sphere,
+                    trimesh_mesh_witness, trimesh_sphere_witness,
+                    triad_A, triad_B, trimesh_query_A, trimesh_query_B,
+                    support_mesh_witness, support_sphere_witness
+                ])
+                scene.show()
+
             # Undo the transformation in preparation for the next
             # transformation.
             trimesh_mesh.apply_transform(np.linalg.inv(T_AB))
-
-        R_AC = rotation_matrix_from_one_vector(directions, 2)
 
         # Get normal directions in each object frame.
         directions_A = directions / directions.norm(dim=-1, keepdim=True)
@@ -838,6 +949,9 @@ class GeometryCollider:
 
         p_AcBc_A = -p_AoAc_A + p_AoBo_A + p_BoBc_A
 
+        # Get phi as the projection of the vector between contact points along
+        # the contact normal direction.
+        R_AC = rotation_matrix_from_one_vector(directions, 2)
         phi = (p_AcBc_A * R_AC[..., 2]).sum(dim=-1)
 
         phi = phi.reshape(original_batch_dims + (1,))
