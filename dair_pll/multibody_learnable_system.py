@@ -30,6 +30,7 @@ from typing import List, Tuple, Optional, Dict, cast, Union, Callable
 
 import numpy as np
 import torch
+from diffcp import cone_program
 from torch import Tensor
 from tensordict.tensordict import TensorDictBase
 
@@ -331,14 +332,15 @@ class MultibodyLearnableSystem(System):
         # without causing error in the overall loss gradient.
         # pylint: disable=E1103
         try:
-            impulses = pbmm(
-                reorder_mat,
-                self.solver(
-                    pbmm(reorder_mat.transpose(-1, -2),
-                         pbmm(Q_solve, reorder_mat)),
-                    pbmm(reorder_mat.transpose(-1, -2),
-                         q).squeeze(-1),
-                ).detach().unsqueeze(-1))
+            with torch.no_grad():
+                impulses = pbmm(
+                    reorder_mat,
+                    self.solver(
+                        pbmm(reorder_mat.transpose(-1, -2),
+                            pbmm(Q_solve, reorder_mat)),
+                        pbmm(reorder_mat.transpose(-1, -2),
+                            q).squeeze(-1),
+                    ).unsqueeze(-1))
         except Exception as e:
             import traceback
             pdb.set_trace()
@@ -628,3 +630,10 @@ class MultibodyLearnableSystem(System):
                 f'{model_name}_state']
 
         return system_state
+
+    def clean_up_thread_pools(self) -> None:
+        """Clean up lingering multithreaded pools."""
+        if cone_program.pool is not None:
+            cone_program.pool.close()
+            cone_program.pool.join()
+        self.solver.clean_up_pools()

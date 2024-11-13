@@ -12,15 +12,8 @@ from dair_pll.tensor_utils import sqrtm
 
 
 _CVXPY_LCQP_EPS = 0.  #1e-7
-#_CVXPY_SOLVER_ARGS = {"solve_method": "SCS", "eps": 1e-10, "use_indirect":
-# True}
-# NOTE: It's faster to do serial since the solve is so quick
-# TODO: HACK Recommended to comment out "pre-compute quantities for the
-# derivative" in cone_program.py in diffcp since we don't use it.  Located in
-# venv's lib/python3.11/site-packages/diffcp/cone_program.py lines 393-416.
-_CVXPY_SOLVER_ARGS = {"solve_method": "ECOS", "max_iters": 300,
-                      "abstol": 1e-10, "reltol": 1e-10, "feastol": 1e-10,
-                      "n_jobs_forward": 1, "n_jobs_backward": 1}
+_CVXPY_SOLVER_ARGS = {"solve_method": "Clarabel", "n_jobs_forward": -1}
+_CVXPY_N_PROC = -1
 
 
 def construct_cvxpy_lcqp_layer(num_contacts: int) -> CvxpyLayer:
@@ -50,7 +43,7 @@ def construct_cvxpy_lcqp_layer(num_contacts: int) -> CvxpyLayer:
                          cast(List[cp.Constraint], constraints))
     return CvxpyLayer(problem,
                       parameters=[objective_matrix, objective_vector],
-                      variables=[variables])
+                      variables=[variables], n_proc=_CVXPY_N_PROC)
 
 
 class DynamicCvxpyLCQPLayer:
@@ -90,3 +83,10 @@ class DynamicCvxpyLCQPLayer:
         layer = self.get_sized_layer(Q.shape[-2] // 3)
         Q_sqrt = sqrtm(Q)
         return layer(Q_sqrt, q, solver_args=_CVXPY_SOLVER_ARGS)[0]
+
+    def clean_up_pools(self):
+        """Cleans up the multiprocessing pools used by the ``CvxpyLayer`` s."""
+        for layer in self._cvxpy_layers.values():
+            layer.pool.close()
+            layer.pool.join()
+        self._cvxpy_layers = {}

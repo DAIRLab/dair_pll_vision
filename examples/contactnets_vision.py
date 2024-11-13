@@ -56,7 +56,7 @@ T_PREDICTION = 1
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 0.0
 EPOCHS = 200 #500
-PATIENCE = 100 #EPOCHS
+PATIENCE = 10 #EPOCHS
 
 WANDB_PROJECT = 'dair_pll-vision'
 
@@ -363,6 +363,11 @@ def main(pll_run_id: str = "",
         print(f'Making debugging information for robot experiment... ', end=' ')
         experiment.debug_training(learned_system, store_to_file=True)
         print(f'Done!')
+
+    # Close the cone program pool before exiting.
+    print(f'Closing multithreading pools...', end=' ')
+    learned_system.clean_up_thread_pools()
+    print(f'Done.')
 
     
 @click.command()

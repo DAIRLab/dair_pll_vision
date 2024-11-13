@@ -45,9 +45,6 @@ _UNIT_BOX_VERTICES = Tensor([[0, 0, 0, 0, 1, 1, 1, 1.], [
     0, 0, 1, 1, 0, 0, 1, 1.
 ], [0, 1, 0, 1, 0, 1, 0, 1.]]).t() * 2. - 1.
 
-_ROT_Z_45 = Tensor([[2**(-0.5), -(2**(-0.5)), 0.], [2**(-0.5), 2**(-0.5), 0.],
-                    [0., 0., 1.]])
-
 _NOMINAL_HALF_LENGTH = 0.05   # 10cm is nominal object length
 
 _total_ordering = ['Plane', 'Polygon', 'Box', 'Sphere', 'DeepSupportConvex']
@@ -58,7 +55,7 @@ _DEEP_SUPPORT_EVAL_N_QUERY = 10
 _DEEP_SUPPORT_DEFAULT_DEPTH = 2
 _DEEP_SUPPORT_DEFAULT_WIDTH = 256
 
-DEBUG_TRIMESH_COLLISIONS = True
+DEBUG_TRIMESH_COLLISIONS = False
 
 
 

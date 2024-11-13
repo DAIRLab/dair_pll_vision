@@ -151,6 +151,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+vis_env/
+pll_env/
 
 # Spyder project settings
 .spyderproject
