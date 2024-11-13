@@ -306,7 +306,11 @@ class MultibodyLearnableSystem(System):
 
         # q_pred, q_comp, and q_diss are unscaled by any loss weights.
         q_pred = -pbmm(J_small, dv_small.transpose(-1, -2))
-        q_comp = torch.abs(phi_then_zero).unsqueeze(-1)
+        # NOTE:  Use max of phi and zero for complementarity, meaning as long as
+        # any contact is established (meaning any penetration), complementarity
+        # is satisfied.
+        q_comp = torch.maximum(
+            phi_then_zero, torch.zeros_like(phi_then_zero)).unsqueeze(-1)
         q_diss = dt * torch.cat((sliding_speeds, sliding_velocities), dim=-2)
 
         # Introduce q loss weighting for solving for the forces.
