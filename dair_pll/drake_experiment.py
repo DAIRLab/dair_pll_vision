@@ -67,6 +67,8 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """The folder in which exported elements of the mass matrix and lagrangian
     force expressions will be saved.  If provided, the code terminates after the
     export."""
+    vis_gradient: bool = False
+    """Whether to generate videos of gradients of contact points."""
 
 
 @dataclass
@@ -77,6 +79,8 @@ class DrakeMultibodyLearnableExperimentConfig(SupervisedLearningExperimentConfig
     """
     generate_video_geometries_throughout: bool = True
     """Whether to visualize learned geometry in W&B gifs throughout training."""
+    force_video_epoch_interval: int = 0
+    """If set to a positive integer, will force generate videos every this many epochs"""
 
 @dataclass
 class DrakeMultibodyLearnableTactileExperimentConfig(

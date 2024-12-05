@@ -73,6 +73,48 @@ DEFAULT_W_DISS = 1.0
 DEFAULT_W_PEN = 20.0
 DEFAULT_W_BSDF = 0.02
 
+import torch
+import numpy as np
+import random
+import os
+def set_deterministic(seed=42, deterministic_algorithms=True):
+    """
+    Set up a deterministic environment for PyTorch experiments.
+    
+    Args:
+        seed (int): The random seed to use (default: 42)
+        deterministic_algorithms (bool): Whether to enforce deterministic algorithms (default: True)
+    
+    Note:
+        Setting deterministic_algorithms=True may impact performance.
+    """
+    # Set Python random seed
+    random.seed(seed)
+    
+    # Set NumPy random seed
+    np.random.seed(seed)
+    
+    # Set PyTorch random seed
+    torch.manual_seed(seed)
+    
+    # Set CUDA random seed
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)  # for multi-GPU
+        
+    # Set deterministic backends
+    if deterministic_algorithms:
+        # Ensure deterministic behavior of cuDNN
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        
+        # Enable deterministic algorithms
+        torch.use_deterministic_algorithms(True)
+        
+        # Set environment variable for deterministic operations
+        os.environ['PYTHONHASHSEED'] = str(seed)
+        os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'  # Required for CUDA >= 10.2
+
 
 def get_storage_names(system: str, start_toss: int, end_toss: int,
                       cycle_iteration: int) -> Tuple[str, str, str]:
@@ -142,7 +184,10 @@ def main(pll_run_id: str = "",
          w_bsdf: float = DEFAULT_W_BSDF,
          use_bundlesdf_mesh: bool = True,
          is_robot_experiment: bool = False,
-         export_drake_pytorch: bool = False):
+         export_drake_pytorch: bool = False, 
+         shuffle: bool = False, 
+         vis_gradient: bool = False,
+         force_video_epoch_interval: int = 0):
     """Execute ContactNets basic example on a system.
 
     Args:
@@ -283,7 +328,8 @@ def main(pll_run_id: str = "",
                                       # 'polygon' for multi-vertex set.
         precomputed_function_directories=precomputed_function_directories,
         export_drake_pytorch_dir = DRAKE_PYTORCH_FUNCTION_EXPORT_DIR if \
-            export_drake_pytorch else None
+            export_drake_pytorch else None,
+        vis_gradient=vis_gradient,
     )
 
     # How to slice trajectories into training datapoints.
@@ -296,7 +342,8 @@ def main(pll_run_id: str = "",
     slice_config = TrajectorySliceConfig(
         t_prediction=1 if contactnets else T_PREDICTION,
         his_state_keys=previous_state_keys,
-        pred_state_keys=future_state_keys)
+        pred_state_keys=future_state_keys, 
+        shuffle=shuffle)
 
     # Describes configuration of the data.
     data_config = VisionDataConfig(
@@ -324,6 +371,7 @@ def main(pll_run_id: str = "",
         update_geometry_in_videos=True,
         generate_video_predictions_throughout=gen_pred_videos,
         generate_video_geometries_throughout=gen_geom_videos,
+        force_video_epoch_interval=force_video_epoch_interval,
         run_wandb=True,
         wandb_project=WANDB_PROJECT
     )
@@ -408,7 +456,8 @@ def main(pll_run_id: str = "",
               type=click.Choice(SKIP_VIDEO_OPTIONS),
               default='rollout',
               help="what videos to skip generating every epoch (saves time)" + \
-                " can be 'none', 'all', 'rollout' (default), or 'geometry'.")
+                " can be 'none', 'all', 'rollout' (default), or 'geometry'." + \
+                "The generated videos are logged in wandb.")
 @click.option('--clear-data/--keep-data',
               default=False,
               help="whether to clear experiment results folder before running.")
@@ -432,13 +481,25 @@ def main(pll_run_id: str = "",
               type=float,
               default=DEFAULT_W_BSDF,
               help="weight of BundleSDF loss term.")
+@click.option('--shuffle/--no-shuffle',
+              default=True,
+              help="whether to shuffle the temporal order of data. " + \
+                 "(set to False when visualizing gradients)")
+@click.option('--deterministic', is_flag=True,
+              help="whether to fix the random seeds. ")
+@click.option('--vis-gradient', is_flag=True, help="visualize gradients")
+@click.option('--force-video-epoch-interval',
+              type=int,
+              default=0,
+              help="force video generation every n epochs.")
 
 def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
                  bundlesdf_id: str, contactnets: bool, regenerate: bool,
                  pretrained: str, learn_inertia: str,
                  export_drake_pytorch: bool, skip_videos: str, clear_data: bool,
                  w_pred: float, w_comp: float, w_diss: float, w_pen: float,
-                 w_bsdf: float):
+                 w_bsdf: float, shuffle: bool, deterministic: bool, 
+                 vis_gradient: bool, force_video_epoch_interval: int):
     # First decode the system and start/end tosses from the provided asset
     # directory.
     assert '_' in vision_asset, f'Invalid asset directory: {vision_asset}.'
@@ -454,6 +515,13 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
 
     is_robot_experiment = system.startswith('vision_robot')
 
+    if vis_gradient:
+        deterministic = True
+        shuffle = False
+
+    if deterministic:
+        set_deterministic(seed=42)
+
     main(pll_run_id=run_name, system=system, start_toss=start_toss,
          end_toss=end_toss, cycle_iteration=cycle_iteration,
          bundlesdf_id=bundlesdf_id, contactnets=contactnets,
@@ -461,7 +529,9 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
          learn_inertia=learn_inertia, skip_videos=skip_videos,
          clear_data=clear_data, w_pred=w_pred, w_comp=w_comp, w_diss=w_diss,
          w_pen=w_pen, w_bsdf=w_bsdf, is_robot_experiment=is_robot_experiment,
-         export_drake_pytorch=export_drake_pytorch)
+         export_drake_pytorch=export_drake_pytorch, shuffle=shuffle, 
+         vis_gradient=vis_gradient, 
+         force_video_epoch_interval=force_video_epoch_interval)
 
 
 

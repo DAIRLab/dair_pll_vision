@@ -1049,6 +1049,8 @@ def visualize_gradients(mesh: MeshSummary, sample_points: Tensor,
         for i in range(len(mesh.faces)):
             face = mesh.faces[i]
             vertices = mesh.vertices[face]
+            if isinstance(vertices, np.ndarray):
+                vertices = torch.from_numpy(vertices)
             vertices = torch.cat((vertices, vertices[0].unsqueeze(0)), dim=0)
             vertices = vertices.numpy()
             ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2], color='b',
@@ -1414,11 +1416,12 @@ def localize_toss_and_frame_from_states(
         return
 
     # Otherwise, generate it.
+    # Get the states from the run (which are copied from the dataset during the run).
     states = torch.load(
             op.join(output_dir, EXPORT_STATES_DEFAULT_NAME), weights_only=True
         ).detach()
 
-    # Get the trajectories.
+    # Get the trajectories (from the dataset).
     toss_trajs = file_utils.get_trajectory_assets_from_config(
         storage_name, run_name)
 
@@ -1815,8 +1818,8 @@ if __name__ == '__main__':
             support_directions=support_directions)
 
         # Generate SDF gradient training data from the mesh sample points.
-        mesh_ws, mesh_w_normals = generate_point_sdf_gradient_pairs(
-            sample_points_cf, sample_normals_cf
+        mesh_ws, mesh_w_normals, mesh_toss_frames = generate_point_sdf_gradient_pairs(
+            sample_points_cf, sample_normals_cf, sample_toss_frames
         )
         print('\tVisualizing points with outward gradients from contact-' + \
               'filtered mesh samples.')
@@ -1862,8 +1865,8 @@ if __name__ == '__main__':
             balanced_directions = contact_directions
         
         # Generate training data from the (maybe) redistributed contact points.
-        contact_ps, contact_sdfs, contact_vs, contact_sdf_bounds = \
-            generate_training_data(contact_points, contact_directions)
+        contact_ps, contact_sdfs, p_toss_frames, contact_vs, contact_sdf_bounds, v_toss_frames = \
+            generate_training_data(contact_points, contact_directions, contact_toss_frames)
         
         print('\tVisualizing the samples.')
         visualize_sdfs(sample_points_cf, sample_normals_cf, ps=contact_ps,

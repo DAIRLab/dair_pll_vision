@@ -246,6 +246,14 @@ class SupervisedLearningExperiment(ABC):
         """
         config = self.config.optimizer_config
         if issubclass(config.optimizer, torch.optim.Adam):
+            
+            # param_groups = [
+            #     {'params': [param for name, param in learned_system.named_parameters() if 'network' in name], 'lr': 2 * config.lr.value},
+            #     {'params': [param for name, param in learned_system.named_parameters() if 'network' not in name], 'lr': config.lr.value}
+            # ]
+            # print("Warning: Using custom learning rates for different parts of the network.")
+            # return config.optimizer(param_groups,
+            #                         weight_decay=config.wd.value)
             return config.optimizer(learned_system.parameters(),
                                     lr=config.lr.value,
                                     weight_decay=config.wd.value)
@@ -790,7 +798,7 @@ class SupervisedLearningExperiment(ABC):
         print("Loading best parameters...")
         learned_system.load_state_dict(training_state.best_learned_system_state)
         print("Done loading best parameters.")
-        return training_loss, training_state.best_valid_loss, learned_system
+        return training_loss, training_state, learned_system
 
     def extra_metrics(self) -> Dict[str, Callable[[Tensor, Tensor], Tensor]]:
         return {}
@@ -964,7 +972,7 @@ class SupervisedLearningExperiment(ABC):
         stats.update(summary_stats)
         return stats
 
-    def _evaluation(self, learned_system: System) -> StatisticsDict:
+    def _evaluation(self, learned_system: System, training_state: TrainingState) -> StatisticsDict:
         r"""Evaluate both oracle and learned system on training, validation,
         and testing data, and saves results to disk.
 
@@ -995,7 +1003,7 @@ class SupervisedLearningExperiment(ABC):
         # Generate final toss/geometry inspection videos with best parameters.
         comparison_summary = self.base_and_learned_comparison_summary(
             evaluation, learned_system, force_generate_videos=True)
-        self.wandb_manager.update(int(1e4), {}, comparison_summary.videos, {})
+        self.wandb_manager.update(int(training_state.epoch), {}, comparison_summary.videos, {})
 
         return evaluation
 
@@ -1016,7 +1024,7 @@ class SupervisedLearningExperiment(ABC):
               validation loss.
             Statistics dictionary.
         """
-        _, _, learned_system = self.train(epoch_callback)
+        _, training_state, learned_system = self.train(epoch_callback)
 
         try:
             print("Looking for previously generated statistics...")
@@ -1026,7 +1034,7 @@ class SupervisedLearningExperiment(ABC):
         except FileNotFoundError:
             print("Did not find statistics; generating them... (this could " + \
                   "take several minutes)")
-            statistics = self._evaluation(learned_system)
+            statistics = self._evaluation(learned_system, training_state)
             print("Done generating statistics.")
 
         return learned_system, statistics

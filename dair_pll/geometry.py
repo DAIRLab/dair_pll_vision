@@ -47,7 +47,7 @@ _UNIT_BOX_VERTICES = Tensor([[0, 0, 0, 0, 1, 1, 1, 1.], [
 
 _NOMINAL_HALF_LENGTH = 0.05   # 10cm is nominal object length
 
-_total_ordering = ['Plane', 'Polygon', 'Box', 'Sphere', 'DeepSupportConvex']
+_total_ordering = ['Plane', 'Box', 'Sphere', 'Polygon', 'DeepSupportConvex']
 
 _POLYGON_DEFAULT_N_QUERY = 5
 _DEEP_SUPPORT_DEFAULT_N_QUERY = 5
@@ -396,6 +396,9 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         perturbed += torch.cat((torch.zeros(
                 (1, 3)), 1.99 * (torch.rand((n_to_add - 1, 3)) - 0.5)
             )).expand(perturbed.shape)
+        # 1.99*[-0.5, 0.5]=(-1, 1), which is added to unit-length vectors,
+        # allowing the perturbations to cover a hemisphere. 
+        # This is intentional to allow wider coverage of the support function.
         perturbed /= perturbed.norm(dim=-1, keepdim=True)
 
         return self.network(perturbed)
@@ -674,7 +677,7 @@ class GeometryCollider:
 
     @staticmethod
     def collide(geometry_a: CollisionGeometry, geometry_b: CollisionGeometry,
-                R_AB: Tensor, p_AoBo_A: Tensor) -> \
+                R_AB: Tensor, p_AoBo_A: Tensor, vis_hook: None) -> \
             Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Collides two collision geometries.
 
@@ -704,7 +707,7 @@ class GeometryCollider:
         if isinstance(geometry_a, Plane) and isinstance(
                 geometry_b, BoundedConvexCollisionGeometry):
             return GeometryCollider.collide_plane_convex(
-                geometry_b, R_AB, p_AoBo_A)
+                geometry_b, R_AB, p_AoBo_A, vis_hook)
         if isinstance(geometry_a, Sphere) and isinstance(
                 geometry_b, SparseVertexConvexCollisionGeometry):
             if DEBUG_TRIMESH_COLLISIONS:
@@ -712,7 +715,7 @@ class GeometryCollider:
                     geometry_a, geometry_b, R_AB, p_AoBo_A)
             else:
                 return GeometryCollider.collide_sphere_sparse_convex_parallel(
-                    geometry_a, geometry_b, R_AB, p_AoBo_A)
+                    geometry_a, geometry_b, R_AB, p_AoBo_A, vis_hook)
         if isinstance(geometry_a, BoundedConvexCollisionGeometry) and \
             isinstance(geometry_b, BoundedConvexCollisionGeometry):
             return GeometryCollider.collide_convex_convex(
@@ -725,7 +728,8 @@ class GeometryCollider:
 
     @staticmethod
     def collide_plane_convex(geometry_b: BoundedConvexCollisionGeometry,
-                             R_AB: Tensor, p_AoBo_A: Tensor) -> \
+                             R_AB: Tensor, p_AoBo_A: Tensor,
+                             vis_hook: None) -> \
             Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Implementation of ``GeometryCollider.collide()`` when
         ``geometry_a`` is a ``Plane`` and ``geometry_b`` is a
@@ -738,10 +742,16 @@ class GeometryCollider:
 
         # B support points of shape (*, N, 3)
         p_BoBc_B = geometry_b.support_points(directions_b)
+        p_BoBc_B.register_hook(vis_hook.hook_grad_plane_and_object)
         p_AoBc_A = pbmm(p_BoBc_B, R_BA) + p_AoBo_A.unsqueeze(-2)
 
         # phi is the A-axes z coordinate of Bc
         phi = p_AoBc_A[..., 2]
+
+        # ### phi from network first order forwarding
+        # phi_net_BoBc_B = geometry_b.network.get_output(directions_b)
+        # phi_net = p_AoBo_A[:,2] - phi_net_BoBc_B
+        # phi = phi_net.unsqueeze(-1).expand_as(phi)
 
         # Ac is the projection of Bc onto the z=0 plane in frame A.
         # pylint: disable=E1103
@@ -962,7 +972,8 @@ class GeometryCollider:
         geometry_a: Sphere,
         geometry_b: SparseVertexConvexCollisionGeometry,
         R_AB: Tensor,
-        p_AoBo_A: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        p_AoBo_A: Tensor,
+        vis_hook: None) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Implementation of ``GeometryCollider.collide()`` when the first
         geometry is a sphere and the second geometry is a sparse vertex convex
         collision geometry.  Leverages trimesh for signed distance queries.
@@ -1002,6 +1013,7 @@ class GeometryCollider:
         # various locations.
         closest_points, _distances, _triangle_ids = \
             trimesh.proximity.closest_point(trimesh_mesh, p_BoAo_B)
+        # closest_points.shape == (*, 3)
 
         # Query the signed distances from the mesh to the sphere centers.
         # NOTE: Negative sign here because trimesh uses points inside the mesh
@@ -1022,7 +1034,7 @@ class GeometryCollider:
         directions_A_to_B_in_A = pbmm(
             directions_A_to_B_in_B.unsqueeze(-2), R_BA).squeeze(-2)
         R_AC = rotation_matrix_from_one_vector(directions_A_to_B_in_A, 2)
-
+        # R_AC[..., 2] is normalized directions_A_to_B_in_A
         # Get normal directions in each object frame.
         directions_B = -directions_A_to_B_in_B / directions_A_to_B_in_B.norm(
             dim=-1, keepdim=True)
@@ -1030,11 +1042,18 @@ class GeometryCollider:
 
         p_AoAc_A = support_fn_a(directions_A).squeeze(-2)
         p_BoBc_B = support_fn_b(directions_B)
+        vis_hook.record('directions_B', directions_B)
+        p_BoBc_B.register_hook(vis_hook.hook_grad_sphere_and_object)
         p_BoBc_A = pbmm(p_BoBc_B.unsqueeze(-2),
                         R_AB.transpose(-1, -2)).squeeze(-2)
 
         p_AcBc_A = -p_AoAc_A + p_AoBo_A + p_BoBc_A
-
+        ### Check if the gradient wrt p_BoBc_B from comp loss is correct. 
+        # vis_hook.record('directions_A_to_B_in_A', directions_A_to_B_in_A)
+        # vis_hook.record('directions_A_to_B_in_B', directions_A_to_B_in_B)
+        # p_BoBc_B.register_hook(lambda grad: vis_hook.hook_check_grad('p_BoBc_B', grad))
+        # p_BoBc_A.register_hook(lambda grad: vis_hook.hook_check_grad('p_BoBc_A', grad))
+        # p_AcBc_A.register_hook(lambda grad: vis_hook.hook_check_grad('p_AcBc_A', grad))
         phi = (p_AcBc_A * R_AC[..., 2]).sum(dim=-1)
 
         phi = phi.reshape(original_batch_dims + (1,))

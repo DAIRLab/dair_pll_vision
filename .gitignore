@@ -6,6 +6,7 @@ examples/wandb/*
 logs/*
 plots/*
 wandb/
+*.mp4
 
 # MacOS
 *DS_Store*

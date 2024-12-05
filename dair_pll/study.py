@@ -68,7 +68,8 @@ class Study:
         trial_experiment_config.run_name = run_name
 
         experiment = config.experiment_type(trial_experiment_config)
-        _, best_valid_loss, _ = experiment.train(epoch_callback)
+        _, training_state, _ = experiment.train(epoch_callback)
+        best_valid_loss = training_state.best_valid_loss
         return best_valid_loss.item()
 
     def study(self) -> None:

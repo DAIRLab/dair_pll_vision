@@ -21,6 +21,8 @@ _SURFACE = _SURFACE.to(torch.float64)
 _SURFACE = _SURFACE.to(torch.float64)
 _SURFACE_ROTATIONS = rotation_matrix_from_one_vector(_SURFACE, 2)
 
+# 296 is the number of points on a cube surface sampled using linspace(-1, 1)
+# 296 = 8^3 - 6(duplicated points on each edge)*12(n of edges) - 2(duplicated points on each vertex)*8(n of vertices)
 
 def get_mesh_summary_from_polygon(polygon) -> MeshSummary:
     """Assuming a standard ordering of vertices for a ``Polygon``

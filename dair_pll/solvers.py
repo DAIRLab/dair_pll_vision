@@ -81,7 +81,7 @@ class DynamicCvxpyLCQPLayer:
         assert q.shape[-1] == Q.shape[-2]
 
         layer = self.get_sized_layer(Q.shape[-2] // 3)
-        Q_sqrt = sqrtm(Q)
+        Q_sqrt = sqrtm(Q) # Q_sqrt == Q_sqrt.T
         return layer(Q_sqrt, q, solver_args=_CVXPY_SOLVER_ARGS)[0]
 
     def clean_up_pools(self):

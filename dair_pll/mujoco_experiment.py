@@ -102,8 +102,9 @@ if __name__ == "__main__":
             v200=V200)
 
         experiment = MuJoCoExperiment(experiment_config)
-        _, best_valid_loss, learned_system, train_traj, valid_traj, test_traj = experiment.train(
+        _, training_state, learned_system, train_traj, valid_traj, test_traj = experiment.train(
         )
+        best_valid_loss = training_state.best_valid_loss
         stats = experiment.evaluation(learned_system, train_traj, valid_traj,
                                       test_traj,
                                       TrajectorySliceDataset(train_traj),
@@ -153,8 +154,9 @@ if __name__ == "__main__":
             v200=V200)
 
         experiment = MuJoCoExperiment(experiment_config)
-        _, best_valid_loss, learned_system, train_traj, valid_traj, test_traj = experiment.train(
+        _, training_state, learned_system, train_traj, valid_traj, test_traj = experiment.train(
         )
+        best_valid_loss = training_state.best_valid_loss
         dataset = experiment.data_manager.slice(train_traj)
         base_system = experiment.get_base_system()
         oracle_system = experiment.get_oracle_system()

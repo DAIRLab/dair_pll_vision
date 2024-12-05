@@ -38,6 +38,7 @@ from dair_pll import urdf_utils, tensor_utils, file_utils, quaternion
 from dair_pll.drake_system import DrakeSystem
 from dair_pll.integrator import VelocityIntegrator
 from dair_pll.multibody_terms import MultibodyTerms, LearnableBodySettings
+from dair_pll.multibody_terms import HookGradientVisualizer
 from dair_pll.solvers import DynamicCvxpyLCQPLayer
 from dair_pll.system import System, SystemSummary
 from dair_pll.tensor_utils import pbmm, broadcast_lorentz
@@ -57,6 +58,7 @@ class ContactNetsLossReturnType(Enum):
     LOSS_VALUES = 1
     IMPULSES = 2
     UNSCALED_LOSS_STRUCTURE = 3
+    LOSS_AND_PHIS = 4
 
 
 class MultibodyLearnableSystem(System):
@@ -78,7 +80,8 @@ class MultibodyLearnableSystem(System):
                  pretrained_icnn_weights_filepath: Optional[str] = None,
                  represent_geometry_as: str = 'box',
                  precomputed_functions: Dict[str, Union[List[str],Callable]]={},
-                 export_drake_pytorch_dir: str = None) -> None:
+                 export_drake_pytorch_dir: str = None, 
+                 vis_gradient: bool = False) -> None:
         """Inits :py:class:`MultibodyLearnableSystem` with provided model URDFs.
 
         Implementation is primarily based on Drake. Bodies are modeled via
@@ -111,7 +114,10 @@ class MultibodyLearnableSystem(System):
             export_drake_pytorch_dir: The folder in which exported elements of
                 the mass matrix and lagrangian force expressions will be saved.
                 If provided, the code terminates after the export.
+            vis_gradient: Whether to visualize the gradients of the losses. 
         """
+
+        self.vis_hook = HookGradientVisualizer(self, vis_gradient)
 
         multibody_terms = MultibodyTerms(
             init_urdfs,
@@ -119,7 +125,8 @@ class MultibodyLearnableSystem(System):
             represent_geometry_as=represent_geometry_as,
             pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
             precomputed_functions=precomputed_functions,
-            export_drake_pytorch_dir=export_drake_pytorch_dir)
+            export_drake_pytorch_dir=export_drake_pytorch_dir, 
+            vis_hook=self.vis_hook)
 
         space = multibody_terms.plant_diagram.space
         integrator = VelocityIntegrator(space, self.sim_step, dt)
@@ -153,6 +160,8 @@ class MultibodyLearnableSystem(System):
         HACK:  This assumes anything that starts with 'robot' should not be part
         of a learnable body, and everything else is.
         """
+        # state_names: robot joint states, object states, 
+        # robot joint velocities, object velocities
         state_names = self.multibody_terms.plant_diagram.plant.GetStateNames()
         return torch.tensor([not s.startswith('robot') for s in state_names])
 
@@ -235,6 +244,9 @@ class MultibodyLearnableSystem(System):
         loss_pred, loss_comp, loss_pen, loss_diss = \
             self.calculate_contactnets_loss_terms(x, u, x_plus)
 
+        self.vis_hook.manage_vis(loss_pred, loss_comp, loss_pen, loss_diss, 
+                                 self.w_pred, self.w_comp, self.w_pen, self.w_diss)
+        
         loss = (self.w_pred * loss_pred) + (self.w_comp * loss_comp) + \
                (self.w_pen * loss_pen) + (self.w_diss * loss_diss)
 
@@ -265,11 +277,20 @@ class MultibodyLearnableSystem(System):
             (*,) dissipation violation loss.
         """
         # pylint: disable-msg=too-many-locals
+        # Check dair_pll/assets/precomputed_vision_functions/mass_matrix_state_names.txt
+        # for the meaning of each x channel. 
         v = self.space.v(x)
         q_plus, v_plus = self.space.q_v(x_plus)
         dt = self.dt
         EPS = 0
 
+        # # Set all rotations to the first frame and all angular velocities to zero
+        # # (for debugging purposes)
+        # v[:, 7:10] = 0
+        # v_plus[:, 7:10] = 0
+        # q_plus[:, 7] = q_plus[0,7]
+        # q_plus[:, 8:11] = q_plus[0,8:11]
+        
         # Begin loss calculation.
         delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, \
             _obj_pair_list, _R_FW_list, _mu_list = \
@@ -282,6 +303,12 @@ class MultibodyLearnableSystem(System):
                                           reorder_mat.shape).expand(
                                               delassus.shape)
         J_t = J[..., n_contacts:, :]
+        # J's dim(-2) is the contact frames, dim(-1) is the system velocity frames.
+        # J.shape[-2] = 3 * n_contacts, which is composed of
+        # [J_n (len=n_contacts), mu * J_t(len=n_contacts*2)]
+        # J_n: [ee_contact, (n_contact-1) ground contacts]
+        # J_t: [ee_contact*2, (n_contact-1)*2 ground contacts]
+        # J.shape[-1] = n_v_system = n_v_robot + n_v_object
 
         # pylint: disable=E1103
         double_zero_vector = torch.zeros(phi.shape[:-1] + (2 * n_contacts,))
@@ -295,11 +322,18 @@ class MultibodyLearnableSystem(System):
         dv = (v_plus - (v + non_contact_acceleration * dt)).unsqueeze(-2)
 
         # Prepare to exclude the robot predictions from the prediction loss.
-        velocity_mask = self.learnable_state_map[self.space.n_q:]
-        J_small = J[..., velocity_mask]
+        # First n_q of self.learnable_state_map: states; the rest (last n_v): velocities.
+        # velocity_mask: 1 for object velocities, 0 for robot velocities.
+        # object velocities: wx, wy, wz, vx, vy, vz
+        velocity_mask = self.learnable_state_map[self.space.n_q:].detach().clone()
+        # velocity_mask[-1] = 0 # exclude gravity part z velocity
+        J_small = J[..., velocity_mask] # (*, n_contacts*3, n_v_object)
         M_small = M[..., velocity_mask, :][..., velocity_mask]
         M_inv_small = torch.inverse(M_small)
         dv_small = dv[..., velocity_mask]
+        # dv_small.shape = (*, 1, n_v_object)
+        
+        normal_force_mask = torch.tensor([1] * n_contacts + [0] * 2 * n_contacts).bool()
 
         # Q is unscaled by any loss weights.
         Q = pbmm(J_small, pbmm(M_inv_small, J_small.transpose(-1, -2)))
@@ -332,6 +366,9 @@ class MultibodyLearnableSystem(System):
         # without causing error in the overall loss gradient.
         # pylint: disable=E1103
         try:
+            # for robot experiment, impulses is (*, 3*n_contacts, 1)
+            # 3*n_contacts = [normal of all contacts, tangent x and y of contact 1, 
+            # tangent x and y of contact 2, ...]
             with torch.no_grad():
                 impulses = pbmm(
                     reorder_mat,
@@ -355,10 +392,18 @@ class MultibodyLearnableSystem(System):
         c_pen[invalid] *= 0.
         impulses[invalid.expand(impulses.shape)] = 0.
 
+        # Fix occasional negative normal forces from the solver.
+        impulses[:, normal_force_mask] = torch.clamp_min(impulses[:, normal_force_mask], 0)
+
         # Return only the batched impulses if requested.
         if return_type == ContactNetsLossReturnType.IMPULSES:
             return impulses
-        assert return_type == ContactNetsLossReturnType.LOSS_VALUES
+        assert return_type == ContactNetsLossReturnType.LOSS_VALUES or \
+                return_type == ContactNetsLossReturnType.LOSS_AND_PHIS
+
+        # Calculate M^-1 * J^T * impulses.
+        dv_small_pred = pbmm(M_inv_small, pbmm(J_small.transpose(-1, -2), impulses)).transpose(-1, -2)
+        self.vis_hook.record_dv(dv_small, dv_small_pred)
 
         # Get the unscaled loss terms.
         loss_pred = 0.5 * pbmm(impulses.transpose(-1, -2), pbmm(Q, impulses)) \
@@ -366,6 +411,35 @@ class MultibodyLearnableSystem(System):
         loss_comp = pbmm(impulses.transpose(-1, -2), q_comp)
         loss_pen = c_pen
         loss_diss = pbmm(impulses.transpose(-1, -2), q_diss)
+
+        impulses_reordered = pbmm(reorder_mat.transpose(-1, -2), impulses)
+        impulses_by_contact = impulses_reordered.reshape(
+            impulses_reordered.shape[:-2] + (n_contacts, 3,1))  # (*, n_contacts, 3, 1)
+        mus = torch.stack(_mu_list, dim=0)
+        impulses_by_contact[:, :, :2, 0] = impulses_by_contact[:, :, :2, 0] * mus.unsqueeze(-1)
+        impulses_by_contact_W = torch.stack(
+            [pbmm(R_FW.transpose(-1, -2), impulses_by_contact[...,i,:,:]) for i, R_FW in enumerate(_R_FW_list)], dim=-3)
+        self.vis_hook.record_impulses(impulses_by_contact_W)
+
+        if return_type == ContactNetsLossReturnType.LOSS_AND_PHIS:
+            # Get the normal forces (the first n_contacts. The rest are tangential).
+            normal_impulses = impulses[:, :n_contacts].reshape(-1, n_contacts)
+            n_lambda = normal_impulses.shape[1]
+            
+            # In robot exps, the first is with the end effector. The rest are with the plane.
+            normal_impulses = normal_impulses[:, 0] # for robot exps, track the contact with the end effector
+            # normal_impulses = normal_impulses.sum(dim=1) # for tossing exps, sum all normal forces
+            normal_forces = normal_impulses / dt
+
+            smallest_phis = phi[:, 0] # in robot exps, track the contact with the end effector
+            # smallest_phis = phi.min(dim=1).values # for tossing exps, track the smallest
+            
+            dv_small = dv_small.squeeze(-2)
+            v_plus_small = v_plus[..., velocity_mask]
+
+            return loss_pred.reshape(-1), loss_comp.reshape(-1), \
+                   loss_pen.reshape(-1), loss_diss.reshape(-1), \
+                    smallest_phis, normal_forces, dv_small, v_plus_small
 
         return loss_pred.reshape(-1), loss_comp.reshape(-1), \
                loss_pen.reshape(-1), loss_diss.reshape(-1)
@@ -436,6 +510,7 @@ class MultibodyLearnableSystem(System):
         # pylint: disable=too-many-locals
         dt = self.dt
         phi_eps = 1e6
+        EPS = 0
         delassus, M, J, phi, non_contact_acceleration, _p_BiBc_B, \
             _obj_pair_list, _R_FW_list, _mu_list = \
                 self.multibody_terms(q, v, u)
@@ -446,8 +521,12 @@ class MultibodyLearnableSystem(System):
         reorder_mat = reorder_mat.reshape((1,) * (delassus.dim() - 2) +
                                           reorder_mat.shape).expand(
                                               delassus.shape)
-        J_M = pbmm(reorder_mat.transpose(-1, -2),
-                   pbmm(J, torch.linalg.cholesky(torch.inverse((M)))))
+        M_inv = torch.inverse(M)
+        Q = pbmm(J, pbmm(M_inv, J.transpose(-1, -2)))
+        Q_solve = (Q + EPS*torch.eye(Q.shape[-1]))
+
+        # J_M = pbmm(reorder_mat.transpose(-1, -2),
+        #            pbmm(J, torch.linalg.cholesky(torch.inverse((M)))))
 
         # pylint: disable=E1103
         double_zero_vector = torch.zeros(phi.shape[:-1] + (2 * n_contacts,))
@@ -460,7 +539,9 @@ class MultibodyLearnableSystem(System):
         impulse_full = pbmm(
             reorder_mat,
             self.solver(
-                J_M,
+                # J_M,
+                pbmm(reorder_mat.transpose(-1, -2),
+                         pbmm(Q_solve, reorder_mat)),
                 pbmm(reorder_mat.transpose(-1, -2), q_full).squeeze(-1)
             ).unsqueeze(-1))
 

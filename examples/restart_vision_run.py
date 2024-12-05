@@ -9,7 +9,7 @@ from dair_pll import file_utils
 from dair_pll.experiment import default_epoch_callback
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 from dair_pll.vision_config import VisionExperiment, VisionExperimentConfig, \
-    VISION_SYSTEMS, VISION_CUBE_SYSTEM
+    VISION_SYSTEMS, VISION_CUBE_SYSTEM, VisionRobotExperiment
 
 
 
@@ -41,7 +41,8 @@ def main(pll_run_id: str = "",
          system: str = VISION_CUBE_SYSTEM,
          start_toss: int = 2,
          end_toss: int = 2,
-         cycle_iteration: int = 1):
+         cycle_iteration: int = 1,
+         loss_curve: bool = False):
     """Restart a PLL vision experiment run.
 
     Args:
@@ -61,8 +62,18 @@ def main(pll_run_id: str = "",
         f'Expected VisionExperimentConfig, got {type(experiment_config)}.'
     print(f'Loaded original experiment configuration.')
 
+    is_robot_experiment = system.startswith('vision_robot')
     # Makes experiment.
-    experiment = VisionExperiment(experiment_config)
+    experiment = VisionRobotExperiment(experiment_config) if is_robot_experiment \
+        else VisionExperiment(experiment_config)
+
+    if loss_curve:
+        learned_system, optimizer, training_state = experiment.setup_training_no_wandb()
+        # true_geom_system = experiment.get_true_geometry_multibody_learnable_system()
+        exp_path = op.join(storage_name, pll_run_id)
+        # experiment.loss_over_trajectory(true_geom_system, exp_path, True)
+        experiment.loss_over_trajectory(learned_system, exp_path, False)
+        return
 
     # Trains system and saves final results.
     print(f'\nTraining the model.')
@@ -92,7 +103,11 @@ def main(pll_run_id: str = "",
               type=int,
               default=1,
               help="BundleSDF iteration number (0 means use TagSLAM poses).")
-def main_command(run_name: str, vision_asset: str, cycle_iteration: int):
+@click.option('--loss-curve',
+              is_flag=True,
+              help="Plot the loss curve only.")
+def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
+                 loss_curve: bool):
     """Executes main function with argument interface."""
     # First decode the system and start/end tosses from the provided asset
     # directory.
@@ -111,7 +126,7 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int):
     if not pll_run_id.startswith('pll_id_'):
         pll_run_id = f'pll_id_{pll_run_id}'
 
-    main(pll_run_id, system, start_toss, end_toss, cycle_iteration)
+    main(pll_run_id, system, start_toss, end_toss, cycle_iteration, loss_curve)
 
 
 if __name__ == '__main__':
