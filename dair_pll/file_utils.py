@@ -35,14 +35,22 @@ RUNS_SUBFOLDER_NAME = '.'  #'runs'
 STUDIES_SUBFOLDER_NAME = 'studies'
 URDFS_SUBFOLDER_NAME = 'urdfs'
 WANDB_SUBFOLDER_NAME = 'wandb'
+LOSS_TRAJ_SUBFOLDER_NAME = 'loss_trajs'
 GEOM_FOR_BSDF_SUBFOLDER_NAME = 'geom_for_bsdf'
 GEOM_FOR_PLL_SUBFOLDER_NAME = 'geom_for_pll'
+BSDF_TRACK_OVERLAY_VIDEO_SUBFOLDER_NAME = 'bsdf_track_overlay_videos'
 BSDF_FROM_SUPPORT_SUBSUBFOLDER_NAME = 'from_support_points'
 BSDF_FROM_MESH_SUBSUBFOLDER_NAME = 'from_mesh_surface'
 BSDF_SUPPORT_DIRECTIONS_NAME = 'support_directions.pt'
 BSDF_SUPPORT_POINTS_NAME = 'support_points.pt'
 BSDF_SUPPORT_SCALARS_NAME = 'support_scalars.pt'
+BSDF_SAMPLES_NAME = 'sampled_points.pt'
+BSDF_GT_SUPPORT_DIRECTIONS_NAME = 'support_directions_gt.pt'
+BSDF_GT_SUPPORT_POINTS_NAME = 'support_points_gt.pt'
+BSDF_GT_SUPPORT_SCALARS_NAME = 'support_scalars_gt.pt'
+BSDF_GT_SAMPLES_NAME = 'sampled_points_gt.pt'
 BSDF_MESH_FILENAME = 'mesh.obj'
+BSDF_GT_MESH_FILENAME = 'mesh_gt.obj'
 BSDF_SUBFOLDER_NAME = 'geom_for_bsdf'
 EXPORT_POINTS_DEFAULT_NAME = 'support_points.pt'
 EXPORT_DIRECTIONS_DEFAULT_NAME = 'support_directions.pt'
@@ -129,7 +137,7 @@ def get_run_indices_in_dir(directory: str,
     Returns:
         List of run indices.
     """
-    run_names = [path.basename(file) for file in 
+    run_names = [path.basename(file) for file in
                  glob.glob(path.join(directory, './[0-9]*' + extension))]
     run_numbers = [int(name.split('.')[0]) for name in run_names]
     return run_numbers
@@ -202,7 +210,7 @@ def import_data_to_storage(storage_name: str, import_data_dir: str,
                     import_traj_name = f'{run_indices[traj_idx_to_try]}.pt'
                     import_traj = torch.load(path.join(import_data_dir,
                                                     import_traj_name))
-                    
+
                     traj_idx_to_try += 1
 
                     if check_duplicate_trajectory(output_directory, import_traj):
@@ -225,7 +233,7 @@ def import_data_to_storage(storage_name: str, import_data_dir: str,
             # Can terminate outer loop over output directories since all output
             # directories are written to at once.
             return
-        
+
 
 def reorder_trajectories(directory: str, extension: str = TRAJ_EXTENSION
                          ) -> None:
@@ -238,7 +246,7 @@ def reorder_trajectories(directory: str, extension: str = TRAJ_EXTENSION
     traj_files = glob.glob(path.join(directory, f'*{extension}'))
     for i, traj_file in enumerate(traj_files):
         os.rename(traj_file, path.join(directory, f'{i}{extension}'))
-        
+
 
 def check_duplicate_trajectory(data_dir: str, traj: Tensor) -> bool:
     """Checks if a trajectory is already represented in a data directory."""
@@ -365,6 +373,10 @@ def wandb_dir(storage_name: str, run_name: str) -> str:
     return assure_created(
         path.join(run_dir(storage_name, run_name), WANDB_SUBFOLDER_NAME))
 
+def get_loss_traj_dir(storage_name: str, run_name: str) -> str:
+    """Absolute path of loss trajectory storage folder"""
+    return assure_created(
+        path.join(run_dir(storage_name, run_name), LOSS_TRAJ_SUBFOLDER_NAME))
 
 def geom_for_pll_dir(asset_subdirs: str, bundlesdf_id: str, iteration: int,
                      check_exists: bool = True) -> str:
@@ -378,22 +390,70 @@ def geom_for_pll_dir(asset_subdirs: str, bundlesdf_id: str, iteration: int,
             f'found at {geom_input_dir}'
     return geom_input_dir
 
+def bsdf_track_overlay_video_path(
+        asset_subdirs: str, bundlesdf_id: str, nerf_bundlesdf_id: str,
+        iteration: int, gt_mesh: bool = False, with_robot: bool = False,
+        check_exists: bool = True) -> str:
+    """Absolute path of geometry for PLL (a PLL input) storage folder"""
 
-def get_bundlesdf_geometry_data(asset_subdirs: str, bundlesdf_id: str,
-                                iteration: int) -> Tuple[Tensor, Tensor]:
+    ### tracking id
+    if iteration <= 0:
+        tracking_id = 'tagslam'
+    else:
+        tracking_id = f'{bundlesdf_id}'
+
+    ### mesh id
+    if gt_mesh:
+        mesh_id = 'gt_mesh'
+    # elif pll_id is not None:
+    #     mesh_id = f'pll_{pll_id}'
+    else:
+        mesh_id = f'nerf_{nerf_bundlesdf_id}'
+
+    filename = f'{tracking_id}_{mesh_id}_{iteration}.mp4'
+    if with_robot:
+        filename = filename.replace('.mp4', '_robot.mp4')
+
+    bsdf_overlay_path = path.join(
+        get_asset(asset_subdirs), BSDF_TRACK_OVERLAY_VIDEO_SUBFOLDER_NAME,
+        filename,
+    )
+    bsdf_overlay_dir = path.dirname(bsdf_overlay_path)
+    if check_exists:
+        assert path.exists(bsdf_overlay_dir), f'No BundleSDF output overlay' + \
+            f' video found at {bsdf_overlay_dir}'
+    return bsdf_overlay_path
+
+def get_bundlesdf_geometry_data(
+        asset_subdirs: str, bundlesdf_id: str, iteration: int,
+        gt_shape: bool = False) -> Tuple[Tensor, Tensor]:
     """Load geometry data from BundleSDF."""
     geom_input_dir = geom_for_pll_dir(asset_subdirs, bundlesdf_id, iteration)
-    assert BSDF_SUPPORT_DIRECTIONS_NAME in os.listdir(geom_input_dir) and \
-        BSDF_SUPPORT_POINTS_NAME in os.listdir(geom_input_dir), \
+
+    if gt_shape:
+        bsdf_support_name = BSDF_GT_SUPPORT_DIRECTIONS_NAME
+        bsdf_points_name = BSDF_GT_SUPPORT_POINTS_NAME
+        bsdf_ds_name = BSDF_GT_SUPPORT_SCALARS_NAME
+        bsdf_samples_name = BSDF_GT_SAMPLES_NAME
+    else:
+        bsdf_support_name = BSDF_SUPPORT_DIRECTIONS_NAME
+        bsdf_points_name = BSDF_SUPPORT_POINTS_NAME
+        bsdf_ds_name = BSDF_SUPPORT_SCALARS_NAME
+        bsdf_samples_name = BSDF_SAMPLES_NAME
+
+    assert bsdf_support_name in os.listdir(geom_input_dir) and \
+        bsdf_points_name in os.listdir(geom_input_dir), \
         f'BundleSDF geometry input at {geom_input_dir} is incomplete; ' + \
-        f'missing {BSDF_SUPPORT_DIRECTIONS_NAME} or {BSDF_SUPPORT_POINTS_NAME}.'
+        f'missing {bsdf_support_name} or {bsdf_points_name}.'
 
     bsdf_dirs = torch.load(
-        path.join(geom_input_dir, BSDF_SUPPORT_DIRECTIONS_NAME))
+        path.join(geom_input_dir, bsdf_support_name))
     bsdf_pts = torch.load(
-        path.join(geom_input_dir, BSDF_SUPPORT_POINTS_NAME))
+        path.join(geom_input_dir, bsdf_points_name))
     bsdf_ds = torch.load(
-        path.join(geom_input_dir, BSDF_SUPPORT_SCALARS_NAME))
+        path.join(geom_input_dir, bsdf_ds_name))
+    bsdf_samples = torch.load(
+        path.join(geom_input_dir, bsdf_samples_name))
 
     assert bsdf_dirs.shape == bsdf_pts.shape, f'Expected BundleSDF support ' + \
         f'directions and points to have same shape, got {bsdf_dirs.shape} ' + \
@@ -407,19 +467,22 @@ def get_bundlesdf_geometry_data(asset_subdirs: str, bundlesdf_id: str,
         f'{bsdf_dirs.shape[0]=}, {bsdf_ds.shape[0]=}, {bsdf_pts.shape[0]=}.'
     assert bsdf_dirs.shape[1] == 3, f'Expected BundleSDF support ' + \
         f'directions and points to be (N, 3) but got shape {bsdf_dirs.shape}.'
+    assert bsdf_samples.ndim == 2, f'Expected BundleSDF samples to be ' + \
+        f'(M, 3) but got shape {bsdf_samples.shape}.'
 
-    return bsdf_dirs, bsdf_pts, bsdf_ds
+    return bsdf_dirs, bsdf_pts, bsdf_ds, bsdf_samples
 
 
 def get_mesh_from_bundlesdf(asset_subdirs: str, bundlesdf_id: str,
-                            iteration: int) -> str:
+                            iteration: int, gt_shape: bool) -> str:
     """Load mesh data from BundleSDF."""
     geom_input_dir = geom_for_pll_dir(asset_subdirs, bundlesdf_id, iteration)
-    assert BSDF_MESH_FILENAME in os.listdir(geom_input_dir), \
+    mesh_name = BSDF_GT_MESH_FILENAME if gt_shape else BSDF_MESH_FILENAME
+    assert mesh_name in os.listdir(geom_input_dir), \
         f'BundleSDF geometry input at {geom_input_dir} is incomplete; ' + \
-        f'missing {BSDF_MESH_FILENAME}.'
+        f'missing {mesh_name}.'
 
-    return os.path.join(geom_input_dir, BSDF_MESH_FILENAME)
+    return os.path.join(geom_input_dir, mesh_name)
 
 
 def get_vision_urdf_template_path() -> str:
@@ -460,7 +523,7 @@ def store_debugging_for_bsdf(storage_name: str, run_name: str, forces: Tensor,
 
 def store_sdf_for_bsdf(storage_name: str, run_name: str,
                        from_support_not_mesh: bool, ps: Tensor, sdfs: Tensor,
-                       p_idx: Tensor, vs: Tensor, sdf_bounds: Tensor, 
+                       p_idx: Tensor, vs: Tensor, sdf_bounds: Tensor,
                        v_idx: Tensor, ws: Tensor = None,
                        w_normals: Tensor = None, w_idx: Tensor = None) -> None:
     """Store SDF training data for BundleSDF."""
@@ -478,7 +541,7 @@ def store_sdf_for_bsdf(storage_name: str, run_name: str,
                                      EXPORT_SDF_BOUNDS_FOR_POINTS_DEFAULT_NAME))
     torch.save(v_idx, path.join(output_dir,
                                      EXPORT_VS_TOSS_FRAMES_DEFAULT_NAME))
-    
+
     if ws is not None and w_normals is not None and w_idx is not None:
         torch.save(ws,
                    path.join(output_dir,
@@ -536,7 +599,7 @@ def hyperparameter_opt_run_name(study_name: str, trial_number: int) -> str:
     """Experiment run name for hyperparameter optimization trial."""
     return f'{study_name}_hyperparameter_opt_{trial_number}'
 
-  
+
 def sweep_run_name(study_name: str, sweep_run: int, n_train: int) -> str:
     """Experiment run name for dataset size sweep study."""
     return f'{study_name}_sweep_{sweep_run}_n_train_{n_train}'
