@@ -23,6 +23,7 @@ from dair_pll.experiment_config import SystemConfig, \
 from dair_pll.multibody_terms import LearnableBodySettings
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 from dair_pll.system import System, SystemSummary
+from dair_pll.geometry import _DEEP_SUPPORT_DEFAULT_N_QUERY
 
 @dataclass
 class DrakeSystemConfig(SystemConfig):
@@ -67,8 +68,13 @@ class MultibodyLearnableSystemConfig(DrakeSystemConfig):
     """The folder in which exported elements of the mass matrix and lagrangian
     force expressions will be saved.  If provided, the code terminates after the
     export."""
-    vis_gradient: bool = False
-    """Whether to generate videos of gradients of contact points."""
+    vis_gradient: str = None
+    """Generate videos of gradients of contact points if not None"""
+    n_query: int = _DEEP_SUPPORT_DEFAULT_N_QUERY
+    """Number of query points for deep support on ground contact."""
+    detach_grad_pred_ee: bool = False
+    """Whether to detach the gradient of the prediction loss on the end effector contact."""
+    sampling_method: str = 'perturb'
 
 
 @dataclass
@@ -81,6 +87,10 @@ class DrakeMultibodyLearnableExperimentConfig(SupervisedLearningExperimentConfig
     """Whether to visualize learned geometry in W&B gifs throughout training."""
     force_video_epoch_interval: int = 0
     """If set to a positive integer, will force generate videos every this many epochs"""
+    fit_shape_only: bool = False
+    """Whether to fit the shape only, or the geometry and dynamics."""
+    overfit_bsdf_init: bool = False
+    """Whether to overfit the BSDF shape at initial few epochs."""
 
 @dataclass
 class DrakeMultibodyLearnableTactileExperimentConfig(
@@ -209,7 +219,8 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
 
     def base_and_learned_comparison_summary(
             self, statistics: Dict, learned_system: System,
-            force_generate_videos: bool = False) -> SystemSummary:
+            force_generate_videos: bool = False,
+            epoch: Optional[int] = None) -> SystemSummary:
         r"""Extracts a :py:class:`~dair_pll.system.SystemSummary` that compares
         the base system to the learned system.
 
@@ -259,7 +270,7 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
                         self.construct_trajectory_for_comparison_vis(
                             target_trajectory, prediction_trajectory)
                     video, framerate = vis_utils.visualize_trajectory(
-                        visualization_system, visualization_trajectory)
+                        visualization_system, visualization_trajectory, filename_postfix='prediction')
                     videos[f'{set_name}_trajectory_prediction_{traj_num}'] = \
                         (video, framerate)
 
@@ -274,7 +285,7 @@ class DrakeExperiment(SupervisedLearningExperiment, ABC):
                 self.construct_trajectory_for_comparison_vis(
                     target_trajectory, prediction_trajectory)
             video, framerate = vis_utils.visualize_trajectory(
-                visualization_system, visualization_trajectory)
+                visualization_system, visualization_trajectory, filename_postfix='geometry')
             videos['geometry_inspection'] = (video, framerate)
 
         return SystemSummary(scalars={}, videos=videos, meshes={})
@@ -409,6 +420,7 @@ class DrakeMultibodyLearnableExperiment(DrakeExperiment):
         for xy_i in train_dataloader:
             x_i: Tensor = xy_i[0]
             y_i: Tensor = xy_i[1]
+            index_i: Tensor = xy_i[2]
 
             loss_pred, loss_comp, loss_pen, loss_diss = \
                 learned_system.calculate_contactnets_loss_terms(

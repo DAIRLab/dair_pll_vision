@@ -42,6 +42,7 @@ from dair_pll.multibody_terms import HookGradientVisualizer
 from dair_pll.solvers import DynamicCvxpyLCQPLayer
 from dair_pll.system import System, SystemSummary
 from dair_pll.tensor_utils import pbmm, broadcast_lorentz
+import time
 
 
 # Scaling factors to equalize translation and rotation errors.
@@ -81,7 +82,10 @@ class MultibodyLearnableSystem(System):
                  represent_geometry_as: str = 'box',
                  precomputed_functions: Dict[str, Union[List[str],Callable]]={},
                  export_drake_pytorch_dir: str = None, 
-                 vis_gradient: bool = False) -> None:
+                 vis_gradient: str = None,
+                 n_query: Optional[int] = None,
+                 detach_grad_pred_ee: bool = False,
+                 sampling_method: str = 'perturb') -> None:
         """Inits :py:class:`MultibodyLearnableSystem` with provided model URDFs.
 
         Implementation is primarily based on Drake. Bodies are modeled via
@@ -126,7 +130,10 @@ class MultibodyLearnableSystem(System):
             pretrained_icnn_weights_filepath=pretrained_icnn_weights_filepath,
             precomputed_functions=precomputed_functions,
             export_drake_pytorch_dir=export_drake_pytorch_dir, 
-            vis_hook=self.vis_hook)
+            vis_hook=self.vis_hook,
+            n_query=n_query,
+            detach_grad_pred_ee=detach_grad_pred_ee,
+            sampling_method=sampling_method)
 
         space = multibody_terms.plant_diagram.space
         integrator = VelocityIntegrator(space, self.sim_step, dt)
@@ -244,7 +251,7 @@ class MultibodyLearnableSystem(System):
         loss_pred, loss_comp, loss_pen, loss_diss = \
             self.calculate_contactnets_loss_terms(x, u, x_plus)
 
-        self.vis_hook.manage_vis(loss_pred, loss_comp, loss_pen, loss_diss, 
+        self.vis_hook.itemized_back(loss_pred, loss_comp, loss_pen, loss_diss, 
                                  self.w_pred, self.w_comp, self.w_pen, self.w_diss)
         
         loss = (self.w_pred * loss_pred) + (self.w_comp * loss_comp) + \
@@ -365,6 +372,7 @@ class MultibodyLearnableSystem(System):
         # Therefore, we can detach ``impulses`` from pytorch's computation graph
         # without causing error in the overall loss gradient.
         # pylint: disable=E1103
+        # time_start = time.time()
         try:
             # for robot experiment, impulses is (*, 3*n_contacts, 1)
             # 3*n_contacts = [normal of all contacts, tangent x and y of contact 1, 
@@ -382,6 +390,9 @@ class MultibodyLearnableSystem(System):
             import traceback
             pdb.set_trace()
             print(traceback.format_exc())
+
+        # time_end = time.time()
+        # print(f"Solver time: {time_end - time_start}")
 
         # Hack: remove elements of ``impulses`` where solver likely failed.
         invalid = torch.any(
@@ -608,14 +619,13 @@ class MultibodyLearnableSystem(System):
         orientation = q_plus[..., q_object_orientation_mask]
 
         # Get the contact points that correspond to high normal forces
-        def ground_orientation_in_body_frame(object_orientation, n_lambda):
+        
+        def contact_orientation_in_body_frame(object_orientation, contact_W):
             """
-            Convert ground orientation from world frame to object's body frame.
+            Convert contact orientation from world frame to object's body frame.
             """
-            n_hat = torch.tensor([.0,.0,-1.0])
-            n_hat_repeated = torch.tile(n_hat.unsqueeze(0), (n_lambda,1))
             return quaternion.rotate(quaternion.inverse(object_orientation),
-                                     n_hat_repeated)
+                                     contact_W)
 
         points, directions = torch.zeros((0, 3)), torch.zeros((0, 3))
         n_impulses = torch.zeros((0))
@@ -626,12 +636,15 @@ class MultibodyLearnableSystem(System):
 
         orientation = torch.tile(orientation.unsqueeze(1), (1, n_contacts, 1))
         state = torch.tile(x_plus.unsqueeze(1), (1, n_contacts, 1))
-        for n_impulses_i, points_i, orientation_i, state_i, impulses_i, \
-            phis_i, jac_i in zip(normal_impulses, p_BiBc_B, orientation, state,
-                                 impulses, phi, J):
+        for i, (n_impulses_i, points_i, orientation_i, state_i, impulses_i, \
+            phis_i, jac_i) in enumerate(zip(normal_impulses, p_BiBc_B, orientation, state,
+                                 impulses, phi, J)):
 
-            support_directions = ground_orientation_in_body_frame(
-                orientation_i, n_contacts)
+            
+            query_directions_W = torch.stack( \
+                [-_R_FW_list_j[i, 2, :] for _R_FW_list_j in _R_FW_list], dim=0)
+            support_directions = contact_orientation_in_body_frame(
+                orientation_i, query_directions_W)
 
             points = torch.cat((points, points_i), dim=0)
             directions = torch.cat((directions, support_directions), dim=0)

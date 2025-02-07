@@ -37,7 +37,7 @@ from torch.nn import Module, Parameter
 from scipy.spatial import ConvexHull
 
 from dair_pll.deep_support_function import HomogeneousICNN, \
-    extract_mesh_from_support_function
+    extract_mesh_from_support_function, extract_surface_points_from_support_function
 from dair_pll.tensor_utils import pbmm, tile_dim, \
     rotation_matrix_from_one_vector
 
@@ -57,7 +57,202 @@ _DEEP_SUPPORT_DEFAULT_WIDTH = 256
 
 DEBUG_TRIMESH_COLLISIONS = False
 
+def sample_hemisphere(directions, num_samples):
+    """
+    Generate uniform random points on hemispheres oriented around given directions.
+    The input directions are guaranteed to be the first samples.
+    
+    Args:
+        directions (torch.Tensor): Tensor of shape (**, 3) containing unit vectors
+        num_samples (int): Number of points to generate per direction (including the direction)
+        
+    Returns:
+        torch.Tensor: Tensor of shape (**, num_samples, 3) containing the sampled points
+    """
+    # Ensure directions are unit vectors
+    directions = torch.as_tensor(directions, dtype=torch.float)
+    directions = directions / torch.norm(directions, dim=-1, keepdim=True)
+    device = directions.device
+    
+    # Get batch shape and reshape directions to (-1, 3)
+    batch_shape = directions.shape[:-1]
+    batch_size = torch.prod(torch.tensor(batch_shape))
+    directions_2d = directions.reshape(-1, 3)
+    
+    # Generate random points for one less than num_samples
+    n = num_samples - 1
+    
+    # Generate random points in spherical coordinates
+    phi = 2 * torch.pi * torch.rand(batch_size, n, device=device)
+    theta = torch.arccos(torch.rand(batch_size, n, device=device))
+    
+    # Convert to Cartesian coordinates
+    x = torch.sin(theta) * torch.cos(phi)
+    y = torch.sin(theta) * torch.sin(phi)
+    z = torch.cos(theta)
+    points = torch.stack([x, y, z], dim=-1)  # Shape: (batch_size, n, 3)
+    
+    # Handle rotation for each direction in the batch
+    z_axis = torch.tensor([0., 0., 1.], device=device, dtype=directions.dtype)
+    
+    # Compute rotation matrices for all directions at once
+    # Find rotation axes and angles
+    v = torch.cross(z_axis.expand_as(directions_2d), directions_2d)
+    s = torch.norm(v, dim=-1, keepdim=True)
+    c = torch.sum(z_axis * directions_2d, dim=-1, keepdim=True)
+    
+    # Create batch of rotation matrices
+    # Handle both cases where direction is parallel to z-axis and where it isn't
+    is_parallel = s.squeeze(-1) < 1e-6
+    rotation_matrices = torch.eye(3, device=device).expand(batch_size, 3, 3).clone()
+    
+    # Compute rotation matrices only for non-parallel cases
+    non_parallel = ~is_parallel
+    if torch.any(non_parallel):
+        v_non_parallel = v[non_parallel]
+        s_non_parallel = s[non_parallel]
+        c_non_parallel = c[non_parallel]
+        
+        v_cross = torch.zeros(non_parallel.sum(), 3, 3, device=device)
+        v_cross[:, 0, 1] = -v_non_parallel[:, 2]
+        v_cross[:, 0, 2] = v_non_parallel[:, 1]
+        v_cross[:, 1, 0] = v_non_parallel[:, 2]
+        v_cross[:, 1, 2] = -v_non_parallel[:, 0]
+        v_cross[:, 2, 0] = -v_non_parallel[:, 1]
+        v_cross[:, 2, 1] = v_non_parallel[:, 0]
+        
+        rotation_matrices[non_parallel] = (torch.eye(3, device=device) + 
+                                         v_cross + 
+                                         torch.matmul(v_cross, v_cross) * 
+                                         (1 - c_non_parallel[...,None]) / 
+                                         (s_non_parallel[...,None] * 
+                                          s_non_parallel[...,None]))
+    
+    # Apply rotations to all points in batch
+    points = torch.matmul(points, rotation_matrices.transpose(-2, -1))
+    
+    # Add the directions as first samples
+    points = torch.cat([directions_2d.unsqueeze(1), points], dim=1)
+    
+    # Reshape to original batch dimensions
+    output_shape = batch_shape + (num_samples, 3)
+    points = points.reshape(output_shape)
+    
+    return points
 
+def sample_symmetric_ring(
+    directions: torch.Tensor,
+    num_samples: int,
+    elevation: Optional[torch.Tensor] = None,
+    azimuth_offset: Optional[torch.Tensor] = None,
+    random_elevation: bool = True,
+    random_azimuth_offset: bool = True,
+    seed: Optional[int] = None
+) -> torch.Tensor:
+    """
+    Generate symmetrically distributed points forming a single ring around given directions.
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+    
+    device = directions.device
+
+    # Get batch shape and reshape directions to (-1, 3)
+    batch_shape = directions.shape[:-1]
+    batch_size = torch.prod(torch.tensor(batch_shape))
+    directions_2d = directions.reshape(-1, 3)
+    
+    # Generate random points for one less than num_samples
+    n_points_in_ring = num_samples - 1
+    
+    z_axis = torch.tensor([0., 0., 1.], device=device)
+    cos_angle = (directions * z_axis.expand_as(directions)).sum(dim=-1, keepdim=True)
+    
+    # Generate or use provided elevation angle
+    if elevation is not None:
+        if not isinstance(elevation, torch.Tensor):
+            elevation = torch.tensor(elevation, device=device)
+        elevation = elevation.expand(*batch_shape, 1)
+    else:
+        if random_elevation:
+            # Generate random elevation angle between 0 and acos(0.5)=pi/3
+            elevation = torch.arccos(torch.rand(*batch_shape, 1, device=device)*0.5+0.5)
+        else:
+            elevation = torch.tensor(np.pi/4, device=device).expand(*batch_shape, 1)
+    
+    # Generate or use provided azimuth offset
+    if azimuth_offset is not None:
+        if not isinstance(azimuth_offset, torch.Tensor):
+            azimuth_offset = torch.tensor(azimuth_offset, device=device)
+        azimuth_offset = azimuth_offset.expand(*batch_shape, 1)
+    else:
+        if random_azimuth_offset:
+            azimuth_offset = 2 * np.pi * torch.rand(*batch_shape, 1, device=device)
+        else:
+            azimuth_offset = torch.zeros(*batch_shape, 1, device=device)
+    
+    # Generate evenly spaced points in the ring
+    azimuths = torch.linspace(0, 2 * np.pi, n_points_in_ring + 1, device=device)[:-1]
+    # Correct expansion of azimuths
+    azimuths = azimuths.view(1, -1).expand(*batch_shape, n_points_in_ring)
+    azimuths = azimuths + azimuth_offset
+    
+    # Convert to Cartesian coordinates (around z-axis)
+    sin_elevation = torch.sin(elevation)
+    cos_elevation = torch.cos(elevation)
+    x = sin_elevation * torch.cos(azimuths)
+    y = sin_elevation * torch.sin(azimuths)
+    z = cos_elevation.expand_as(x)
+    
+    points = torch.stack([x, y, z], dim=-1)
+    
+    # Handle rotation for each direction in the batch
+    z_axis = torch.tensor([0., 0., 1.], device=device, dtype=directions.dtype)
+    
+    # Compute rotation matrices for all directions at once
+    # Find rotation axes and angles
+    v = torch.cross(z_axis.expand_as(directions_2d), directions_2d)
+    s = torch.norm(v, dim=-1, keepdim=True)
+    c = torch.sum(z_axis * directions_2d, dim=-1, keepdim=True)
+    
+    # Create batch of rotation matrices
+    # Handle both cases where direction is parallel to z-axis and where it isn't
+    is_parallel = s.squeeze(-1) < 1e-6
+    rotation_matrices = torch.eye(3, device=device).expand(batch_size, 3, 3).clone()
+    
+    # Compute rotation matrices only for non-parallel cases
+    non_parallel = ~is_parallel
+    if torch.any(non_parallel):
+        v_non_parallel = v[non_parallel]
+        s_non_parallel = s[non_parallel]
+        c_non_parallel = c[non_parallel]
+        
+        v_cross = torch.zeros(non_parallel.sum(), 3, 3, device=device)
+        v_cross[:, 0, 1] = -v_non_parallel[:, 2]
+        v_cross[:, 0, 2] = v_non_parallel[:, 1]
+        v_cross[:, 1, 0] = v_non_parallel[:, 2]
+        v_cross[:, 1, 2] = -v_non_parallel[:, 0]
+        v_cross[:, 2, 0] = -v_non_parallel[:, 1]
+        v_cross[:, 2, 1] = v_non_parallel[:, 0]
+        
+        rotation_matrices[non_parallel] = (torch.eye(3, device=device) + 
+                                         v_cross + 
+                                         torch.matmul(v_cross, v_cross) * 
+                                         (1 - c_non_parallel[...,None]) / 
+                                         (s_non_parallel[...,None] * 
+                                          s_non_parallel[...,None]))
+    
+    # Apply rotations to all points in batch
+    points = torch.matmul(points, rotation_matrices.transpose(-2, -1))
+    
+    # Add the directions as first samples
+    points = torch.cat([directions_2d.unsqueeze(1), points], dim=1)
+    
+    # Reshape to original batch dimensions
+    output_shape = batch_shape + (num_samples, 3)
+    points = points.reshape(output_shape)
+    
+    return points
 
 class CollisionGeometry(ABC, Module):
     """Abstract interface for collision geometries.
@@ -342,7 +537,8 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
                  depth: int = _DEEP_SUPPORT_DEFAULT_DEPTH,
                  width: int = _DEEP_SUPPORT_DEFAULT_WIDTH,
                  perturbation: float = 0.5,
-                 learnable: bool = True) -> None:
+                 learnable: bool = True,
+                 sampling_method: str = 'perturb') -> None:
         r"""Inits ``DeepSupportConvex`` object with initial vertex set.
 
         When calculating a sparse vertex set with :py:meth:`get_vertices`,
@@ -356,6 +552,8 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
             perturbation: support direction sampling parameter.
         """
         # pylint: disable=too-many-arguments,E1103
+        if n_query is None:
+            n_query = _DEEP_SUPPORT_DEFAULT_N_QUERY
         super().__init__(n_query)
         length_scale = (vertices.max(dim=0).values -
                         vertices.min(dim=0).values).norm() / 2
@@ -363,9 +561,12 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
             depth, width, scale=length_scale, learnable=learnable)
         self.perturbations = torch.cat((torch.zeros(
             (1, 3)), perturbation * (torch.rand((n_query - 1, 3)) - 0.5)))
+        
+        self.sampling_method = sampling_method
 
     def get_vertices(
-            self, directions: Tensor, sample_entire_mesh: bool = False
+            self, directions: Tensor, sample_entire_mesh: bool = False, 
+            sample_surface_points: bool = False, *kwargs: None
     ) -> Tensor:
         """Return batched view of support points of interest.
 
@@ -380,26 +581,50 @@ class DeepSupportConvex(SparseVertexConvexCollisionGeometry):
         Returns:
             ``(*, n_query, 3)`` sampled support points.
         """
-        if sample_entire_mesh:
+        assert not (sample_entire_mesh and sample_surface_points), \
+            "Cannot sample both entire mesh and surface points."
+        
+        if sample_surface_points:
+            # No duplication points check. Use this if simply want to sample
+            # surface points without converting them to a mesh.
+            points = extract_surface_points_from_support_function(self.network)
+            return points
+        elif sample_entire_mesh:
             mesh = extract_mesh_from_support_function(self.network)
             single_vertices = mesh.vertices
             return single_vertices.expand(
                 directions.shape[:-1] + single_vertices.shape)
 
-        # Can query different number of directions during training/evaluation.
-        n_to_add = self.n_query if self.network.training else \
-            _DEEP_SUPPORT_EVAL_N_QUERY
+        # # Can query different number of directions during training/evaluation.        
+        n_to_add = self.n_query if self.network.training \
+            else _DEEP_SUPPORT_EVAL_N_QUERY
+        # Note that the first train_epoch() called by 
+        # SupervisedLearningExperiment.train() is in eval mode. 
+        # n_query is _DEEP_SUPPORT_EVAL_N_QUERY in eval mode 
+        # which is likely different from n_query in the training. 
+        # They are filtered (top-selected) to n_query in 
+        # SparseVertexConvexCollisionGeometry.support_point() function.
 
-        perturbed = directions.unsqueeze(-2)
-        perturbed = tile_dim(perturbed, n_to_add, -2)
+        if self.sampling_method == 'perturb':
+            perturbed = directions.unsqueeze(-2)
+            perturbed = tile_dim(perturbed, n_to_add, -2)
 
-        perturbed += torch.cat((torch.zeros(
-                (1, 3)), 1.99 * (torch.rand((n_to_add - 1, 3)) - 0.5)
-            )).expand(perturbed.shape)
-        # 1.99*[-0.5, 0.5]=(-1, 1), which is added to unit-length vectors,
-        # allowing the perturbations to cover a hemisphere. 
-        # This is intentional to allow wider coverage of the support function.
-        perturbed /= perturbed.norm(dim=-1, keepdim=True)
+            perturbed += torch.cat((torch.zeros(
+                    (1, 3)), 1.99 * (torch.rand((n_to_add - 1, 3)) - 0.5)
+                )).expand(perturbed.shape)
+            # 1.99*[-0.5, 0.5]=(-1, 1), which is added to unit-length vectors,
+            # allowing the perturbations to cover a hemisphere. 
+            # This is intentional to allow wider coverage of the support function.
+            perturbed /= perturbed.norm(dim=-1, keepdim=True)
+
+        elif self.sampling_method == 'uniform':
+            perturbed = sample_hemisphere(directions, n_to_add)
+            # assert torch.all((perturbed*directions.unsqueeze(-2)).sum(-1) > 0)
+        elif self.sampling_method == 'deterministic':
+            perturbed = sample_symmetric_ring(directions, n_to_add)
+            # assert torch.all((perturbed*directions.unsqueeze(-2)).sum(-1) > 0)
+        else:
+            raise ValueError(f"Unknown sampling method: {self.sampling_method}")
 
         return self.network(perturbed)
 
@@ -572,7 +797,7 @@ class PydrakeToCollisionGeometryFactory:
 
     @staticmethod
     def convert(drake_shape: Shape, represent_geometry_as: str,
-        learnable: bool = True, name: str = ""
+        learnable: bool = True, name: str = "", **kwargs
         ) -> CollisionGeometry:
         """Converts abstract ``pydrake.geometry.shape`` to
         ``CollisionGeometry`` according to the desired ``represent_geometry_as``
@@ -594,15 +819,15 @@ class PydrakeToCollisionGeometryFactory:
         """
         if isinstance(drake_shape, DrakeBox):
             geometry = PydrakeToCollisionGeometryFactory.convert_box(
-                drake_shape, represent_geometry_as, learnable)
+                drake_shape, represent_geometry_as, learnable, **kwargs)
         elif isinstance(drake_shape, DrakeHalfSpace):
             geometry = PydrakeToCollisionGeometryFactory.convert_plane()
         elif isinstance(drake_shape, DrakeMesh):
             geometry = PydrakeToCollisionGeometryFactory.convert_mesh(
-                drake_shape, represent_geometry_as, learnable)
+                drake_shape, represent_geometry_as, learnable, **kwargs)
         elif isinstance(drake_shape, DrakeSphere):
             geometry = PydrakeToCollisionGeometryFactory.convert_sphere(
-                drake_shape, represent_geometry_as, learnable)
+                drake_shape, represent_geometry_as, learnable, **kwargs)
         else:
             raise TypeError(
                 "Unsupported type for drake Shape() to"
@@ -613,7 +838,7 @@ class PydrakeToCollisionGeometryFactory:
 
     @staticmethod
     def convert_box(drake_box: DrakeBox, represent_geometry_as: str,
-                    learnable: bool = True
+                    learnable: bool = True, **kwargs
         ) -> Union[Box, Polygon]:
         """Converts ``pydrake.geometry.Box`` to ``Box`` or ``Polygon``."""
         if not learnable:
@@ -631,7 +856,7 @@ class PydrakeToCollisionGeometryFactory:
 
     @staticmethod
     def convert_sphere(drake_sphere: DrakeSphere, represent_geometry_as: str,
-                       learnable: bool = True
+                       learnable: bool = True, **kwargs
         ) -> Union[Sphere, Polygon]:
         """Converts ``pydrake.geometry.Sphere`` to ``Sphere``."""
         if not learnable:
@@ -655,7 +880,9 @@ class PydrakeToCollisionGeometryFactory:
     @staticmethod
     def convert_mesh(
         drake_mesh: DrakeMesh, represent_geometry_as: str,
-        learnable: bool = True) -> Union[DeepSupportConvex, Polygon]:
+        learnable: bool = True, n_query: Optional[int] = None, 
+        sampling_method: str = 'perturb', **kwargs
+        ) -> Union[DeepSupportConvex, Polygon]:
         """Converts ``pydrake.geometry.Mesh`` to ``Polygon`` or
         ``DeepSupportConvex``."""
         filename = drake_mesh.filename()
@@ -663,7 +890,9 @@ class PydrakeToCollisionGeometryFactory:
         vertices = Tensor(mesh.vertices)
 
         if represent_geometry_as == 'mesh':
-            return DeepSupportConvex(vertices, learnable=learnable)
+            return DeepSupportConvex(vertices, learnable=learnable, 
+                                     n_query=n_query, 
+                                     sampling_method=sampling_method)
 
         if represent_geometry_as == 'polygon':
             return Polygon(vertices, learnable=learnable)

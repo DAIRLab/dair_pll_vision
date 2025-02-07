@@ -136,6 +136,12 @@ def extract_outward_normal_hyperplanes(vertices: Tensor, faces: Tensor):
     return outward_normals, backwards, extents
 
 
+def extract_surface_points_from_support_function(
+    support_function: Callable[[Tensor], Tensor]) -> Tensor:
+    """Given a support function, extracts surface points."""
+    support_points = support_function(_SURFACE).detach()
+    return support_points
+
 def extract_mesh_from_support_function(
     support_function: Callable[[Tensor], Tensor]) -> MeshSummary:
     """Given a support function, extracts a vertex/face mesh.
@@ -150,10 +156,12 @@ def extract_mesh_from_support_function(
     support_point_hashes = set()
     unique_support_points = []
 
+    duplicates = 0
     # remove duplicate vertices
     for vertex in support_points:
         vertex_hash = hash(vertex.numpy().tobytes())
         if vertex_hash in support_point_hashes:
+            duplicates += 1
             continue
         support_point_hashes.add(vertex_hash)
         unique_support_points.append(vertex)
@@ -167,6 +175,10 @@ def extract_mesh_from_support_function(
     backwards = backwards.squeeze(0)
     faces[backwards] = faces[backwards].flip(-1)
 
+    # if duplicates > 0:
+    #     print(f"Removed {duplicates} duplicate vertices, {len(vertices)} remain.")
+    # else:
+    #     print(f"No duplicates. Found {len(vertices)} unique vertices.")
     return MeshSummary(vertices=vertices, faces=faces)
 
 

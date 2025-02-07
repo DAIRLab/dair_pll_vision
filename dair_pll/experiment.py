@@ -69,6 +69,7 @@ class TrainingState:
     """If using W&B, the ID of the run associated with this experiment."""
     finished_training: bool = False
     """Whether training has finished."""
+    epoch_best: int = 0
 
 
 TRAIN_SET = 'train'
@@ -245,7 +246,8 @@ class SupervisedLearningExperiment(ABC):
             Optimizer for training.
         """
         config = self.config.optimizer_config
-        if issubclass(config.optimizer, torch.optim.Adam):
+        if issubclass(config.optimizer, torch.optim.Adam) or \
+            issubclass(config.optimizer, torch.optim.SGD):
             
             # param_groups = [
             #     {'params': [param for name, param in learned_system.named_parameters() if 'network' in name], 'lr': 2 * config.lr.value},
@@ -371,16 +373,19 @@ class SupervisedLearningExperiment(ABC):
                    x_past: Tensor,
                    x_future: Tensor,
                    system: System,
-                   keep_batch: bool = False) -> Tensor:
+                   keep_batch: bool = False, 
+                   epoch: int = None) -> Tensor:
         """Runs :py:attr:`loss_callback` (a
         :py:data:`LossCallbackCallable`) on the given batch."""
         assert self.loss_callback is not None
-        return self.loss_callback(x_past, x_future, system, keep_batch)
+        return self.loss_callback(x_past, x_future, system, keep_batch, 
+                                  return_extra_for_hook=True, epoch=epoch)
 
     def train_epoch(self,
                     data: DataLoader,
                     system: System,
-                    optimizer: Optional[Optimizer] = None) -> Tensor:
+                    optimizer: Optional[Optimizer] = None, 
+                    epoch: int = None) -> Tensor:
         """Train learned model for a single epoch.  Takes gradient steps in the
         learned parameters if ``optimizer`` is provided.
 
@@ -393,26 +398,44 @@ class SupervisedLearningExperiment(ABC):
             Scalar average training loss observed during epoch.
         """
         losses = []
+        system.vis_hook.epoch_start(epoch=epoch)
         for xy_i in data:
             x_i: Tensor = xy_i[0]
             y_i: Tensor = xy_i[1]
+            index_i: Tensor = xy_i[2]
 
             if optimizer is not None:
                 optimizer.zero_grad()
 
-            loss = self.batch_loss(x_i, y_i, system)
-            losses.append(loss.clone().detach())
+            system.vis_hook.record_indices(index_i)
+
+            loss, loss_for_hook = self.batch_loss(x_i, y_i, system, epoch=epoch)
+            # `loss_for_hook` is intended to show gradients from all losses regardless of 
+            # whether they are used in the final loss.
+            # TODO: `losses` is used for recording a loss as an indicator of training progress, 
+            # which is used for logging and early stopping. 
+            # Ideally, items in `losses` should be the same across all epochs. 
+            # But if overfit_bsdf_init is used in VisionExperiment, w_bsdf and bundlesdf_loss 
+            # may change its value and meaning across epochs, making the loss in `losses`
+            # not directly comparable across epochs, potentially causing problems
+            # in self.train() where valid_loss is compared with the best so far. 
+            losses.append(loss_for_hook.clone().detach())
+
+            system.vis_hook.itemized_back_all(loss_for_hook)
 
             if optimizer is not None:
                 loss.backward()
                 optimizer.step()
+
+        system.vis_hook.epoch_end()
 
         avg_loss = cast(Tensor, sum(losses) / len(losses))
         return avg_loss
 
     def base_and_learned_comparison_summary(
             self, statistics: Dict, learned_system: System,
-            force_generate_videos: bool = False) -> SystemSummary:
+            force_generate_videos: bool = False,
+            epoch: Optional[int] = None) -> SystemSummary:
         """Extracts a :py:class:`~dair_pll.system.SystemSummary` that compares
         the base system to the learned system.
 
@@ -430,7 +453,8 @@ class SupervisedLearningExperiment(ABC):
         return SystemSummary()
 
     def build_epoch_vars_and_system_summary(self, statistics: Dict,
-            learned_system: System, force_generate_videos: bool = False
+            learned_system: System, force_generate_videos: bool = False,
+            epoch: Optional[int] = None
         ) -> Tuple[Dict, SystemSummary]:
         """Build epoch variables and system summary for learning process.
 
@@ -460,7 +484,8 @@ class SupervisedLearningExperiment(ABC):
 
         comparison_summary = self.base_and_learned_comparison_summary(
             statistics, learned_system,
-            force_generate_videos=force_generate_videos)
+            force_generate_videos=force_generate_videos,
+            epoch=epoch)
 
         epoch_vars.update(learned_system_summary.scalars)
         logging_duration = time.time() - start_log_time
@@ -614,7 +639,7 @@ class SupervisedLearningExperiment(ABC):
             
         return is_resumed, training_state
 
-    def setup_training(self) -> Tuple[System, Optimizer, TrainingState]:
+    def setup_training(self) -> Tuple[System, Optimizer, TrainingState, torch.optim.lr_scheduler.LRScheduler]:
         r"""Sets up initial condition for training process.
 
         Returns:
@@ -635,6 +660,9 @@ class SupervisedLearningExperiment(ABC):
         learned_system = self.get_learned_system(
             torch.cat(train_set.trajectories))
         optimizer = self.get_optimizer(learned_system)
+
+        # lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)
+        lr_scheduler = None
 
         if is_resumed:
             assert training_state is not None
@@ -666,12 +694,12 @@ class SupervisedLearningExperiment(ABC):
             training_state.wandb_run_id = self.wandb_manager.launch()
             self.wandb_manager.log_config(self.config)
 
-        return learned_system, optimizer, training_state
+        return learned_system, optimizer, training_state, lr_scheduler
 
     def train(
         self,
         epoch_callback: EpochCallbackCallable = default_epoch_callback,
-    ) -> Tuple[Tensor, Tensor, System]:
+    ) -> Tuple[Tensor, TrainingState, System]:
         """Run training process for experiment.
 
         Terminates training with early stopping, parameters for which are set in
@@ -689,7 +717,7 @@ class SupervisedLearningExperiment(ABC):
         checkpoint_filename = file_utils.get_model_filename(
             self.config.storage, self.config.run_name)
 
-        learned_system, optimizer, training_state = self.setup_training()
+        learned_system, optimizer, training_state, lr_scheduler = self.setup_training()
         assert self.learning_data_manager is not None
 
         train_set, _, _ = \
@@ -703,18 +731,21 @@ class SupervisedLearningExperiment(ABC):
 
         # Calculate the training loss before any parameter updates.  Calls
         # ``train_epoch`` without providing an optimizer, so no gradient steps
-        # will be taken.
+        # will be taken to change the model.
         learned_system.eval()
-        training_loss = self.train_epoch(train_dataloader, learned_system)
+        epoch_here = 0 if training_state.epoch == 1 else training_state.epoch
+        training_loss = self.train_epoch(train_dataloader, learned_system, 
+                                         epoch=epoch_here)
 
         # Terminate if the training state indicates training already finished.
         if training_state.finished_training:
             learned_system.load_state_dict(
                 training_state.best_learned_system_state)
-            return training_loss, training_state.best_valid_loss, learned_system
+            return training_loss, training_state, learned_system
 
         # Report losses before any parameter updates.
         if training_state.epoch == 1:
+            # Manually set epoch to 0 for the logging before training loop starts. 
             training_state.best_valid_loss = self.per_epoch_evaluation(
                 0, learned_system, training_loss, 0.)
             epoch_callback(0, learned_system, training_loss,
@@ -745,8 +776,11 @@ class SupervisedLearningExperiment(ABC):
                 learned_system.train()
                 start_train_time = time.time()
                 training_loss = self.train_epoch(train_dataloader,
-                                                 learned_system, optimizer)
-                
+                                                 learned_system, optimizer, 
+                                                 training_state.epoch)
+                if lr_scheduler is not None:
+                    lr_scheduler.step()
+
                 training_duration = time.time() - start_train_time
                 learned_system.eval()
                 valid_loss = self.per_epoch_evaluation(training_state.epoch,
@@ -760,6 +794,7 @@ class SupervisedLearningExperiment(ABC):
                     training_state.best_learned_system_state = deepcopy(
                         learned_system.state_dict())
                     training_state.epochs_since_best = 0
+                    training_state.epoch_best = training_state.epoch
                 else:
                     training_state.epochs_since_best += 1
 
@@ -767,7 +802,7 @@ class SupervisedLearningExperiment(ABC):
                                training_loss, training_state.best_valid_loss)
 
                 # Decide to early-stop or not.
-                if training_state.epochs_since_best >= patience:
+                if patience > 0 and training_state.epochs_since_best >= patience:
                     break
 
                 training_state.current_learned_system_state = \
@@ -795,7 +830,7 @@ class SupervisedLearningExperiment(ABC):
             signal.signal(signal.SIGINT, signal.SIG_DFL)
 
         # Reload best parameters.
-        print("Loading best parameters...")
+        print(f"Loading best parameters from epoch {training_state.epoch_best}...")
         learned_system.load_state_dict(training_state.best_learned_system_state)
         print("Done loading best parameters.")
         return training_loss, training_state, learned_system
@@ -861,6 +896,7 @@ class SupervisedLearningExperiment(ABC):
             slices = trajectory_set.slices[:]
             all_x = cast(List[Tensor], slices[0])
             all_y = cast(List[Tensor], slices[1])
+            all_i = slices[2]
 
             # hack: assume 1-step prediction for now
             # HACK:  Assumes 'state' key.
@@ -878,7 +914,7 @@ class SupervisedLearningExperiment(ABC):
 
             for system_name, system in systems.items():
                 model_loss_list = []
-                for batch_x, batch_y in slices_loader:
+                for batch_x, batch_y, batch_i in slices_loader:
                     model_loss_list.append(
                         self.prediction_loss(batch_x, batch_y, system, True))
                 model_loss = torch.cat(model_loss_list)
@@ -890,7 +926,7 @@ class SupervisedLearningExperiment(ABC):
                 # the same loss metric but for the other sets (val/test).
                 if set_name != TRAIN_SET:
                     model_loss_list = []
-                    for batch_x, batch_y in slices_loader:
+                    for batch_x, batch_y, batch_i in slices_loader:
                         model_loss_list.append(
                             self.loss_callback(batch_x, batch_y, system, True))
                     model_loss = torch.cat(model_loss_list)
@@ -1010,6 +1046,7 @@ class SupervisedLearningExperiment(ABC):
     def generate_results(
         self,
         epoch_callback: EpochCallbackCallable = default_epoch_callback,
+        force_evaluation: bool = False
     ) -> Tuple[System, StatisticsDict]:
         r"""Get the final learned model and results/statistics of experiment.
         Along with the model corresponding to best validation loss, this will
@@ -1026,16 +1063,21 @@ class SupervisedLearningExperiment(ABC):
         """
         _, training_state, learned_system = self.train(epoch_callback)
 
-        try:
-            print("Looking for previously generated statistics...")
-            statistics = file_utils.load_evaluation(self.config.storage,
-                                                    self.config.run_name)
-            print("Done loading statistics.")
-        except FileNotFoundError:
-            print("Did not find statistics; generating them... (this could " + \
-                  "take several minutes)")
+        if force_evaluation:
+            print("Forcing evaluation...")
             statistics = self._evaluation(learned_system, training_state)
             print("Done generating statistics.")
+        else:
+            try:
+                print("Looking for previously generated statistics...")
+                statistics = file_utils.load_evaluation(self.config.storage,
+                                                        self.config.run_name)
+                print("Done loading statistics.")
+            except FileNotFoundError:
+                print("Did not find statistics; generating them... (this could " + \
+                    "take several minutes)")
+                statistics = self._evaluation(learned_system, training_state)
+                print("Done generating statistics.")
 
         return learned_system, statistics
 
@@ -1119,7 +1161,7 @@ class SupervisedLearningExperiment(ABC):
                 data_set.slices, batch_size=128, shuffle=False)
 
             # Iterate over all the training data.
-            for batch_x, batch_y in slices_loader:
+            for batch_x, batch_y, batch_i in slices_loader:
                 # The bulk of the computation is done in the like-named method
                 # of the associated learned system for a single batch of data.
                 points_i, directions_i, normal_forces_i, states_i, forces_i, \

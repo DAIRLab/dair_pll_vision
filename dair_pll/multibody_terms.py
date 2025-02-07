@@ -38,6 +38,7 @@ import numpy as np
 import os.path as op
 import torch
 import pdb
+import trimesh
 
 from pydrake.geometry import SceneGraphInspector, GeometryId  # type: ignore
 from pydrake.multibody.plant import MultibodyPlant_  # type: ignore
@@ -157,7 +158,8 @@ class LagrangianTerms(Module):
     def __init__(self, plant_diagram: MultibodyPlantDiagram,
                  learnable_body_dict: Dict[str, LearnableBodySettings] = {},
                  precomputed_functions: Dict[str, Union[List[str],Callable]]={},
-                 export_drake_pytorch_dir: str = None
+                 export_drake_pytorch_dir: str = None, 
+                 contact_terms: Optional['ContactTerms'] = None
                  ) -> None:
         """Inits :py:class:`LagrangianTerms` with prescribed parameters and
         functional forms.
@@ -316,6 +318,8 @@ class LagrangianTerms(Module):
 
         self.learnable_body_idx = learnable_body_idx
 
+        self.contact_terms = contact_terms
+
     # noinspection PyUnresolvedReferences
     @staticmethod
     def extract_body_parameters_and_variables(
@@ -390,6 +394,25 @@ class LagrangianTerms(Module):
         return body_parameter_list, body_variables, inertial_bodies, \
             learnable_indices
 
+    def get_com_from_geometry(self):
+        # First uncover the deep support convex network.
+        all_geoms = self.contact_terms.geometries
+        deep_support_geom = None
+        for geom in all_geoms:
+            if type(geom) == DeepSupportConvex:
+                assert deep_support_geom is None, f'Multiple ' + \
+                    f'DeepSupportConvex found in {all_geoms}.'
+                deep_support_geom = geom
+        assert deep_support_geom is not None, f'No DeepSupportConvex found ' + \
+            f'in {all_geoms}.'
+        surface_points = deep_support_geom.get_vertices(None, 
+                                                        sample_entire_mesh=False, 
+                                                        sample_surface_points=True)  # (n, 3)
+        geometry_mean = surface_points.mean(dim=0)  # (3,)
+        # Set the surface mean to the center of mass of the object.
+        # This is to ensure that the object is not moving in the air.
+        return geometry_mean
+    
     def pi_cm(self, just_learnables: bool = False) -> Tensor:
         """Returns inertial parameters in human-understandable ``pi_cm``
         -format."""
@@ -398,6 +421,13 @@ class LagrangianTerms(Module):
 
         inertial_parameters = []
         for idx in indices:
+            # if idx in self.learnable_body_idx:
+            #     # self.body_parameters[3*idx+1] = self.get_com_from_geometry().detach()
+            #     inertial_parameters.append(torch.hstack(
+            #         (self.body_parameters[3*idx],
+            #         self.get_com_from_geometry().detach(),
+            #         self.body_parameters[3*idx+2])))
+            # else:
             inertial_parameters.append(torch.hstack(
                 (self.body_parameters[3*idx],
                  self.body_parameters[3*idx+1],
@@ -452,24 +482,238 @@ def check_enabled(fn):
         if self.enabled:
             return fn(self, *args, **kwargs)
     return wrapped_fn
+
+def check_enabled_and_back_active(fn):
+    def wrapped_fn(self, *args, **kwargs):
+        if self.enabled and self.back_active:
+            return fn(self, *args, **kwargs)
+    return wrapped_fn
+
+def check_enabled_and_forward_active(fn):
+    def wrapped_fn(self, *args, **kwargs):
+        if self.enabled and self.forward_active:
+            return fn(self, *args, **kwargs)
+    return wrapped_fn
 class HookGradientVisualizer:
-    def __init__(self, module, vis_gradient=False):
+    def __init__(self, module, vis_gradient: str = None):
         self.grad = None
         self.count_fw = 0
         self.count_bw = 0
-        self.enabled = vis_gradient
+        self.epoch = -1
+        self.enabled = vis_gradient is not None
+        self.video_name = vis_gradient
         if self.enabled:
             print(f'HookGradientVisualizer is enabled. ')
-        # self.loss_grad_to_vis = ['pred', 'comp', 'pen', 'diss']
-        self.loss_grad_to_vis = ['comp']
-
-        self.loss_grad_to_vis += ['all']
+        self.back_active = False
+        self.forward_active = False
+        self.loss_grad_to_vis = ['all', 'pred', 'comp', 'pen', 'diss']
+        # self.loss_grad_to_vis = ['bsdf']
         self.cycle_bw = len(self.loss_grad_to_vis)
 
         self.module = module
-    
+        self._initialize_all_data()
+        self._initialize_backprop_state()
+
+    def _initialize_all_data(self):
+        self.indices = []
+        self.p_Ao_all = []
+        self.p_Bo_all = []
+        self.p_Ac_all = []
+        self.p_Bc_all = []
+        # self.p_As_all = []
+        self.p_Bs_all = []
+        self.R_BW_all = []
+        self.p_Bcom_all = []
+        
+        self.dv_rot_axis_W_all = []
+        self.dv_rot_norm_all = []
+        self.dv_trans_axis_W_all = []
+        self.dv_trans_norm_all = []
+        self.dv_pred_rot_axis_W_all = []
+        self.dv_pred_rot_norm_all = []
+        self.dv_pred_trans_axis_W_all = []
+        self.dv_pred_trans_norm_all = []
+
+        self.impulses_by_contacts_all = []
+        self.impulses_by_contacts_norm_all = []
+        self.impulses_by_contacts_normed_all = []
+
+        self.p_BiBs2_W_all = []
+
+        self.p_BiBs2_W_grad_all = dict()
+        self.p_BiBs2_W_grad_norm_all = dict()
+        self.p_BiBs2_W_grad_normalized_all = dict()
+
+        self.p_BiBc_W_grad_all = dict()
+        self.p_BiBc_W_grad_norm_all = dict()
+        self.p_BiBc_W_grad_normalized_all = dict()
+        self.p_BiBc_W_grad_plane_all = dict()
+        self.p_BiBc_W_grad_plane_norm_all = dict()
+        self.p_BiBc_W_grad_plane_normalized_all = dict()
+
+        self.vis_norm = 0.05
+
+        for loss_name in self.loss_grad_to_vis:
+            self.p_BiBs2_W_grad_all[loss_name] = []
+            self.p_BiBs2_W_grad_norm_all[loss_name] = []
+            self.p_BiBs2_W_grad_normalized_all[loss_name] = []
+            self.p_BiBc_W_grad_all[loss_name] = []
+            self.p_BiBc_W_grad_norm_all[loss_name] = []
+            self.p_BiBc_W_grad_normalized_all[loss_name] = []
+            self.p_BiBc_W_grad_plane_all[loss_name] = []
+            self.p_BiBc_W_grad_plane_norm_all[loss_name] = []
+            self.p_BiBc_W_grad_plane_normalized_all[loss_name] = []
+
+
+    def _reorder_data_by_indices(self):
+        self.indices = torch.cat(self.indices, dim=0).detach().numpy()
+        
+        members = [attr for attr in vars(self) if attr.endswith('_all')]
+        for member in members:
+            ### for list, concatenate along axis=0
+            ### for dict, concatenate along axis=0 for each value
+            if isinstance(getattr(self, member), dict):
+                for key in getattr(self, member).keys():
+                    if len(getattr(self, member)[key]) == 0:
+                        continue
+                    getattr(self, member)[key] = np.concatenate(getattr(self, member)[key], axis=0)
+            else:
+                assert isinstance(getattr(self, member), list)
+                if len(getattr(self, member)) == 0:
+                    continue
+                try:
+                    setattr(self, member, np.concatenate(getattr(self, member), axis=0))
+                except Exception as e:
+                    print(f'{member=}, {type(getattr(self, member))=}')
+                    print(f'Error message: {e}')
+                    # TODO: this should not happen now given 
+                    # ContactTerms.forward() calls geo_b.get_vertices(sample_surface_points=True)
+                    # instead of sample_entire_mesh=True. Then remove this part of code.
+                    assert member == 'p_Bs_all'
+                    size_dim_1 = [getattr(self, member)[i].shape[1] for i in range(len(getattr(self, member)))]
+                    max_size_dim_1 = max(size_dim_1)
+                    for i in range(len(getattr(self, member))):
+                        if size_dim_1[i] < max_size_dim_1:
+                            print(f'{getattr(self, member)[i].shape=}')
+                            print(f'{max_size_dim_1=}')
+                            last_col = getattr(self, member)[i][:,[-1]].repeat(max_size_dim_1-size_dim_1[i], axis=1)
+                            getattr(self, member)[i] = np.concatenate([getattr(self, member)[i], last_col], axis=1)
+                    setattr(self, member, np.concatenate(getattr(self, member), axis=0))
+                    breakpoint()
+
+        sorting_idx = np.argsort(self.indices)
+        if np.all(sorting_idx == self.indices):
+            # print(f'Indices are already sorted.')
+            return
+        
+        for member in members:
+            if isinstance(getattr(self, member), dict):
+                for key in getattr(self, member).keys():
+                    if len(getattr(self, member)[key]) == 0:
+                        continue
+                    getattr(self, member)[key] = getattr(self, member)[key][sorting_idx]
+            else:
+                if len(getattr(self, member)) == 0:
+                    continue
+                assert isinstance(getattr(self, member), np.ndarray), f'{member=}, {type(getattr(self, member))=}'
+                setattr(self, member, getattr(self, member)[sorting_idx])    
+        
     @check_enabled
-    def manage_vis(self, loss_pred, loss_comp, loss_pen, loss_diss, 
+    def epoch_start(self, epoch: int = None):
+        if epoch is not None:
+            self.epoch = epoch
+        else:
+            self.epoch += 1
+        self._initialize_all_data()
+        self._initialize_backprop_state()
+        self.forward_active = True
+
+    def _initialize_backprop_state(self):
+        self.loss_backed = dict()
+        self.backprop_hit_p_Bc = dict()
+        for loss_name in self.loss_grad_to_vis:
+            self.loss_backed[loss_name] = False
+            self.backprop_hit_p_Bc[loss_name] = False
+            
+
+    # @check_enabled
+    # def iteration_start(self, indices):
+    #     self.record_indices(indices)
+
+    @check_enabled
+    def epoch_end(self):
+        ### sort all data by indices
+        ### visualize all data with temporal order
+        ### clear all data
+        self.forward_active = False
+
+        any_backed = False
+        for loss_name in self.loss_grad_to_vis:
+            if self.loss_backed[loss_name]:
+                any_backed = True
+                break
+        if not any_backed:
+            return
+        
+        self._reorder_data_by_indices()
+        # self.visualize()
+
+    @check_enabled
+    def visualize(self):
+        for loss_name in self.loss_grad_to_vis:
+            if self.loss_backed[loss_name]:
+                self._set_loss_name(loss_name)
+                self._visualize_all_frames()
+            else:
+                print(f'{loss_name} is not backproped, thus not plotting.')
+
+    @check_enabled
+    def visualize_single_frame_grads_by_losses(self, i):
+        figs = dict()
+        for loss_name in self.loss_grad_to_vis:
+            if self.loss_backed[loss_name]:
+                self._set_loss_name(loss_name)
+                fig = self._visualize_single_frame(i)
+                # figs.append(fig)
+                figs[loss_name] = fig
+            else:
+                print(f'{loss_name} is not backproped, thus not plotting.')
+        return figs
+
+    def _set_loss_name(self, loss_name):
+        self.loss_name = loss_name
+
+    @check_enabled
+    def record_indices(self, indices):
+        self.indices.append(indices.detach().clone())
+
+    @check_enabled_and_forward_active
+    def itemized_back_bsdf(self, loss_bsdf, w_bsdf):
+        if 'bsdf' not in self.loss_grad_to_vis:
+            return
+        loss_bsdf = w_bsdf * loss_bsdf
+        self._set_loss_name('bsdf')
+        # print(f'{self.loss_name=}')
+        self.back_active = True
+        loss_bsdf.backward(retain_graph=True)
+        self.loss_backed['bsdf'] = True
+        self.back_active = False
+        self.module.zero_grad()
+
+    @check_enabled_and_forward_active
+    def itemized_back_all(self, loss):
+        if 'all' not in self.loss_grad_to_vis:
+            return
+        self._set_loss_name('all')
+        # print(f'{self.loss_name=}')
+        self.back_active = True
+        loss.backward(retain_graph=True)
+        self.loss_backed['all'] = True
+        self.back_active = False
+        self.module.zero_grad()
+
+    @check_enabled_and_forward_active
+    def itemized_back(self, loss_pred, loss_comp, loss_pen, loss_diss, 
                    w_pred, w_comp, w_pen, w_diss):
         for loss_name in self.loss_grad_to_vis:
             if loss_name == 'pred':
@@ -480,16 +724,27 @@ class HookGradientVisualizer:
                 loss_to_vis = w_pen * loss_pen
             elif loss_name == 'diss':
                 loss_to_vis = w_diss * loss_diss
-            elif loss_name == 'all':
+            else:
                 continue
 
+            self._set_loss_name(loss_name)
             loss_to_vis = loss_to_vis.mean()
-            print(f'{loss_name=}')
+            # print(f'{self.loss_name=}')
+            self.back_active = True
             loss_to_vis.backward(retain_graph=True)
+            self.loss_backed[loss_name] = True
+            self.back_active = False
             self.module.zero_grad()
 
     @check_enabled
-    def record_geometries(self, i_contact, p_Ao, p_Bo, p_Ac, p_Bc, p_As, p_Bs, R_BW):
+    def detach_geometries(self, p_BoBc_B):
+        if self.epoch > 20:
+            p_BoBc_B = p_BoBc_B.detach().requires_grad_(True)
+        return p_BoBc_B
+
+    @check_enabled_and_forward_active
+    def record_geometries(self, i_contact, p_Ao, p_Bo, p_Ac, p_Bc, p_As, p_Bs, R_BW,
+                          p_Bcom=None):
         # It will be called n_body_pair times.  
         # For robot exp, the first pair is sphere-object. The second pair is ground-object.
         if i_contact == 0:
@@ -498,20 +753,9 @@ class HookGradientVisualizer:
             self.p_Ac = p_Ac.detach().numpy() # (n_frame, n_contact_at_this_pair, 3)
             self.p_Bc = p_Bc.detach().numpy() # (n_frame, n_contact_at_this_pair, 3)
             self.p_As = p_As.copy() # (n, n, 3)
-            self.p_Bs = p_Bs.copy() # (n_samples, n_frame, 1, 3)
+            self.p_Bs = p_Bs.copy() # (n_frame, n_samples, 1, 3)
             self.R_BW = R_BW.detach().clone()   # (n_frame, 3, 3)
-
-            self.count_fw += 1
-            print(f'Forward pass {self.count_fw}')
-
-            # In SupervisedLearningExperiment.train() in experiment.py, 
-            # before getting into the training loops, there are one training epoch and one validation epoch.
-            # One epoch only has one iteration. 
-            # Therefore, self.count_fw=3 is the first training pass that we want to track. 
-            # In the training loop, one training step and one eval step interleaved.
-            # We only track the training step. Therefore, we take mod 2. 
-            self.epoch = (self.count_fw - 3) // 2 # -1 // 2 == -1
-            self.training_pass = (self.count_fw - 3) % 2 == 0
+            self.p_Bcom = p_Bcom.copy() # (n_frame, n_samples=1, 1, 3)
         else:
             p_Ac = p_Ac.detach().numpy()
             p_Bc = p_Bc.detach().numpy()
@@ -519,7 +763,16 @@ class HookGradientVisualizer:
             self.p_Bc = np.concatenate((self.p_Bc, p_Bc), axis=-2)
             self.p_As = [self.p_As, p_As]
 
-    @check_enabled
+            self.p_Ao_all.append(self.p_Ao)
+            self.p_Bo_all.append(self.p_Bo)
+            self.p_Ac_all.append(self.p_Ac)
+            self.p_Bc_all.append(self.p_Bc)
+            # self.p_As_all.append(self.p_As)
+            self.p_Bs_all.append(self.p_Bs)
+            self.R_BW_all.append(self.R_BW.numpy())
+            self.p_Bcom_all.append(self.p_Bcom)
+
+    @check_enabled_and_forward_active
     def record_dv(self, dv, dv_pred):
         self.dv = dv.detach().clone()
         self.dv_pred = dv_pred.detach().clone()
@@ -528,9 +781,18 @@ class HookGradientVisualizer:
         self.dv_pred_rot_axis_B, self.dv_pred_rot_norm, self.dv_pred_trans_axis_W, self.dv_pred_trans_norm = \
             self._process_dv(self.dv_pred)
         
-        self.dv_rot_axis_W = pbmm(self.dv_rot_axis_B.unsqueeze(-2), self.R_BW).squeeze(-2)
-        self.dv_pred_rot_axis_W = pbmm(self.dv_pred_rot_axis_B.unsqueeze(-2), self.R_BW).squeeze(-2)
+        self.dv_rot_axis_W = pbmm(self.dv_rot_axis_B.unsqueeze(-2), self.R_BW).squeeze(-2).numpy()
+        self.dv_pred_rot_axis_W = pbmm(self.dv_pred_rot_axis_B.unsqueeze(-2), self.R_BW).squeeze(-2).numpy()
         
+        self.dv_rot_axis_W_all.append(self.dv_rot_axis_W)
+        self.dv_rot_norm_all.append(self.dv_rot_norm)
+        self.dv_trans_axis_W_all.append(self.dv_trans_axis_W)
+        self.dv_trans_norm_all.append(self.dv_trans_norm)
+        self.dv_pred_rot_axis_W_all.append(self.dv_pred_rot_axis_W)
+        self.dv_pred_rot_norm_all.append(self.dv_pred_rot_norm)
+        self.dv_pred_trans_axis_W_all.append(self.dv_pred_trans_axis_W)
+        self.dv_pred_trans_norm_all.append(self.dv_pred_trans_norm)
+
     def _process_dv(self, dv):
         dv_rot = dv[:, 0, :3]   # (*, 3)
         dv_rot_norm =  torch.norm(dv_rot, dim=-1, keepdim=True)
@@ -538,19 +800,23 @@ class HookGradientVisualizer:
         dv_trans = dv[:, 0, 3:] # (*, 3)
         dv_trans_norm = torch.norm(dv_trans, dim=-1, keepdim=True)
         dv_trans_axis = dv_trans / dv_trans_norm
-        return dv_rot_axis, dv_rot_norm, dv_trans_axis, dv_trans_norm
+        return dv_rot_axis, dv_rot_norm.numpy(), dv_trans_axis.numpy(), dv_trans_norm.numpy()
 
-    @check_enabled
+    @check_enabled_and_forward_active
     def record_impulses(self, impulses_by_contacts):
         self.impulses_by_contacts = impulses_by_contacts.detach().clone().squeeze(-1)   # (*, n_contacts, 3)
         self.impulses_by_contacts_norm = torch.norm(self.impulses_by_contacts, dim=-1, keepdim=True)
-        self.impulses_by_contacts_normed = self.impulses_by_contacts / self.impulses_by_contacts_norm * 0.05
+        self.impulses_by_contacts_normed = self.impulses_by_contacts / self.impulses_by_contacts_norm * self.vis_norm
 
         self.impulses_by_contacts = self.impulses_by_contacts.numpy()
         self.impulses_by_contacts_norm = self.impulses_by_contacts_norm.numpy()
         self.impulses_by_contacts_normed = self.impulses_by_contacts_normed.numpy()
 
-    @check_enabled
+        self.impulses_by_contacts_all.append(self.impulses_by_contacts)
+        self.impulses_by_contacts_norm_all.append(self.impulses_by_contacts_norm)
+        self.impulses_by_contacts_normed_all.append(self.impulses_by_contacts_normed)
+
+    @check_enabled_and_forward_active
     def record(self, name, x):
         if isinstance(x, torch.Tensor):
             x = x.detach().clone()
@@ -561,7 +827,7 @@ class HookGradientVisualizer:
         else:
             raise ValueError(f'Unsupported type: {type(x)}')
 
-    @check_enabled
+    @check_enabled_and_back_active
     def hook_check_grad(self, name, grad):
         ### Should only be enabled if only comp loss is backproped. 
         print(f'{name}_grad: {grad[0]}')
@@ -591,194 +857,366 @@ class HookGradientVisualizer:
                       "Check if it is because other losses are also backproped. ")
                 breakpoint()
 
-    @check_enabled
+    @check_enabled_and_forward_active
+    def record_obj_surface_for_bsdf_loss(self, p_BiBs2_B):
+        self.p_BiBs2_B = p_BiBs2_B.detach().clone() # (n_samples, 3)
+        # n_random_points = min(100, self.p_BiBs2_B.shape[0])
+        # self.Bs2_rand_idx = torch.randperm(self.p_BiBs2_B.shape[0])[:n_random_points]
+        # self.p_BiBs2_B = self.p_BiBs2_B[self.Bs2_rand_idx]
+
+        self.p_BiBs2_B = self.p_BiBs2_B.unsqueeze(0)  # (1, n_samples, 3)
+        self.p_BiBs2_W = pbmm(self.p_BiBs2_B, self.R_BW).detach().numpy()
+        # self.p_BiBs2_W.shape = (batch_size, n_samples, 3)
+
+        self.p_BiBs2_W_all.append(self.p_BiBs2_W)
+
+    @check_enabled_and_back_active
+    def hook_grad_object_bsdf_loss(self, p_BiBs2_B_grad):
+        '''
+        Here Bs2 are sampled in VisionExperiment.bundlesdf_geometry_loss(), whereas
+        Bs are sampled in ContactTerms.forward() in multibody_terms.py.'''
+        # print('hook_grad_object_bsdf_loss')
+        self.backproped = True
+
+        self.p_BiBs2_B_grad = p_BiBs2_B_grad.detach().clone()
+        # self.p_BiBs2_B_grad = self.p_BiBs2_B_grad[self.Bs2_rand_idx]
+
+        self.p_BiBs2_B_grad = self.p_BiBs2_B_grad.unsqueeze(0)  # (1, n_samples, 3)
+        self.p_BiBs2_W_grad = pbmm(self.p_BiBs2_B_grad, self.R_BW).detach().numpy()
+        # self.p_BiBs2_W_grad.shape = (batch_size, n_samples, 3)
+        self.p_BiBs2_W_grad_norm = np.linalg.norm(self.p_BiBs2_W_grad, axis=2, keepdims=True)
+        self.p_BiBs2_W_grad_normalized = self.p_BiBs2_W_grad / self.p_BiBs2_W_grad_norm * self.vis_norm
+        self.p_BiBs2_W_grad = - self.p_BiBs2_W_grad
+        self.p_BiBs2_W_grad_normalized = - self.p_BiBs2_W_grad_normalized
+
+        self.p_BiBs2_W_grad_all[self.loss_name].append(self.p_BiBs2_W_grad)
+        self.p_BiBs2_W_grad_norm_all[self.loss_name].append(self.p_BiBs2_W_grad_norm)
+        self.p_BiBs2_W_grad_normalized_all[self.loss_name].append(self.p_BiBs2_W_grad_normalized)
+
+    @check_enabled_and_back_active
     def hook_grad_plane_and_object(self, p_BiBc_B_grad):
-        print('hook_grad_plane_and_object')
-        if self.training_pass and self.epoch >= 0:
-            self.p_BiBc_B_grad_plane = p_BiBc_B_grad.detach().clone()   # (batch_size, n_c=5, 3)
-            self.p_BiBc_W_grad_plane = pbmm(self.p_BiBc_B_grad_plane, self.R_BW).detach().numpy()
-            # self.p_BiBc_W_grad.shape = (batch_size, n_c, 3)
-            self.p_BiBc_W_grad_plane_norm = np.linalg.norm(self.p_BiBc_W_grad_plane, axis=2, keepdims=True)
-            self.p_BiBc_W_grad_plane_normalized = self.p_BiBc_W_grad_plane / self.p_BiBc_W_grad_plane_norm * 0.05
-            self.p_BiBc_W_grad_plane = - self.p_BiBc_W_grad_plane
-            self.p_BiBc_W_grad_plane_normalized = - self.p_BiBc_W_grad_plane_normalized
+        # print('hook_grad_plane_and_object')
+        # if self.training_pass and self.epoch >= 0:
+        self.p_BiBc_B_grad_plane = p_BiBc_B_grad.detach().clone()   # (batch_size, n_c=5, 3)
+        self.p_BiBc_W_grad_plane = pbmm(self.p_BiBc_B_grad_plane, self.R_BW).detach().numpy()
+        # self.p_BiBc_W_grad.shape = (batch_size, n_c, 3)
+        self.p_BiBc_W_grad_plane_norm = np.linalg.norm(self.p_BiBc_W_grad_plane, axis=2, keepdims=True)
+        self.p_BiBc_W_grad_plane_normalized = self.p_BiBc_W_grad_plane / self.p_BiBc_W_grad_plane_norm * self.vis_norm
+        self.p_BiBc_W_grad_plane = - self.p_BiBc_W_grad_plane
+        self.p_BiBc_W_grad_plane_normalized = - self.p_BiBc_W_grad_plane_normalized
 
-    @check_enabled
+        self.p_BiBc_W_grad_plane_all[self.loss_name].append(self.p_BiBc_W_grad_plane)
+        self.p_BiBc_W_grad_plane_norm_all[self.loss_name].append(self.p_BiBc_W_grad_plane_norm)
+        self.p_BiBc_W_grad_plane_normalized_all[self.loss_name].append(self.p_BiBc_W_grad_plane_normalized)
+        
+        n_contact_sphere = self.p_Bc.shape[-2] - self.p_BiBc_W_grad_plane.shape[-2]
+        self.p_BiBc_W_grad = np.concatenate([np.zeros((self.p_BiBc_W_grad_plane.shape[0], n_contact_sphere, 3)),
+                                    self.p_BiBc_W_grad_plane], axis=-2)
+        self.p_BiBc_W_grad_normalized = np.concatenate([np.zeros((self.p_BiBc_W_grad_plane.shape[0], n_contact_sphere, 3)),
+                                    self.p_BiBc_W_grad_plane_normalized], axis=-2)
+        self.p_BiBc_W_grad_norm = np.linalg.norm(self.p_BiBc_W_grad, axis=2, keepdims=True)
+
+        self.p_BiBc_W_grad_all[self.loss_name].append(self.p_BiBc_W_grad)
+        self.p_BiBc_W_grad_norm_all[self.loss_name].append(self.p_BiBc_W_grad_norm)
+        self.p_BiBc_W_grad_normalized_all[self.loss_name].append(self.p_BiBc_W_grad_normalized)
+
+        self.backprop_hit_p_Bc[self.loss_name] = True
+
+    @check_enabled_and_back_active
     def hook_grad_sphere_and_object(self, p_BiBc_B_grad):
-        print('hook_grad_sphere_and_object')
-        self.count_bw += 1
-        print(f'Backward pass {self.count_bw}')
-        if self.training_pass and self.epoch >= 0:
-            # MultibodyLearnableSystem.contactnets_loss() in multibody_learnable_system.py,
-            # four backward passes are called for each loss terms before the full-loss backward pass.
-            # The training epoch before the training loops does not use optimizer, 
-            # thus one fewer backward pass per forward pass in that epoch. 
-            self.loss_name = self.loss_grad_to_vis[self.count_bw % self.cycle_bw]
-            print(f"{self.loss_name=}")
+        # print('hook_grad_sphere_and_object')
             
-            self.p_BiBc_B_grad = p_BiBc_B_grad.detach().clone()
-            self.p_BiBc_B_grad = self.p_BiBc_B_grad.unsqueeze(1)
-            self.p_BiBc_W_grad = pbmm(self.p_BiBc_B_grad, self.R_BW).detach().numpy()
-            self.directions_B_W = pbmm(self.directions_B[:,None], self.R_BW).detach().numpy() * 0.05
-            # self.p_BiBc_W_grad.shape = (batch_size, n_c=1, 3)
-            self.p_BiBc_W_grad_norm = np.linalg.norm(self.p_BiBc_W_grad, axis=2, keepdims=True)
-            self.p_BiBc_W_grad_normalized = self.p_BiBc_W_grad / self.p_BiBc_W_grad_norm * 0.05
-            self.p_BiBc_W_grad = - self.p_BiBc_W_grad
-            self.p_BiBc_W_grad_normalized = - self.p_BiBc_W_grad_normalized
+        self.p_BiBc_B_grad = p_BiBc_B_grad.detach().clone()
+        self.p_BiBc_B_grad = self.p_BiBc_B_grad.unsqueeze(1)
+        self.p_BiBc_W_grad = pbmm(self.p_BiBc_B_grad, self.R_BW).detach().numpy()
+        self.directions_B_W = pbmm(self.directions_B[:,None], self.R_BW).detach().numpy() * self.vis_norm
+        # self.p_BiBc_W_grad.shape = (batch_size, n_c=1, 3)
+        self.p_BiBc_W_grad_norm = np.linalg.norm(self.p_BiBc_W_grad, axis=2, keepdims=True)
+        self.p_BiBc_W_grad_normalized = self.p_BiBc_W_grad / self.p_BiBc_W_grad_norm * self.vis_norm
+        self.p_BiBc_W_grad = - self.p_BiBc_W_grad
+        self.p_BiBc_W_grad_normalized = - self.p_BiBc_W_grad_normalized
 
+        if self.backprop_hit_p_Bc[self.loss_name]:
             self.p_BiBc_W_grad = np.concatenate([self.p_BiBc_W_grad, self.p_BiBc_W_grad_plane], axis=-2)
             self.p_BiBc_W_grad_normalized = np.concatenate([self.p_BiBc_W_grad_normalized, 
                                                             self.p_BiBc_W_grad_plane_normalized], axis=-2)
             self.p_BiBc_W_grad_norm = np.linalg.norm(self.p_BiBc_W_grad, axis=2, keepdims=True)
-            self._visualize()
             
+            self.p_BiBc_W_grad_all[self.loss_name][-1] = self.p_BiBc_W_grad
+            self.p_BiBc_W_grad_norm_all[self.loss_name][-1] = self.p_BiBc_W_grad_norm
+            self.p_BiBc_W_grad_normalized_all[self.loss_name][-1] = self.p_BiBc_W_grad_normalized
+        else:
+            n_contact_plane = self.p_Bc.shape[-2] - self.p_BiBc_W_grad.shape[-2]
+            self.p_BiBc_W_grad = np.concatenate([self.p_BiBc_W_grad, 
+                                    np.zeros((self.p_BiBc_W_grad.shape[0], n_contact_plane, 3))], axis=-2)
+            self.p_BiBc_W_grad_normalized = np.concatenate([self.p_BiBc_W_grad_normalized, 
+                                    np.zeros((self.p_BiBc_W_grad_normalized.shape[0], n_contact_plane, 3))], axis=-2)
+            self.p_BiBc_W_grad_norm = np.linalg.norm(self.p_BiBc_W_grad, axis=2, keepdims=True)
 
-    def _visualize_single_view(self, ax, i, azim=0):
+            self.p_BiBc_W_grad_all[self.loss_name].append(self.p_BiBc_W_grad)
+            self.p_BiBc_W_grad_norm_all[self.loss_name].append(self.p_BiBc_W_grad_norm)
+            self.p_BiBc_W_grad_normalized_all[self.loss_name].append(self.p_BiBc_W_grad_normalized)
+
+        self.backprop_hit_p_Bc[self.loss_name] = True
+
+    def _plot_geometries(self, ax, i):
         # Plot the sphere
-        x = self.p_As[0][..., 0] + self.p_Ao[i, 0, 0]
-        y = self.p_As[0][..., 1] + self.p_Ao[i, 0, 1]
-        z = self.p_As[0][..., 2] + self.p_Ao[i, 0, 2]
+        x = self.p_As[0][..., 0] + self.p_Ao_all[i, 0, 0]
+        y = self.p_As[0][..., 1] + self.p_Ao_all[i, 0, 1]
+        z = self.p_As[0][..., 2] + self.p_Ao_all[i, 0, 2]
         ax.plot_surface(x, y, z, color='b', alpha=0.2)
 
         # Plot the plane (if the plane origin is not (0,0,0), 
         # the code here and p_AoAs_W calculation in ContactTerms.forward() needs change)
-        x = self.p_As[1][..., 0] + self.p_Bo[i, 0, 0] + self.p_Ao[i, 1, 0]
-        y = self.p_As[1][..., 1] + self.p_Bo[i, 0, 1] + self.p_Ao[i, 1, 1]
-        z = self.p_As[1][..., 2] + self.p_Ao[i, 1, 2]
+        x = self.p_As[1][..., 0] + self.p_Bo_all[i, 0, 0] + self.p_Ao_all[i, 1, 0]
+        y = self.p_As[1][..., 1] + self.p_Bo_all[i, 0, 1] + self.p_Ao_all[i, 1, 1]
+        z = self.p_As[1][..., 2] + self.p_Ao_all[i, 1, 2]
         ax.plot_surface(x, y, z, color='b', alpha=0.2)
         
         # Plot the object
-        x_obj = self.p_Bs[:, i, :, 0] + self.p_Bo[i, 0, 0]
-        y_obj = self.p_Bs[:, i, :, 1] + self.p_Bo[i, 0, 1]
-        z_obj = self.p_Bs[:, i, :, 2] + self.p_Bo[i, 0, 2]
+        x_obj = self.p_Bs_all[i, :, :, 0] + self.p_Bo_all[i, 0, 0]
+        y_obj = self.p_Bs_all[i, :, :, 1] + self.p_Bo_all[i, 0, 1]
+        z_obj = self.p_Bs_all[i, :, :, 2] + self.p_Bo_all[i, 0, 2]
         ax.scatter(x_obj, y_obj, z_obj, color='r', alpha=0.2, s=2)
 
-        # Plot the sphere origin
-        ax.scatter(self.p_Ao[i, 0, 0], self.p_Ao[i, 0, 1], self.p_Ao[i, 0, 2], color='blue', s=10)
-        # Plot the obj origin
-        ax.scatter(self.p_Bo[i, 0, 0], self.p_Bo[i, 0, 1], self.p_Bo[i, 0, 2], color='red', s=10)
-        # Plot the sphere witness contact point
-        ax.scatter(self.p_Ac[i, 0, 0], self.p_Ac[i, 0, 1], self.p_Ac[i, 0, 2], color='blue', marker='x')
-        # Plot the obj witness contact point
-        ax.scatter(self.p_Bc[i, 0, 0], self.p_Bc[i, 0, 1], self.p_Bc[i, 0, 2], color='red', marker='x')
+        x_obj_com = self.p_Bcom_all[i,:,:,0]+ self.p_Bo_all[i, 0, 0]
+        y_obj_com = self.p_Bcom_all[i,:,:,1]+ self.p_Bo_all[i, 0, 1]
+        z_obj_com = self.p_Bcom_all[i,:,:,2]+ self.p_Bo_all[i, 0, 2]
+        ax.scatter(x_obj_com, y_obj_com, z_obj_com, color='r', marker='D', s=10)
 
+        # Plot the sphere origin
+        ax.scatter(self.p_Ao_all[i, 0, 0], self.p_Ao_all[i, 0, 1], self.p_Ao_all[i, 0, 2], color='blue', s=10)
+        # Plot the obj origin
+        ax.scatter(self.p_Bo_all[i, 0, 0], self.p_Bo_all[i, 0, 1], self.p_Bo_all[i, 0, 2], color='red', s=10)
+        # Plot the sphere witness contact point
+        ax.scatter(self.p_Ac_all[i, 0, 0], self.p_Ac_all[i, 0, 1], self.p_Ac_all[i, 0, 2], color='blue', marker='x')
+        # Plot the obj witness contact point
+        ax.scatter(self.p_Bc_all[i, 0, 0], self.p_Bc_all[i, 0, 1], self.p_Bc_all[i, 0, 2], color='red', marker='x')
+
+        return ax
+
+    def _plot_dvs(self, ax, i):
+        # Plot the angular acceleration induced by contact impulses
+        # 1/30 is dt. *5 is only for visualization.
+        ax.quiver(self.p_Bo_all[i, 0, 0], self.p_Bo_all[i, 0, 1], self.p_Bo_all[i, 0, 2],
+                    self.dv_pred_rot_axis_W_all[i, 0] * self.dv_pred_rot_norm_all[i, 0] / 30 * 5, # 30Hz
+                    self.dv_pred_rot_axis_W_all[i, 1] * self.dv_pred_rot_norm_all[i, 0] / 30 * 5,
+                    self.dv_pred_rot_axis_W_all[i, 2] * self.dv_pred_rot_norm_all[i, 0] / 30 * 5, color='blue', label='dv_pred_r')
+        # Plot the normalized value at self.vis_norm scale. 
+        ax.quiver(self.p_Bo_all[i, 0, 0], self.p_Bo_all[i, 0, 1], self.p_Bo_all[i, 0, 2],
+                    self.dv_pred_rot_axis_W_all[i, 0] * self.vis_norm,
+                    self.dv_pred_rot_axis_W_all[i, 1] * self.vis_norm,
+                    self.dv_pred_rot_axis_W_all[i, 2] * self.vis_norm, color='blue', linewidth=0.5)
+        
+        # Plot the linear acceleration induced by contact impulses
+        ax.quiver(self.p_Bo_all[i, 0, 0], self.p_Bo_all[i, 0, 1], self.p_Bo_all[i, 0, 2],
+                  self.dv_pred_trans_axis_W_all[i, 0] * self.dv_pred_trans_norm_all[i, 0] / 30 * 5,
+                  self.dv_pred_trans_axis_W_all[i, 1] * self.dv_pred_trans_norm_all[i, 0] / 30 * 5,
+                  self.dv_pred_trans_axis_W_all[i, 2] * self.dv_pred_trans_norm_all[i, 0] / 30 * 5, color='purple', label='dv_pred_t')
+        ax.quiver(self.p_Bo_all[i, 0, 0], self.p_Bo_all[i, 0, 1], self.p_Bo_all[i, 0, 2],
+                  self.dv_pred_trans_axis_W_all[i, 0] * self.vis_norm,
+                  self.dv_pred_trans_axis_W_all[i, 1] * self.vis_norm,
+                  self.dv_pred_trans_axis_W_all[i, 2] * self.vis_norm, color='purple', linewidth=0.5)
+                  
+        # Plot the angular acceleration observed in data
+        ax.quiver(self.p_Bo_all[i, 0, 0], self.p_Bo_all[i, 0, 1], self.p_Bo_all[i, 0, 2],
+                    self.dv_rot_axis_W_all[i, 0] * self.dv_rot_norm_all[i, 0] / 30 * 5, # 30Hz
+                    self.dv_rot_axis_W_all[i, 1] * self.dv_rot_norm_all[i, 0] / 30 * 5,
+                    self.dv_rot_axis_W_all[i, 2] * self.dv_rot_norm_all[i, 0] / 30 * 5, color='blue', label='dv_r', linestyle=':')
+        ax.quiver(self.p_Bo_all[i, 0, 0], self.p_Bo_all[i, 0, 1], self.p_Bo_all[i, 0, 2],
+                    self.dv_rot_axis_W_all[i, 0] * self.vis_norm,
+                    self.dv_rot_axis_W_all[i, 1] * self.vis_norm,
+                    self.dv_rot_axis_W_all[i, 2] * self.vis_norm, color='blue', linewidth=0.5, linestyle=':')
+        
+        # Plot the linear acceleration observed in data
+        ax.quiver(self.p_Bo_all[i, 0, 0], self.p_Bo_all[i, 0, 1], self.p_Bo_all[i, 0, 2],
+                  self.dv_trans_axis_W_all[i, 0] * self.dv_trans_norm_all[i, 0] / 30 * 5,
+                  self.dv_trans_axis_W_all[i, 1] * self.dv_trans_norm_all[i, 0] / 30 * 5,
+                  self.dv_trans_axis_W_all[i, 2] * self.dv_trans_norm_all[i, 0] / 30 * 5, color='purple', label='dv_t', linestyle=':')
+        ax.quiver(self.p_Bo_all[i, 0, 0], self.p_Bo_all[i, 0, 1], self.p_Bo_all[i, 0, 2],
+                  self.dv_trans_axis_W_all[i, 0] * self.vis_norm,
+                  self.dv_trans_axis_W_all[i, 1] * self.vis_norm,
+                  self.dv_trans_axis_W_all[i, 2] * self.vis_norm, color='purple', linewidth=0.5, linestyle=':')
+        return ax
+
+    def _plot_grad_bsdf_loss(self, ax, i):
+        # Obj surface points affected by bsdf loss
+        x_obj = self.p_BiBs2_W_all[i, :, 0] + self.p_Bo_all[i, 0, 0]
+        y_obj = self.p_BiBs2_W_all[i, :, 1] + self.p_Bo_all[i, 0, 1]
+        z_obj = self.p_BiBs2_W_all[i, :, 2] + self.p_Bo_all[i, 0, 2]
+        ax.scatter(x_obj, y_obj, z_obj, color='cyan', alpha=0.2, s=3)
+        
+        # All obj surface points, used for color normalization
+        x_obj_full = self.p_Bs_all[i, :, :, 0] + self.p_Bo_all[i, 0, 0]
+        y_obj_full = self.p_Bs_all[i, :, :, 1] + self.p_Bo_all[i, 0, 1]
+        z_obj_full = self.p_Bs_all[i, :, :, 2] + self.p_Bo_all[i, 0, 2]
+        
+        color_val_full = x_obj_full + y_obj_full + z_obj_full
+        color_val_max = np.max(color_val_full)
+        color_val_min = np.min(color_val_full)
+
+        color_val = x_obj + y_obj + z_obj
+        color_val = (color_val - color_val_min) / (color_val_max - color_val_min)
+
+        # Plot the gradient descent direction induced by bsdf loss
+        q = ax.quiver(x_obj, y_obj, z_obj,
+                    self.p_BiBs2_W_grad_normalized_all[self.loss_name][i, :, 0], 
+                    self.p_BiBs2_W_grad_normalized_all[self.loss_name][i, :, 1], 
+                    self.p_BiBs2_W_grad_normalized_all[self.loss_name][i, :, 2], 
+                    cmap='plasma', linewidth=0.05)
+                    # color='orange', linewidth=0.05)
+        q.set_array(color_val)
+        
+        q = ax.quiver(x_obj, y_obj, z_obj, 
+                    self.p_BiBs2_W_grad_all[self.loss_name][i, :, 0], 
+                    self.p_BiBs2_W_grad_all[self.loss_name][i, :, 1], 
+                    self.p_BiBs2_W_grad_all[self.loss_name][i, :, 2], 
+                    cmap='plasma', linewidth=0.05, label='grad_bsdf')                    
+                    # color='orange', label='grad_bsdf')
+        q.set_array(color_val)
+        return ax
+
+    def _plot_grad_contact_loss(self, ax, i):
         # Plot the obj query direction
-        # ax.quiver(self.p_Bo[i, 0, 0], self.p_Bo[i, 0, 1], self.p_Bo[i, 0, 2],
+        # ax.quiver(self.p_Bo_all[i, 0, 0], self.p_Bo_all[i, 0, 1], self.p_Bo_all[i, 0, 2],
         #             self.directions_B_W[i, 0, 0], 
         #             self.directions_B_W[i, 0, 1], 
         #             self.directions_B_W[i, 0, 2], color='blue', linewidth=0.5)
-        
-        # Plot the angular acceleration induced by contact impulses
-        # 1/30 is dt. *5 is only for visualization.
-        ax.quiver(self.p_Bo[i, 0, 0], self.p_Bo[i, 0, 1], self.p_Bo[i, 0, 2],
-                    self.dv_pred_rot_axis_W[i, 0] * self.dv_pred_rot_norm[i, 0] / 30 * 5, # 30Hz
-                    self.dv_pred_rot_axis_W[i, 1] * self.dv_pred_rot_norm[i, 0] / 30 * 5,
-                    self.dv_pred_rot_axis_W[i, 2] * self.dv_pred_rot_norm[i, 0] / 30 * 5, color='blue', label='dv_pred_r')
-        # Plot the normalized value at 0.05 scale. 
-        ax.quiver(self.p_Bo[i, 0, 0], self.p_Bo[i, 0, 1], self.p_Bo[i, 0, 2],
-                    self.dv_pred_rot_axis_W[i, 0] * 0.05,
-                    self.dv_pred_rot_axis_W[i, 1] * 0.05,
-                    self.dv_pred_rot_axis_W[i, 2] * 0.05, color='blue', linewidth=0.5)
-        
-        # Plot the linear acceleration induced by contact impulses
-        ax.quiver(self.p_Bo[i, 0, 0], self.p_Bo[i, 0, 1], self.p_Bo[i, 0, 2],
-                  self.dv_pred_trans_axis_W[i, 0] * self.dv_pred_trans_norm[i, 0] / 30 * 5,
-                  self.dv_pred_trans_axis_W[i, 1] * self.dv_pred_trans_norm[i, 0] / 30 * 5,
-                  self.dv_pred_trans_axis_W[i, 2] * self.dv_pred_trans_norm[i, 0] / 30 * 5, color='purple', label='dv_pred_t')
-        ax.quiver(self.p_Bo[i, 0, 0], self.p_Bo[i, 0, 1], self.p_Bo[i, 0, 2],
-                  self.dv_pred_trans_axis_W[i, 0] * 0.05,
-                  self.dv_pred_trans_axis_W[i, 1] * 0.05,
-                  self.dv_pred_trans_axis_W[i, 2] * 0.05, color='purple', linewidth=0.5)
-                  
-        # Plot the angular acceleration observed in data
-        ax.quiver(self.p_Bo[i, 0, 0], self.p_Bo[i, 0, 1], self.p_Bo[i, 0, 2],
-                    self.dv_rot_axis_W[i, 0] * self.dv_rot_norm[i, 0] / 30 * 5, # 30Hz
-                    self.dv_rot_axis_W[i, 1] * self.dv_rot_norm[i, 0] / 30 * 5,
-                    self.dv_rot_axis_W[i, 2] * self.dv_rot_norm[i, 0] / 30 * 5, color='blue', label='dv_r', linestyle=':')
-        ax.quiver(self.p_Bo[i, 0, 0], self.p_Bo[i, 0, 1], self.p_Bo[i, 0, 2],
-                    self.dv_rot_axis_W[i, 0] * 0.05,
-                    self.dv_rot_axis_W[i, 1] * 0.05,
-                    self.dv_rot_axis_W[i, 2] * 0.05, color='blue', linewidth=0.5, linestyle=':')
-        
-        # Plot the linear acceleration observed in data
-        ax.quiver(self.p_Bo[i, 0, 0], self.p_Bo[i, 0, 1], self.p_Bo[i, 0, 2],
-                  self.dv_trans_axis_W[i, 0] * self.dv_trans_norm[i, 0] / 30 * 5,
-                  self.dv_trans_axis_W[i, 1] * self.dv_trans_norm[i, 0] / 30 * 5,
-                  self.dv_trans_axis_W[i, 2] * self.dv_trans_norm[i, 0] / 30 * 5, color='purple', label='dv_t', linestyle=':')
-        ax.quiver(self.p_Bo[i, 0, 0], self.p_Bo[i, 0, 1], self.p_Bo[i, 0, 2],
-                  self.dv_trans_axis_W[i, 0] * 0.05,
-                  self.dv_trans_axis_W[i, 1] * 0.05,
-                  self.dv_trans_axis_W[i, 2] * 0.05, color='purple', linewidth=0.5, linestyle=':')
-        
-        # Plot the gradient descent direction of the obj contact point wrt the object origin in world frame
-        ax.quiver(self.p_Bc[i, :, 0], self.p_Bc[i, :, 1], self.p_Bc[i, :, 2],
-                    self.p_BiBc_W_grad_normalized[i, :, 0], 
-                    self.p_BiBc_W_grad_normalized[i, :, 1], 
-                    self.p_BiBc_W_grad_normalized[i, :, 2], color='red', linewidth=0.5)
-        
-        ax.quiver(self.p_Bc[i, :, 0], self.p_Bc[i, :, 1], self.p_Bc[i, :, 2], 
-                    self.p_BiBc_W_grad[i, :, 0], 
-                    self.p_BiBc_W_grad[i, :, 1], 
-                    self.p_BiBc_W_grad[i, :, 2], color='red', label='gradients')
 
+        # Plot the scatter plot of the contact points
+        ax.scatter(self.p_Bc_all[i, :, 0], self.p_Bc_all[i, :, 1], self.p_Bc_all[i, :, 2], 
+                   color='red', alpha=0.5, s=5, marker='*')
+
+        if self.backprop_hit_p_Bc[self.loss_name]:
+            # Plot the gradient descent direction of the obj contact point wrt the object origin in world frame
+            ax.quiver(self.p_Bc_all[i, :, 0], self.p_Bc_all[i, :, 1], self.p_Bc_all[i, :, 2],
+                        self.p_BiBc_W_grad_normalized_all[self.loss_name][i, :, 0], 
+                        self.p_BiBc_W_grad_normalized_all[self.loss_name][i, :, 1], 
+                        self.p_BiBc_W_grad_normalized_all[self.loss_name][i, :, 2], color='red', linewidth=0.5)
+            
+            ax.quiver(self.p_Bc_all[i, :, 0], self.p_Bc_all[i, :, 1], self.p_Bc_all[i, :, 2], 
+                        self.p_BiBc_W_grad_all[self.loss_name][i, :, 0], 
+                        self.p_BiBc_W_grad_all[self.loss_name][i, :, 1], 
+                        self.p_BiBc_W_grad_all[self.loss_name][i, :, 2], color='red', label='gradients')
+        else:
+            print(f'{self.loss_name=}did not hit p_BiBc_B, skipping plotting.')
+        
+        return ax
+
+    def _plot_impulses(self, ax, i):
         # Plot the impulses estimated in the inner loop convex optimization
-        ax.quiver(self.p_Bc[i, :, 0], self.p_Bc[i, :, 1], self.p_Bc[i, :, 2],
-                    self.impulses_by_contacts_normed[i, :, 0], 
-                    self.impulses_by_contacts_normed[i, :, 1], 
-                    self.impulses_by_contacts_normed[i, :, 2], color='green', linewidth=0.5)
+        ax.quiver(self.p_Bc_all[i, :, 0], self.p_Bc_all[i, :, 1], self.p_Bc_all[i, :, 2],
+                    self.impulses_by_contacts_normed_all[i, :, 0], 
+                    self.impulses_by_contacts_normed_all[i, :, 1], 
+                    self.impulses_by_contacts_normed_all[i, :, 2], color='green', linewidth=0.5)
         
-        ax.quiver(self.p_Bc[i, :, 0], self.p_Bc[i, :, 1], self.p_Bc[i, :, 2], 
-                    self.impulses_by_contacts[i, :, 0], 
-                    self.impulses_by_contacts[i, :, 1], 
-                    self.impulses_by_contacts[i, :, 2], color='green', label='impulses')
+        ax.quiver(self.p_Bc_all[i, :, 0], self.p_Bc_all[i, :, 1], self.p_Bc_all[i, :, 2], 
+                    self.impulses_by_contacts_all[i, :, 0], 
+                    self.impulses_by_contacts_all[i, :, 1], 
+                    self.impulses_by_contacts_all[i, :, 2], color='green', label='impulses')
+        return ax
+
+    def _visualize_single_view(self, ax, i, elev=0, azim=0):
         
-        if azim == 0:
+        ax = self._plot_geometries(ax, i)
+        if self.loss_name == 'bsdf':
+            ax = self._plot_grad_bsdf_loss(ax, i)
+        else:
+            ax = self._plot_dvs(ax, i)
+            ax = self._plot_impulses(ax, i)
+            ax = self._plot_grad_contact_loss(ax, i)
+            if self.loss_name == 'all' and len(self.p_BiBs2_W_all) > 0:
+                ax = self._plot_grad_bsdf_loss(ax, i)
+
+        if azim == 0 and elev == 0:
             ax.legend()
-        ax.view_init(elev=0, azim=azim)
+        ax.view_init(elev=elev, azim=azim)
         ax.set_box_aspect([np.ptp(arr) for arr in \
         [ax.get_xlim(), ax.get_ylim(), ax.get_zlim()]])
         ax.set_xlabel('X-axis')
         ax.set_ylabel('Y-axis')
         ax.set_zlabel('Z-axis')
-        # use :.2e format for array self.p_BiBc_W_grad_norm[i, :, 0] which has multiple elements
-        formatted_grad_array = np.array2string(self.p_BiBc_W_grad_norm[i, :, 0], 
-                                formatter={'float_kind': lambda x: '{:.2e}'.format(x)},
-                                separator=', ')
-
-        formatted_impulses_array = np.array2string(self.impulses_by_contacts_norm[i, :, 0],
-                                                   formatter={'float_kind': lambda x: '{:.2e}'.format(x)},
-                                                   separator=', ')
-        title_text = f'frame {i}, ||grad||: {formatted_grad_array}, \n ||imps||: {formatted_impulses_array}\n' + \
-        f'||dv_pred_r||: {self.dv_pred_rot_norm[i, 0]:.2e}, ||dv_pred_t||: {self.dv_pred_trans_norm[i, 0]:.2e}, ' + \
-        f'||dv_r||: {self.dv_rot_norm[i, 0]:.2e}, ||dv_t||: {self.dv_trans_norm[i, 0]:.2e}'
         
+        if self.loss_name == 'bsdf':
+            grad_mean = np.mean(self.p_BiBs2_W_grad_norm_all[self.loss_name])
+            grad_min = np.min(self.p_BiBs2_W_grad_norm_all[self.loss_name])
+            grad_max = np.max(self.p_BiBs2_W_grad_norm_all[self.loss_name])
+            grad_stats = f'mean: {grad_mean:.1e}, min: {grad_min:.1e}, max: {grad_max:.1e}'
+            title_text = f'frame {i}\n ||grad|| {grad_stats}'
+        else:
+            if self.backprop_hit_p_Bc[self.loss_name]:
+                # use :.1e format for array self.p_BiBc_W_grad_norm[i, :, 0] which has multiple elements
+                formatted_grad_array = np.array2string(self.p_BiBc_W_grad_norm_all[self.loss_name][i, :, 0], 
+                                        formatter={'float_kind': lambda x: '{:.1e}'.format(x)},
+                                        separator=', ')
+            else:
+                formatted_grad_array = 'None'
+
+            formatted_impulses_array = np.array2string(self.impulses_by_contacts_norm_all[i, :, 0],
+                                                    formatter={'float_kind': lambda x: '{:.1e}'.format(x)},
+                                                    separator=', ')
+            title_text = f'frame {i}\n ||grad||: {formatted_grad_array}\n' + \
+            f'||imps||: {formatted_impulses_array}\n' + \
+            f'||dv_pred_r||: {self.dv_pred_rot_norm_all[i, 0]:.1e}, ' + \
+            f'||dv_pred_t||: {self.dv_pred_trans_norm_all[i, 0]:.1e}\n' + \
+            f'||dv_r||: {self.dv_rot_norm_all[i, 0]:.1e}, ' + \
+            f'||dv_t||: {self.dv_trans_norm_all[i, 0]:.1e}'
+        
+            if self.loss_name == 'all' and len(self.p_BiBs2_W_all) > 0:
+                grad_mean = np.mean(self.p_BiBs2_W_grad_norm_all[self.loss_name])
+                grad_min = np.min(self.p_BiBs2_W_grad_norm_all[self.loss_name])
+                grad_max = np.max(self.p_BiBs2_W_grad_norm_all[self.loss_name])
+                grad_stats = f'mean: {grad_mean:.1e}, min: {grad_min:.1e}, max: {grad_max:.1e}'
+                title_text += f'\n ||bsdf_grad|| {grad_stats}'
+
         return title_text
 
-    def _visualize(self):
-        video_output_file = op.join('/mnt/data0/minghz/repos/bundlenets/dair_pll', f'contact_geometry_{self.loss_name}17s0r_{self.epoch:04d}.mp4')
+    def _visualize_single_frame(self, i):
+        fig = plt.figure(figsize=(6, 9))
+        ax = fig.add_subplot(211, projection='3d')
+        self._visualize_single_view(ax, i, azim=0)
+        ax = fig.add_subplot(212, projection='3d')
+        title_text = self._visualize_single_view(ax, i, elev=90)
+        title_text = f'{self.loss_name}, epoch {self.epoch}, {title_text}'
+        fig.suptitle(title_text, fontsize=12)
+        fig.tight_layout()
+        # plt.show(block=False)
+        # plt.pause(0.1)
+        # plt.close(fig)
+        return fig
+
+    def _visualize_all_frames(self):
+        fps_downsample_rate = 3
+        if self.loss_name == 'bsdf':
+            video_output_file = op.join('/mnt/data0/minghz/repos/bundlenets/dair_pll', 
+                    f'contact_geometry_{self.loss_name}_{self.video_name}_{self.epoch:04d}.png')
+            print(f'Saving image to {video_output_file}')
+            fig = self._visualize_single_frame(0)
+            plt.savefig(video_output_file)
+            plt.close(fig)
+            return 
+        
+        video_output_file = op.join('/mnt/data0/minghz/repos/bundlenets/dair_pll', 
+                    f'contact_geometry_{self.loss_name}_{self.video_name}_{self.epoch:04d}.mp4')
         print(f'Saving video to {video_output_file}')
         with TemporaryDirectory(prefix="sdf-slice-") as tmpdir:
             print(f'Storing temporary files at {tmpdir}')
-            for i in tqdm(range(self.p_Ao.shape[0])):
-                fig = plt.figure(figsize=(10, 5))
-                ax = fig.add_subplot(121, projection='3d')
-                self._visualize_single_view(ax, i, azim=0)
-
-                ax = fig.add_subplot(122, projection='3d')
-                title_text = self._visualize_single_view(ax, i, azim=90) # looking from the right
-
-                title_text = f'{self.loss_name}, epoch {self.epoch}, {title_text}'
-                fig.suptitle(title_text)
+            frames_idxs = np.arange(self.p_Ao.shape[0], step=fps_downsample_rate)
+            frame_count = 0
+            for i in tqdm(frames_idxs):
+                fig = self._visualize_single_frame(i)
 
             # plt.show(block=False)
             # breakpoint()
                 if video_output_file is not None:
                     fig.canvas.draw()
                     fig.canvas.flush_events()
-                    plt.savefig(op.join(tmpdir, f'{i:07d}.png'))
+                    plt.savefig(op.join(tmpdir, f'{frame_count:07d}.png'))
+                frame_count += 1
+                plt.close(fig)
 
             if video_output_file is not None:
-                os.system(f'ffmpeg -y -r 30 -i {tmpdir}/%07d.png -vcodec ' + \
+                os.system(f'ffmpeg -y -r {30//fps_downsample_rate} -i {tmpdir}/%07d.png -vcodec ' + \
                         f'libx264 -preset slow -crf 18 {video_output_file}')
                 print(f'Saved slice video to {video_output_file}.')
 
@@ -802,6 +1240,9 @@ class ContactTerms(Module):
                  represent_geometry_as: str = 'box',
                  learnable_body_dict: Dict[str, LearnableBodySettings] = {},
                  vis_hook: HookGradientVisualizer = None,
+                 n_query: Optional[int] = None,
+                 detach_grad_pred_ee: bool = False,
+                 sampling_method: str = 'perturb'
                  ) -> None:
         """Inits :py:class:`ContactTerms` with prescribed kinematics and
         geometries.
@@ -829,7 +1270,8 @@ class ContactTerms(Module):
         geometries, rotations, translations, drake_spatial_jacobians = \
             ContactTerms.extract_geometries_and_kinematics(
                 plant, inspector, geometry_ids, context, represent_geometry_as,
-                learnable_body_dict=learnable_body_dict)
+                learnable_body_dict=learnable_body_dict, 
+                n_query=n_query, sampling_method=sampling_method)
 
         collision_candidates = []
         # If training, only consider collisions between a body with learnable
@@ -887,6 +1329,7 @@ class ContactTerms(Module):
             collision_candidates).t().long()
         
         self.vis_hook = vis_hook
+        self.detach_grad_pred_ee = detach_grad_pred_ee
 
     def get_friction_coefficients(self) -> Tensor:
         """From the stored :py:attr:`friction_param_list`, compute the friction
@@ -900,7 +1343,8 @@ class ContactTerms(Module):
         plant: MultibodyPlant_[Expression], inspector: SceneGraphInspector,
         geometry_ids: List[GeometryId], context: Context,
         represent_geometry_as: str,
-        learnable_body_dict: Dict[str, LearnableBodySettings] = {}
+        learnable_body_dict: Dict[str, LearnableBodySettings] = {},
+        n_query: Optional[int] = None, sampling_method: str = 'perturb'
     ) -> Tuple[List[CollisionGeometry], List[np.ndarray], List[np.ndarray],
                List[np.ndarray]]:
         """Extracts modules and kinematics of list of geometries G.
@@ -956,7 +1400,8 @@ class ContactTerms(Module):
             geometries.append(
                 PydrakeToCollisionGeometryFactory.convert(
                     inspector.GetShape(geometry_id), represent_geometry_as,
-                    learnable_geometry, body.name()))
+                    learnable_geometry, body.name(), n_query=n_query,
+                    sampling_method=sampling_method))
 
         return geometries, rotations, translations, drake_spatial_jacobians
 
@@ -1006,7 +1451,7 @@ class ContactTerms(Module):
             .reshape(friction_jacobian_shape)
         return torch.cat((J_n, J_t), dim=-2)
 
-    def forward(self, q: Tensor
+    def forward(self, q: Tensor, obj_com: Optional[Tensor] = None
                 ) -> Tuple[Tensor, Tensor, Tensor, List, List, List]:
         """Evaluates Lagrangian dynamics terms at given state and input.
 
@@ -1121,13 +1566,19 @@ class ContactTerms(Module):
             p_BiBc_W = pbmm(p_BiBc_B, R_BiW)
             p_WoBc_W = p_BiBc_W + p_WoBo_W[..., [i_pair], :]
             
-            p_BoBs_B = geo_b.get_vertices(directions=np.ones([1,3]),sample_entire_mesh=True) 
+            p_BoBs_B = geo_b.get_vertices(None, sample_surface_points=True) 
+            p_BoBs_B = p_BoBs_B.reshape(1, -1, 3)
             # shape (1, n_samples, 3), where n_samples comes from _GRID in deep_support_functions.py
-            p_BoBs_B = p_BoBs_B.permute(1, 0, 2)[:,None] # shape (n_samples, 1, 1, 3)
-            p_BoBs_W = pbmm(p_BoBs_B, R_BiW[None]) 
-            # p_BoBs_W.shape (n_samples, 1, 1, 3) * (1, batch_size, 3, 3) = (n_samples, batch_size, 1, 3)
+            p_BoBs_B = p_BoBs_B.permute(1, 0, 2)[None] # shape (1, n_samples, 1, 3)
+            p_BoBs_W = pbmm(p_BoBs_B, R_BiW[:,None]) 
+            # p_BoBs_W.shape (1, n_samples, 1, 3) * (batch_size, 1, 3, 3) = (batch_size, n_samples, 1, 3)
             p_BoBs_B = p_BoBs_B.expand_as(p_BoBs_W).detach().numpy()
             p_BoBs_W = p_BoBs_W.detach().numpy()
+
+            # Convert the object CoM to world frame
+            p_BoBcom_B = obj_com.reshape(1,1,1,3)    # 3 -> 1,1,1,3
+            p_BoBcom_W = pbmm(p_BoBcom_B, R_BiW[:,None]) # (batch_size, n_samples=1, 1, 3)
+            p_BoBcom_W = p_BoBcom_W.detach().numpy()
 
             if i_pair == 0:
                 geom_sphere = geometries_a[0]
@@ -1142,9 +1593,9 @@ class ContactTerms(Module):
             elif i_pair == 1:
                 ### Find the xy range of the object B and use it as the plane A's extent for visualization
                 # geom_plane = geometries_a[1]
-                xyz_min = np.min(p_BoBs_W, axis=0) # shape (batch_size, 1, 3)
+                xyz_min = np.min(p_BoBs_W, axis=1) # shape (batch_size, 1, 3)
                 xyz_min = np.min(xyz_min, axis=0)[0] # shape (1, 3)
-                xyz_max = np.max(p_BoBs_W, axis=0) # shape (batch_size, 1, 3)
+                xyz_max = np.max(p_BoBs_W, axis=1) # shape (batch_size, 1, 3)
                 xyz_max = np.max(xyz_max, axis=0)[0] # shape (1, 3)
                 xs = np.linspace(xyz_min[0], xyz_max[0], 10)
                 ys = np.linspace(xyz_min[1], xyz_max[1], 10)
@@ -1152,7 +1603,8 @@ class ContactTerms(Module):
                 zs = np.zeros_like(xs)
                 p_AoAs_W = np.stack([xs, ys, zs], axis=-1) # shape (10, 10, 3)
 
-            self.vis_hook.record_geometries(i_pair, p_WoAo_W, p_WoBo_W, p_WoAc_W, p_WoBc_W, p_AoAs_W, p_BoBs_W, R_BiW)
+            self.vis_hook.record_geometries(i_pair, p_WoAo_W, p_WoBo_W, p_WoAc_W, p_WoBc_W, p_AoAs_W, p_BoBs_W, R_BiW, 
+                                            p_Bcom=p_BoBcom_W)
 
             # contact frame rotation, (*, n_c, 3, 3)
             R_FW = pbmm(R_AiF.transpose(-1, -2), R_AiW.unsqueeze(-3))
@@ -1160,8 +1612,13 @@ class ContactTerms(Module):
             # contact point velocity jacobians, (*, n_c, 3, n_v)
             Jv_v_WAc_W = ContactTerms.assemble_velocity_jacobian(
                 R_AiW.unsqueeze(-3), Jv_V_WAi_W, p_AiAc_A)
-            Jv_v_WBc_W = ContactTerms.assemble_velocity_jacobian(
-                R_BiW.unsqueeze(-3), Jv_V_WBi_W, p_BiBc_B)
+            if i_pair == 0 and self.detach_grad_pred_ee:
+                # ee contact
+                Jv_v_WBc_W = ContactTerms.assemble_velocity_jacobian(
+                    R_BiW.unsqueeze(-3), Jv_V_WBi_W, p_BiBc_B.detach())
+            else:
+                Jv_v_WBc_W = ContactTerms.assemble_velocity_jacobian(
+                    R_BiW.unsqueeze(-3), Jv_V_WBi_W, p_BiBc_B)
             # How to read Jv_v_WAc_W: 
             # J[v: system velocities]_[v_WBc: relative velocity of point Bc wrt point W(world frame origin)]_
             # [W: velocity expressed in world frame]
@@ -1270,6 +1727,9 @@ class MultibodyTerms(Module):
                         f'{body_id}_center_{axis}': value.item()
                         for axis, value in zip(['x', 'y', 'z'], center)
                     })
+                    pcl = trimesh.PointCloud(vertices.detach().numpy())
+                    diameter = pcl.bounding_sphere.primitive.radius * 2
+                    scalars[f'{body_id}_diameter_sphere'] = diameter
                     # if self.pretrained_icnn_weights_filepath is not None:
                     #     print(f'Saving trained weight to ' \
                     #           + f'{self.pretrained_icnn_weights_filepath}')
@@ -1302,8 +1762,10 @@ class MultibodyTerms(Module):
             (\*, n_v) Contact-free acceleration inv(M(q)) * F(q).
         """
         M, non_contact_acceleration = self.lagrangian_terms(q, v, u)
+        obj_idx = self.lagrangian_terms.learnable_body_idx[0]
+        obj_com = self.lagrangian_terms.body_parameters[3*obj_idx+1]
         phi, J, p_BiBc_B, obj_pair_list, R_FW_list, mu_list = \
-            self.contact_terms(q)
+            self.contact_terms(q, obj_com=obj_com)
 
         delassus = pbmm(J, torch.linalg.solve(M, J.transpose(-1, -2)))
         return delassus, M, J, phi, non_contact_acceleration, p_BiBc_B, \
@@ -1316,6 +1778,9 @@ class MultibodyTerms(Module):
                  precomputed_functions: Dict[str, Union[List[str],Callable]]={},
                  export_drake_pytorch_dir: str = None,
                  vis_hook: HookGradientVisualizer = None,
+                 n_query: Optional[int] = None,
+                 detach_grad_pred_ee: bool = False,
+                 sampling_method: str = 'perturb'
                  ) -> None:
         """Inits :py:class:`MultibodyTerms` for system described in URDFs
 
@@ -1375,13 +1840,16 @@ class MultibodyTerms(Module):
         self.vis_hook = vis_hook
 
         # setup parameterization
+        self.contact_terms = ContactTerms(
+            plant_diagram, represent_geometry_as, learnable_body_dict,
+            vis_hook=self.vis_hook, n_query=n_query,
+            detach_grad_pred_ee=detach_grad_pred_ee,
+            sampling_method=sampling_method)
         self.lagrangian_terms = LagrangianTerms(
             plant_diagram, learnable_body_dict,
             precomputed_functions=precomputed_functions,
-            export_drake_pytorch_dir=export_drake_pytorch_dir)
-        self.contact_terms = ContactTerms(
-            plant_diagram, represent_geometry_as, learnable_body_dict,
-            vis_hook=self.vis_hook)
+            export_drake_pytorch_dir=export_drake_pytorch_dir, 
+            contact_terms=self.contact_terms)
         self.geometry_body_assignment = geometry_body_assignment
         self.plant_diagram = plant_diagram
         self.urdfs = urdfs

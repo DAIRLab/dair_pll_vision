@@ -74,10 +74,24 @@ FPS = 30
 
 # TODO currently hard-coded camera pose could eventually be dynamically chosen
 # to fit the actual trajectory.
-SENSOR_RPY = np.array([-np.pi / 2, 0, np.pi / 2])
-SENSOR_POSITION = np.array([2., 0., 0.2])
-SENSOR_POSE = RigidTransform(
-    RollPitchYaw(SENSOR_RPY).ToQuaternion(), SENSOR_POSITION)
+# SENSOR_RPY = np.array([-np.pi / 2, 0, np.pi / 2])
+# SENSOR_POSITION = np.array([2., 0., 0.2])
+# SENSOR_POSE = RigidTransform(
+#     RollPitchYaw(SENSOR_RPY).ToQuaternion(), SENSOR_POSITION)
+SENSOR_POSES = [
+    RigidTransform(
+    RollPitchYaw(np.array([-np.pi / 2, 0, 0])).ToQuaternion(), 
+    np.array([0.4, -1.6, 0.2])), # left view
+    RigidTransform(
+    RollPitchYaw(np.array([-np.pi / 2, 0, np.pi / 2])).ToQuaternion(), 
+    np.array([2., 0., 0.2])), # front view
+    RigidTransform(
+    RollPitchYaw(np.array([0, 0, np.pi / 2])).ToQuaternion(), 
+    np.array([0.4, 0., -1.5])), # bottom view
+    # RigidTransform(
+    # RollPitchYaw(np.array([-np.pi, 0, np.pi / 2])).ToQuaternion(), 
+    # np.array([0.5, 0., 2])),  # top view
+]
 
 MultibodyPlantFloat: TypeAlias = cast(Type, MultibodyPlant_[float])
 MultibodyPlantAutoDiffXd: TypeAlias = cast(Type, MultibodyPlant_[AutoDiffXd])
@@ -324,7 +338,7 @@ class MultibodyPlantDiagram:
         # Add visualizer to diagram if enabled. Sets ``delete_prefix_on_load``
         # to False, in the hopes of saving computation time; may cause
         # re-initialization to produce erroneous visualizations.
-        visualizer = None
+        visualizers = None
         if visualization_file == "meshcat":
             self.meshcat = StartMeshcat()
             ortho_camera = Meshcat.OrthographicCamera()
@@ -336,17 +350,21 @@ class MultibodyPlantDiagram:
             ortho_camera.far = 500
             ortho_camera.zoom = 1
             self.meshcat.SetCamera(ortho_camera)
-            visualizer = MeshcatVisualizer.AddToBuilder(
-                builder, scene_graph, self.meshcat)
+            visualizers = []
+            visualizers.append(MeshcatVisualizer.AddToBuilder(
+                builder, scene_graph, self.meshcat))
 
         elif visualization_file:
-            visualizer = VideoWriter.AddToBuilder(filename=visualization_file,
-                                                  builder=builder,
-                                                  sensor_pose=SENSOR_POSE,
-                                                  fps=FPS,
-                                                  width=VIDEO_PIXELS[1],
-                                                  height=VIDEO_PIXELS[0],
-                                                  fov_y=CAM_FOV)
+            visualizers = []
+            for i, sensor_pose in enumerate(SENSOR_POSES):
+                visualizer = VideoWriter.AddToBuilder(filename=visualization_file.replace('.gif', f'_{i}.gif'),
+                                                    builder=builder,
+                                                    sensor_pose=sensor_pose,
+                                                    fps=FPS,
+                                                    width=VIDEO_PIXELS[1],
+                                                    height=VIDEO_PIXELS[0],
+                                                    fov_y=CAM_FOV)
+                visualizers.append(visualizer)
 
         # Adds ground plane at ``z = 0``
         halfspace_transform = RigidTransform_[float]()
@@ -437,7 +455,7 @@ class MultibodyPlantDiagram:
         self.sim = sim
         self.plant = plant
         self.scene_graph = scene_graph
-        self.visualizer = visualizer
+        self.visualizer = visualizers
         self.space = self.generate_state_space()
 
     def generate_state_space(self) -> state_space.ProductSpace:

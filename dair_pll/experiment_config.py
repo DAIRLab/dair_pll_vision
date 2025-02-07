@@ -30,7 +30,7 @@ class OptimizerConfig:
     """Maximum number of epochs to optimize."""
     patience: int = 30
     """Number of epochs to wait for early stopping."""
-    batch_size: Int = Int(64, log=True)
+    batch_size: Int = Int(200, log=True)
     """Size of batch for an individual gradient step."""
 
 
@@ -64,6 +64,8 @@ class SupervisedLearningExperimentConfig:
     update_geometry_in_videos: bool = False
     """Whether to use learned geometry in rollout videos, primarily for
     debugging purposes."""
+    generate_video_losses_throughout: bool = False
+    """Whether to visualize loss breakdown along the trajectory in W&B videos at every training epoch."""
 
     def __post_init__(self):
         """Method to check validity of parameters."""

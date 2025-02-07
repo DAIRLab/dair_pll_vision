@@ -81,7 +81,7 @@ class TrajectorySliceDataset(Dataset):
 
     def __getitem__(self, idx) -> Tuple[Tensor, Tensor]:
         """Retrieve slice pair at index."""
-        return self.previous_states_slices[idx], self.future_states_slices[idx]
+        return self.previous_states_slices[idx], self.future_states_slices[idx], idx
 
 
 @dataclass

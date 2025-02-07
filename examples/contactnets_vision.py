@@ -13,9 +13,10 @@ from torch import Tensor
 from dair_pll import file_utils
 from dair_pll.data_config import TrajectorySliceConfig
 from dair_pll.vision_config import VisionDataConfig, VisionExperiment, \
-    VisionExperimentConfig, VisionRobotExperiment, VISION_SYSTEMS, \
+    VisionExperimentConfig, VisionRobotExperiment, check_valid_system, \
     VISION_CUBE_SYSTEM, VISION_PRISM_SYSTEM, VISION_TOBLERONE_SYSTEM, \
     VISION_MILK_SYSTEM
+    # VISION_SYSTEMS
 from dair_pll.drake_experiment import DrakeSystemConfig, \
     MultibodyLearnableSystemConfig, MultibodyLosses
 from dair_pll.experiment import default_epoch_callback
@@ -24,6 +25,7 @@ from dair_pll.hyperparameter import Float, Int
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 from dair_pll.multibody_terms import LearnableBodySettings
 from dair_pll.system import System
+from dair_pll.geometry import _DEEP_SUPPORT_DEFAULT_N_QUERY
 
 
 
@@ -56,7 +58,7 @@ T_PREDICTION = 1
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 0.0
 EPOCHS = 200 #500
-PATIENCE = 10 #EPOCHS
+PATIENCE = 100 #EPOCHS
 
 WANDB_PROJECT = 'dair_pll-vision'
 
@@ -142,7 +144,8 @@ def get_storage_names(system: str, start_toss: int, end_toss: int,
 
 def make_urdf_with_bundlesdf_mesh(
         system: str, vision_asset: str, bundlesdf_id: str,
-        cycle_iteration: int, storage_name: str, pll_id: str) -> str:
+        cycle_iteration: int, storage_name: str, pll_id: str,
+        gt_shape: bool) -> str:
     """To use BundleSDF mesh as geometry for comparison, copy the mesh from the
     BundleSDF outputs in the PLL assets directory to the PLL run directory along
     with a URDF template that will reference the mesh.  Returns the path to the
@@ -152,7 +155,7 @@ def make_urdf_with_bundlesdf_mesh(
 
     asset_subdirs = op.join(system, vision_asset)
     bundlesdf_mesh_filepath = file_utils.get_mesh_from_bundlesdf(
-        asset_subdirs, bundlesdf_id, cycle_iteration)
+        asset_subdirs, bundlesdf_id, cycle_iteration, gt_shape)
     urdf_template_filepath = file_utils.get_vision_urdf_template_path()
 
     target_dir = file_utils.run_dir(storage_name, pll_id)
@@ -186,8 +189,18 @@ def main(pll_run_id: str = "",
          is_robot_experiment: bool = False,
          export_drake_pytorch: bool = False, 
          shuffle: bool = False, 
-         vis_gradient: bool = False,
-         force_video_epoch_interval: int = 0):
+         vis_gradient: str = None,
+         force_video_epoch_interval: int = 0,
+         gt_shape: bool = False,
+         fit_shape_only: bool = False,
+         nerf_bundlesdf_id: str = None, 
+         learning_rate: float = LEARNING_RATE,
+         epochs: int = EPOCHS, 
+         overfit_bsdf_init: bool = False,
+         patience: int = PATIENCE,
+         n_query: int = _DEEP_SUPPORT_DEFAULT_N_QUERY,
+         detach_grad_pred_ee: bool = False,
+         sampling_method: str = 'perturb'):
     """Execute ContactNets basic example on a system.
 
     Args:
@@ -258,19 +271,20 @@ def main(pll_run_id: str = "",
     # Next, build the configuration of the learning experiment.
 
     # Describes the optimizer settings; by default, the optimizer is Adam.
-    optimizer_config = OptimizerConfig(lr=Float(LEARNING_RATE),
+    optimizer_config = OptimizerConfig(lr=Float(learning_rate),
                                        wd=Float(WEIGHT_DECAY),
-                                       patience=PATIENCE,
-                                       epochs=EPOCHS)
+                                       patience=patience,
+                                       epochs=epochs,)
+                                    #    optimizer=torch.optim.SGD,)
 
     # Describes the ground truth system; infers everything from the URDFs.
     # This is a configuration for a DrakeSystem, which wraps a Drake simulation
     # for the described URDFs.
     if use_bundlesdf_mesh and tracker != 'tagslam':  # and w_bsdf > 0:
         urdf = make_urdf_with_bundlesdf_mesh(
-            system=system, vision_asset=asset_name, bundlesdf_id=bundlesdf_id,
+            system=system, vision_asset=asset_name, bundlesdf_id=nerf_bundlesdf_id,
             cycle_iteration=cycle_iteration, storage_name=storage_name,
-            pll_id=pll_run_id
+            pll_id=pll_run_id, gt_shape=gt_shape
         )
     else:
         urdf_asset = URDFS[VISION_CUBE_SYSTEM][MESH_TYPE]
@@ -291,16 +305,16 @@ def main(pll_run_id: str = "",
     else:
         precomputed_function_directories = {}
 
-    # Build the learnable body settings dictionary.  Don't learn the mass even
-    # if learning the rest of the inertia.
-    # TODO could reconsider this for robot experiments.
+    # Build the learnable body settings dictionary.  
+    # For tossing experiments, don't learn the mass.
+    # For robot interaction experiments, don't learn the mass or friction.
     learnable_body_dict = {
         'body': LearnableBodySettings(
             inertia_mass=False,
             inertia_com=learn_inertia=='all',
             inertia_moments_products=learn_inertia=='all',
             geometry=True,
-            friction=True
+            friction=False
         )
     }
     # For robot experiments, also enable learning the end effector tip friction
@@ -311,7 +325,7 @@ def main(pll_run_id: str = "",
             inertia_com=False,
             inertia_moments_products=False,
             geometry=False,
-            friction=True
+            friction=False
         )
 
     # Describes the learnable system. The MultibodyLearnableSystem type learns
@@ -329,7 +343,9 @@ def main(pll_run_id: str = "",
         precomputed_function_directories=precomputed_function_directories,
         export_drake_pytorch_dir = DRAKE_PYTORCH_FUNCTION_EXPORT_DIR if \
             export_drake_pytorch else None,
-        vis_gradient=vis_gradient,
+        vis_gradient=vis_gradient, n_query=n_query,
+        detach_grad_pred_ee=detach_grad_pred_ee,
+        sampling_method=sampling_method
     )
 
     # How to slice trajectories into training datapoints.
@@ -355,7 +371,9 @@ def main(pll_run_id: str = "",
         update_dynamically=False,
         asset_subdirectories=op.join(system, asset_name),
         tracker=tracker,
-        bundlesdf_id=bundlesdf_id)
+        bundlesdf_id=bundlesdf_id,
+        nerf_bundlesdf_id=nerf_bundlesdf_id,
+        gt_shape=gt_shape)
 
     # Combines everything into config for entire experiment.
     gen_geom_videos = False if skip_videos in ['all', 'geometry'] else True
@@ -373,7 +391,9 @@ def main(pll_run_id: str = "",
         generate_video_geometries_throughout=gen_geom_videos,
         force_video_epoch_interval=force_video_epoch_interval,
         run_wandb=True,
-        wandb_project=WANDB_PROJECT
+        wandb_project=WANDB_PROJECT,
+        fit_shape_only=fit_shape_only,
+        overfit_bsdf_init=overfit_bsdf_init,
     )
 
     # Makes experiment.
@@ -487,11 +507,47 @@ def main(pll_run_id: str = "",
                  "(set to False when visualizing gradients)")
 @click.option('--deterministic', is_flag=True,
               help="whether to fix the random seeds. ")
-@click.option('--vis-gradient', is_flag=True, help="visualize gradients")
+@click.option('--vis-gradient', type=str, default=None, help="visualize gradients")
 @click.option('--force-video-epoch-interval',
               type=int,
               default=0,
               help="force video generation every n epochs.")
+@click.option('--gt-shape',
+              is_flag=True,
+              help="use gt aligned mesh as bsdf shape prior.")
+@click.option('--fit-shape-only', is_flag=True,
+              help="fit shape only. (pll loss detached from training)")
+@click.option('--nerf-bundlesdf-id',
+              type=str,
+              default=None,
+              help="what BundleSDF run ID associated with pose outputs to use.")
+@click.option('--learning-rate', '-lr',
+                type=float,
+                default=LEARNING_RATE,
+                help="learning rate for the optimizer.")
+@click.option('--epochs', '-e',
+                type=int,
+                default=EPOCHS,
+                help="number of epochs for training.")
+@click.option('--overfit-bsdf-init', '-bsdfinit', is_flag=True,
+                help="overfit bsdf init.")
+@click.option('--patience', '-p',
+                type=int,
+                default=PATIENCE,
+                help="patience for early stopping. Negative value means no early stopping.")
+@click.option('--n-query', '-nq',
+                type=int,
+                default=_DEEP_SUPPORT_DEFAULT_N_QUERY,
+                help="number of queries for ground contact.")
+@click.option('--detach-grad-pred-ee', '-dgpe',
+                is_flag=True,
+                help="detach gradient of prediction loss wrt end effector.")
+@click.option('--sampling-method', '-sm',
+                type=click.Choice(['perturb', 'uniform', 'deterministic']),
+                default='perturb',
+                help="sampling method for ground contact points.")
+@click.option('--remote', is_flag=True,
+                help="whether to run on a remote server, which matters for visualization.")
 
 def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
                  bundlesdf_id: str, contactnets: bool, regenerate: bool,
@@ -499,12 +555,17 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
                  export_drake_pytorch: bool, skip_videos: str, clear_data: bool,
                  w_pred: float, w_comp: float, w_diss: float, w_pen: float,
                  w_bsdf: float, shuffle: bool, deterministic: bool, 
-                 vis_gradient: bool, force_video_epoch_interval: int):
+                 vis_gradient: str, force_video_epoch_interval: int,
+                 gt_shape: bool, fit_shape_only: bool, nerf_bundlesdf_id: str, 
+                 learning_rate: float, epochs: int, overfit_bsdf_init: bool,
+                 patience: int, n_query: int, detach_grad_pred_ee: bool,
+                 sampling_method: str, remote: bool):
     # First decode the system and start/end tosses from the provided asset
     # directory.
     assert '_' in vision_asset, f'Invalid asset directory: {vision_asset}.'
     system = f"vision_{'_'.join(vision_asset.split('_')[:-1])}"
-    assert system in VISION_SYSTEMS, f'Invalid system in {vision_asset=}.'
+    # assert system in VISION_SYSTEMS or 'robot' in system, f'Invalid system in {vision_asset=}.'
+    assert check_valid_system(system), f'Invalid system in {vision_asset=}.'
 
     toss_key = vision_asset.split('_')[-1]
     start_toss = int(toss_key.split('-')[0])
@@ -515,13 +576,33 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
 
     is_robot_experiment = system.startswith('vision_robot')
 
-    if vis_gradient:
+    if nerf_bundlesdf_id is None:
+        nerf_bundlesdf_id = bundlesdf_id
+
+    if vis_gradient is not None:
+        # TODO: vis_gradient as a str is not used in the current implementation
+        # because HookGradientVisualizer._visualize_all_frames() is not called.
+        # But it needs to be not None, otherwise the visualizer will not be run.
         deterministic = True
-        shuffle = False
+        # shuffle = False
 
     if deterministic:
         set_deterministic(seed=42)
 
+    change_display = False
+    if remote and os.environ.get('DISPLAY', '') != ':99':
+        ## Use virtual display to plot faster.
+        # Run Xvfb to create a virtual display.
+        print("Running Xvfb (virtual display) for rendering.")
+        import subprocess
+        xvfb_process = subprocess.Popen(['Xvfb', ':99', '-screen', '0',
+                                                '640x480x24'])
+        print(f"Changing display environment from " + \
+                f"{os.environ['DISPLAY']} variable to :99")
+        old_display = os.environ['DISPLAY']
+        os.environ['DISPLAY'] = ':99'
+        change_display = True
+            
     main(pll_run_id=run_name, system=system, start_toss=start_toss,
          end_toss=end_toss, cycle_iteration=cycle_iteration,
          bundlesdf_id=bundlesdf_id, contactnets=contactnets,
@@ -531,8 +612,23 @@ def main_command(run_name: str, vision_asset: str, cycle_iteration: int,
          w_pen=w_pen, w_bsdf=w_bsdf, is_robot_experiment=is_robot_experiment,
          export_drake_pytorch=export_drake_pytorch, shuffle=shuffle, 
          vis_gradient=vis_gradient, 
-         force_video_epoch_interval=force_video_epoch_interval)
+         force_video_epoch_interval=force_video_epoch_interval,
+         gt_shape=gt_shape, fit_shape_only=fit_shape_only,
+         nerf_bundlesdf_id=nerf_bundlesdf_id, 
+         learning_rate=learning_rate, epochs=epochs,
+         overfit_bsdf_init=overfit_bsdf_init,
+         patience=patience, n_query=n_query,
+         detach_grad_pred_ee=detach_grad_pred_ee,
+         sampling_method=sampling_method)
 
+    
+    if remote and change_display:
+        ## Close the virtual display.
+        print("Closing Xvfb (virtual display).")
+        xvfb_process.kill()
+        os.environ['DISPLAY'] = old_display
+        print(f"Changing display environment from " + \
+                f":99 back to {os.environ['DISPLAY']} variable")
 
 
 if __name__ == '__main__':

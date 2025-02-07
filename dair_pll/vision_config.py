@@ -19,6 +19,10 @@ from torch.utils.data import DataLoader
 from tensordict.tensordict import TensorDictBase
 from matplotlib import pyplot as plt
 import yaml
+import trimesh
+from PIL import Image
+import cv2
+import os
 
 from dair_pll import file_utils, vis_utils
 from dair_pll.data_config import DataConfig
@@ -53,22 +57,42 @@ VISION_CUBE_SYSTEM = 'vision_cube'
 VISION_PRISM_SYSTEM = 'vision_prism'
 VISION_TOBLERONE_SYSTEM = 'vision_toblerone'
 VISION_MILK_SYSTEM = 'vision_milk'
-VISION_SYSTEMS = ['vision_bottle', VISION_CUBE_SYSTEM, 'vision_egg',
-                  'vision_half', VISION_MILK_SYSTEM, 'vision_napkin',
-                  VISION_PRISM_SYSTEM, VISION_TOBLERONE_SYSTEM,
-                  'vision_bakingbox', 'vision_burger', 'vision_cardboard',
-                  'vision_chocolate', 'vision_cream', 'vision_croc',
-                  'vision_crushedcan', 'vision_duck', 'vision_gallon',
-                  'vision_greencan', 'vision_hotdog', 'vision_icetray',
-                  'vision_mug', 'vision_oatly', 'vision_pinkcan',
-                  'vision_stapler', 'vision_styrofoam', 'vision_toothpaste',
-                  'vision_robot_bakingbox_sticky_A', 'vision_robot_bakingbox',
-                  'vision_robot_greencan', 'vision_robot_oatly',
-                  'vision_robot_stapler', 'vision_robot_milk'
-                  ]
+# VISION_SYSTEMS = ['vision_bottle', VISION_CUBE_SYSTEM, 'vision_egg',
+#                   'vision_half', VISION_MILK_SYSTEM, 'vision_napkin',
+#                   VISION_PRISM_SYSTEM, VISION_TOBLERONE_SYSTEM,
+#                   'vision_bakingbox', 'vision_burger', 'vision_cardboard',
+#                   'vision_chocolate', 'vision_cream', 'vision_croc',
+#                   'vision_crushedcan', 'vision_duck', 'vision_gallon',
+#                   'vision_greencan', 'vision_hotdog', 'vision_icetray',
+#                   'vision_mug', 'vision_oatly', 'vision_pinkcan',
+#                   'vision_stapler', 'vision_styrofoam', 'vision_toothpaste',
+#                   'vision_robot_bakingbox_sticky_A', 'vision_robot_bakingbox',
+#                   'vision_robot_greencan', 'vision_robot_oatly',
+#                   'vision_robot_stapler', 'vision_robot_milk', 
+#                   'vision_robotocc_oatly', 'vision_robotocc_milk',
+#                   'vision_robotocc_cardboard', 'vision_robotocc_bakingbox',
+#                   'vision_robotocc_styrofoam', 'vision_robotocc_toblerone',
+#                   'vision_robotocc_eggs'
+#                   ]
+VISION_SYSTEMS = ['bottle', 'cube', 'egg', 'half', 'milk', 'napkin', 'prism', 'toblerone',
+                  'bakingbox', 'burger', 'cardboard', 'chocolate', 'cream',
+                  'croc', 'crushedcan', 'duck', 'gallon', 'greencan',
+                  'hotdog', 'icetray', 'mug', 'oatly', 'pinkcan', 'stapler',
+                  'styrofoam', 'toothpaste']
 
 INVISIBLE_FRANKA_URDF_ASSET = 'franka_without_geom_with_ee.urdf'
 
+def check_valid_system(system: str) -> bool:
+    """Check if a system is valid."""
+    words = system.split('_')
+    for word in words:
+        if 'vision' in word:
+            continue
+        if 'robot' in word:
+            continue
+        if word in VISION_SYSTEMS:
+            return True
+    return False
 
 @dataclass
 class VisionDataConfig(DataConfig):
@@ -88,8 +112,10 @@ class VisionDataConfig(DataConfig):
     asset_subdirectories: str = None
     tracker: str = 'tagslam'
     bundlesdf_id: str = None
+    nerf_bundlesdf_id: str = None
     full_asset_directory_path: str = None
     dataset_size: int = None
+    gt_shape: bool = False
 
     def __post_init__(self):
         """Method to fill in dataset_size based on assets directory."""
@@ -102,13 +128,18 @@ class VisionDataConfig(DataConfig):
             if not self.bundlesdf_id.startswith('bundlesdf_id_'):
                 self.bundlesdf_id = f'bundlesdf_id_{self.bundlesdf_id}'
 
+        if self.nerf_bundlesdf_id is not None:
+            if not self.nerf_bundlesdf_id.startswith('bundlesdf_id_'):
+                self.nerf_bundlesdf_id = f'bundlesdf_id_{self.nerf_bundlesdf_id}'
+
         # Check the asset subdirectories match expectations, e.g.
         # vision_cube/cube_2.
         dirs = self.asset_subdirectories.split('/')
         self.asset_subdirectories = f'{dirs[0]}/{dirs[1]}'
         assert len(dirs) == 2, f'Expected system/dataset, got ' \
             f'{self.asset_subdirectories}'
-        assert dirs[0] in VISION_SYSTEMS, f'Invalid system {dirs[0]}'
+        # assert dirs[0] in VISION_SYSTEMS or 'robot' in dirs[0], f'Invalid system {dirs[0]}'
+        assert check_valid_system(dirs[0]), f'Invalid system {dirs[0]}'
         assert '_'.join(dirs[0].split('_')[1:]) == '_'.join(dirs[1].split('_')[:-1]), \
             f'Invalid/inconsistent system {dirs[0]} or dataset {dirs[1]}.'
 
@@ -230,6 +261,31 @@ class VisionExperimentDataManager(ExperimentDataManager):
         return self._trajectory_sets
 
 
+def get_ids_from_config(config):
+    # Check the asset subdirectories match expectations, e.g.
+    # vision_cube/cube_2.
+    dirs = config.asset_subdirectories.split('/')
+    config.asset_subdirectories = f'{dirs[0]}/{dirs[1]}'
+    assert len(dirs) == 2, f'Expected system/dataset, got ' \
+        f'{config.asset_subdirectories}'
+    # assert dirs[0] in VISION_SYSTEMS or 'robot' in dirs[0], f'Invalid system {dirs[0]}'
+    assert check_valid_system(dirs[0]), f'Invalid system {dirs[0]}'
+    assert '_'.join(dirs[0].split('_')[1:]) == '_'.join(dirs[1].split('_')[:-1]), \
+        f'Invalid/inconsistent system {dirs[0]} or dataset {dirs[1]}.'
+
+    # Set the dataset size based on the number of tosses.
+    tosses = dirs[1].split('_')[-1]
+    if bool(re.match(r'^\d+$', tosses)):
+        first_toss, last_toss = int(tosses), int(tosses)
+    elif bool(re.match(r'^\d+-\d+$', tosses)):
+        first_toss = int(tosses.split('-')[0])
+        last_toss = int(tosses.split('-')[1])
+    else:
+        raise ValueError(f'Invalid dataset {dirs[1]}')
+    dataset_size = last_toss - first_toss + 1
+    
+    object_name = '_'.join(dirs[0].split('_')[1:])
+    return first_toss, last_toss, object_name
 class VisionExperiment(DrakeMultibodyLearnableExperiment):
     """Class for loading and training vision experiments."""
 
@@ -258,6 +314,30 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         # are computed for these systems will be exported.
         self.export_drake_pytorch_dir = \
             config.learnable_config.export_drake_pytorch_dir
+        
+        video_rgb = file_utils.bsdf_track_overlay_video_path(
+            self.config.data_config.asset_subdirectories,
+            self.config.data_config.bundlesdf_id.lstrip('bundlesdf_id_'),
+            self.config.data_config.nerf_bundlesdf_id.lstrip('bundlesdf_id_'),
+            iteration = int(self.config.data_config.tracker.split('_')[-1])
+        )
+        if not op.exists(video_rgb):
+            print(f'No bsdf overlay video found at {video_rgb}.')
+            print('Use the raw input images instead. ')
+            # Align with the bundlesdf frames 
+            first_toss, last_toss, object_name = get_ids_from_config(self.config.data_config)
+            video_rgb = f'/mnt/data0/minghz/repos/bundlenets/data/{object_name}_{first_toss}/rgb'
+
+        self.extract_rgbs(video_rgb)
+
+        self.overfit_bsdf_init = self.config.overfit_bsdf_init
+
+    def extract_rgbs(self, video_rgb: str):
+        frames_rgb = vis_utils.read_video(video_rgb)
+        self.frames_rgb = np.stack(frames_rgb, axis=0)  # (T, H, W, C)
+        self.frames_rgb = self.frames_rgb.transpose(0, 3, 1, 2)[1:]  # (T, C, H, W)
+        # Skip the first frame because the trajectory used in visualization starts from the second frame.
+        # See SupervisedLearningExperiment.trajectory_predict() for details.
 
     def setup_learning_data_manager(self, checkpoint_filename: str
                                     ) -> VisionExperimentDataManager:
@@ -282,8 +362,10 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         return is_resumed, training_state
 
     def vision_loss(
-            self, x_past: Tensor, x_future: Tensor, system: System,
-            keep_batch: bool = False
+            self, x_past: Tensor, x_future: Tensor, 
+            system: System, keep_batch: bool = False, 
+            return_extra_for_hook: bool = False, 
+            epoch: int = None,
     ) -> Tensor:
         """Loss function for vision experiments includes both ContactNets loss
         and an additional loss from BundleSDF's shape supervision."""
@@ -292,19 +374,103 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
                   f' but got {type(system)} instead; skipping and returning 0.')
             return Tensor([0.0])
 
+        overfit_bsdf_stage = self.overfit_bsdf_init and epoch is not None and epoch <= 20
+        w_bsdf = system.w_bsdf
+        if overfit_bsdf_stage:
+            w_bsdf = 0.1
+
         contactnets_loss = self.contactnets_loss(
             x_past, x_future, system, keep_batch)
-        bundlesdf_loss = self.bundlesdf_geometry_loss(system)
+        bundlesdf_loss = self.bundlesdf_geometry_loss(system, w_bsdf, overfit_bsdf_stage)
+
+        system.vis_hook.itemized_back_bsdf(bundlesdf_loss, w_bsdf)
 
         # Combine the two terms.  The ContactNets loss is already scaled by the
         # appropriate weights, so only need to scale the BundleSDF loss.
-        return contactnets_loss + system.w_bsdf * bundlesdf_loss
+        loss_for_hook = contactnets_loss + w_bsdf * bundlesdf_loss
+        if self.config.fit_shape_only or overfit_bsdf_stage:
+            loss_for_training = w_bsdf * bundlesdf_loss
+        else:
+            loss_for_training = contactnets_loss + w_bsdf * bundlesdf_loss
+        
+        if return_extra_for_hook:
+            return loss_for_training, loss_for_hook
+        return loss_for_training
 
-    def bundlesdf_geometry_loss(self, system: System) -> Tensor:
+    def geom_loss_by_mesh_distance(self, deep_support_geom: DeepSupportConvex, system: System, 
+                                   bsdf_samps):
+        """Convert the DSF to a mesh and compute the loss based on the
+        distance of the bsdf sampled points to the mesh."""
+        # First convert the DSF to a mesh.
+        directions = torch.zeros_like(bsdf_samps)
+        vertices_pred = deep_support_geom.get_vertices(directions, sample_entire_mesh=True)
+        mesh_pred = trimesh.Trimesh(vertices=vertices_pred[0].detach().numpy()).convex_hull
+        mesh_pred.process()
+
+        # Find nearest point on the mesh from the bsdf points
+        closest_points, _distances, _triangle_ids = \
+            trimesh.proximity.closest_point(mesh_pred, bsdf_samps)
+        
+        # NOTE: Negative sign here because trimesh uses points inside the mesh
+        # have positive signed distance, which is opposite of our convention.
+        signed_distances = -trimesh.proximity.signed_distance(
+            mesh_pred, bsdf_samps)
+
+        closest_points = torch.tensor(closest_points)
+        signed_distances = torch.tensor(signed_distances)
+        directions_bsdf_to_mesh = closest_points - bsdf_samps
+        bsdf_smaller_mask = signed_distances < 0
+        directions_bsdf_to_mesh[bsdf_smaller_mask] *= -1
+
+        directions_outward_unit = - directions_bsdf_to_mesh / \
+            torch.linalg.norm(directions_bsdf_to_mesh, dim=1).unsqueeze(1)
+        
+        # Requery the directions to make the loss differentiable.
+        pts_pred = deep_support_geom.network(directions_outward_unit)
+        system.vis_hook.record_obj_surface_for_bsdf_loss(pts_pred)
+        pts_pred.register_hook(system.vis_hook.hook_grad_object_bsdf_loss)
+
+        # take the loss as the difference between the points
+        # projected to the query directions
+        loss = ((pts_pred - bsdf_samps) * directions_outward_unit).sum(dim=1).abs()
+        loss = loss.mean()
+        return loss
+
+    def geom_loss_by_support_pairs(self, deep_support_geom, system, 
+                                   bsdf_dirs, bsdf_pts, bsdf_ds):
+        deep_support_network = deep_support_geom.network
+        n_points = bsdf_pts.shape[0]
+        n_random_points = min(1000, n_points)
+        random_indices = torch.randperm(n_points)[:n_random_points]
+        dirs = bsdf_dirs[random_indices]
+        pts = bsdf_pts[random_indices]
+        scalars = bsdf_ds[random_indices]
+
+        # # Compute the loss as absolute value difference on the scalar outputs.
+        # loss = (scalars - deep_support_network.get_output(dirs)).abs()
+
+        # Finally, compute the loss as L1 norm on the point locations.
+        pts_pred = deep_support_network(dirs)
+        system.vis_hook.record_obj_surface_for_bsdf_loss(pts_pred)
+        pts_pred.register_hook(system.vis_hook.hook_grad_object_bsdf_loss)
+        loss = torch.linalg.norm(pts - pts_pred, dim=1) #**2
+        ### This norm is L2, but **2 is needed to make it l2 loss. 
+        ### Without **2, dl/dx_i = (x_i - x_i_pred) / ||x - x_pred||_2, 
+        ### ||dl/dx|| = 1 if we do not consider the loss weight and the 
+        ### averaging over the batch size and the number of points, 
+        ### which is the L1 loss.
+        loss = loss.mean()
+        return loss
+
+    def bundlesdf_geometry_loss(self, system: System, 
+                                w_bsdf: Optional[float] = None, 
+                                overfit_bsdf_stage: bool = False) -> Tensor:
         """Loss function for matching vision-informed geometry estimate from
         BundleSDF."""
+        if w_bsdf is None:
+            w_bsdf = system.w_bsdf
         # First check if this loss can be computed based on BundleSDF inputs.
-        if self.config.data_config.bundlesdf_id is None or system.w_bsdf == 0.0:
+        if self.config.data_config.nerf_bundlesdf_id is None or w_bsdf == 0.0:
             return Tensor([0.0])
 
         # First uncover the deep support convex network.
@@ -318,27 +484,21 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         assert deep_support_geom is not None, f'No DeepSupportConvex found ' + \
             f'in {all_geoms}.'
 
-        deep_support_network = deep_support_geom.network
-
         # Next load a random subset of the BundleSDF data.
-        bsdf_dirs, bsdf_pts, _bsdf_ds = file_utils.get_bundlesdf_geometry_data(
+        bsdf_dirs, bsdf_pts, _bsdf_ds, bsdf_samps = file_utils.get_bundlesdf_geometry_data(
             self.config.data_config.asset_subdirectories,
-            self.config.data_config.bundlesdf_id,
-            iteration = int(self.config.data_config.tracker.split('_')[-1])
+            self.config.data_config.nerf_bundlesdf_id,
+            iteration = int(self.config.data_config.tracker.split('_')[-1]),
+            gt_shape = self.config.data_config.gt_shape, #False
         )
-        n_points = bsdf_pts.shape[0]
-        n_random_points = min(1000, n_points)
-        random_indices = torch.randperm(n_points)[:n_random_points]
-        dirs = bsdf_dirs[random_indices]
-        pts = bsdf_pts[random_indices]
-        # scalars = bsdf_ds[random_indices]
 
-        # # Compute the loss as absolute value difference on the scalar outputs.
-        # loss = (scalars - deep_support_network.get_output(dirs)).abs()
+        if overfit_bsdf_stage:
+            print('Overfitting to the initial bsdf')
+            loss = self.geom_loss_by_support_pairs(deep_support_geom, system,
+                                                    bsdf_dirs, bsdf_pts, _bsdf_ds)
+        else:
+            loss = self.geom_loss_by_mesh_distance(deep_support_geom, system, bsdf_samps)
 
-        # Finally, compute the loss as L1 norm on the point locations.
-        loss = torch.linalg.norm(pts - deep_support_network(dirs), dim=1)
-        loss = loss.mean()
         return loss
 
     def setup_training_no_wandb(self) -> Tuple:
@@ -414,6 +574,7 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         for xy_i in train_dataloader:
             x_i: Tensor = xy_i[0]
             y_i: Tensor = xy_i[1]
+            index_i: Tensor = xy_i[2]
 
             loss_pred, loss_comp, loss_pen, loss_diss, phi, normal_force, dv, v_plus = \
                 learned_system.calculate_contactnets_loss_terms(
@@ -478,31 +639,6 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         dvs_t = torch.linalg.norm(dvs_t, dim=1)
         v_pluses_r = torch.linalg.norm(v_pluses_r, dim=1)
         v_pluses_t = torch.linalg.norm(v_pluses_t, dim=1)
-        
-        def get_ids_from_config(config):
-            # Check the asset subdirectories match expectations, e.g.
-            # vision_cube/cube_2.
-            dirs = config.asset_subdirectories.split('/')
-            config.asset_subdirectories = f'{dirs[0]}/{dirs[1]}'
-            assert len(dirs) == 2, f'Expected system/dataset, got ' \
-                f'{config.asset_subdirectories}'
-            assert dirs[0] in VISION_SYSTEMS, f'Invalid system {dirs[0]}'
-            assert '_'.join(dirs[0].split('_')[1:]) == '_'.join(dirs[1].split('_')[:-1]), \
-                f'Invalid/inconsistent system {dirs[0]} or dataset {dirs[1]}.'
-
-            # Set the dataset size based on the number of tosses.
-            tosses = dirs[1].split('_')[-1]
-            if bool(re.match(r'^\d+$', tosses)):
-                first_toss, last_toss = int(tosses), int(tosses)
-            elif bool(re.match(r'^\d+-\d+$', tosses)):
-                first_toss = int(tosses.split('-')[0])
-                last_toss = int(tosses.split('-')[1])
-            else:
-                raise ValueError(f'Invalid dataset {dirs[1]}')
-            dataset_size = last_toss - first_toss + 1
-            
-            object_name = '_'.join(dirs[0].split('_')[1:])
-            return first_toss, last_toss, object_name
 
         def load_field_from_yaml(object: str, toss_number: int, key: str):
             DATA_GEN_DIR = '/mnt/data0/minghz/repos/bundlenets/cnets-data-generation'
@@ -596,6 +732,297 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         # plt.show()
 
 
+    def loss_over_trajectory_for_wandb(self, epoch: int,
+                                   learned_system: MultibodyLearnableSystem,
+                                   learned_system_summary: SystemSummary,
+                                   generate_loss_video: bool,
+                                   ):
+        # Start computing individual loss components.
+        # First get a batch sized portion of the shuffled training set.
+        train_traj_set, _, _ = \
+            self.learning_data_manager.get_updated_trajectory_sets()
+        train_dataloader = DataLoader(
+            train_traj_set.slices,
+            batch_size=self.config.optimizer_config.batch_size.value,
+            shuffle=False)
+
+        # Calculate the average loss components.
+        losses_pred, losses_comp, losses_pen, losses_diss = [], [], [], []
+        losses_bsdf = []
+        losses_total = []
+        phis = []
+        normal_forces = []
+        dvs = []
+        v_pluses = []
+        for xy_i in train_dataloader:
+            x_i: Tensor = xy_i[0]
+            y_i: Tensor = xy_i[1]
+            index_i: Tensor = xy_i[2]
+
+            loss_pred, loss_comp, loss_pen, loss_diss, phi, normal_force, dv, v_plus = \
+                learned_system.calculate_contactnets_loss_terms(
+                    **self.get_loss_args(x_i, y_i, learned_system),
+                    return_type=ContactNetsLossReturnType.LOSS_AND_PHIS)
+            loss_bsdf = self.bundlesdf_geometry_loss(learned_system)
+            if loss_bsdf.ndim == 0:
+                loss_bsdf = loss_bsdf.unsqueeze(0)
+            loss_bsdf = loss_bsdf.expand_as(loss_pred)
+
+            losses_pred.append(loss_pred.clone().detach())
+            losses_comp.append(loss_comp.clone().detach())
+            losses_pen.append(loss_pen.clone().detach())
+            losses_diss.append(loss_diss.clone().detach())
+            losses_bsdf.append(loss_bsdf.clone().detach())
+            phis.append(phi.clone().detach())
+            normal_forces.append(normal_force.clone().detach())
+            dvs.append(dv.clone().detach())
+            v_pluses.append(v_plus.clone().detach())
+            # breakpoint()
+
+        def really_weird_fix_for_cluster_only(list_of_tensors):
+            """For some reason, on the cluster only, the last item in the loss
+            lists can be a different shape than the rest of the items, and this
+            results in an error with the ``sum(losses_pred)`` below.  For now,
+            the fix (hack) is to just drop that last term.
+
+            TODO:  Figure out what is going on.
+            Minghan: Just because the last batch size is smaller due to that 
+            the total number of trajectories is not divisible by batch size?
+            """
+            if (len(list_of_tensors) > 1) and \
+               (list_of_tensors[-1].shape != list_of_tensors[0].shape):
+                    return list_of_tensors[:-1]
+            return list_of_tensors
+
+        # losses_pred = really_weird_fix_for_cluster_only(losses_pred)
+        # losses_comp = really_weird_fix_for_cluster_only(losses_comp)
+        # losses_pen = really_weird_fix_for_cluster_only(losses_pen)
+        # losses_diss = really_weird_fix_for_cluster_only(losses_diss)
+        # losses_bsdf = really_weird_fix_for_cluster_only(losses_bsdf)
+        # phis = really_weird_fix_for_cluster_only(phis)
+        # normal_forces = really_weird_fix_for_cluster_only(normal_forces)
+        # dvs = really_weird_fix_for_cluster_only(dvs)
+        # v_pluses = really_weird_fix_for_cluster_only(v_pluses)
+
+        # Calculate average and scale by hyperparameter weights.
+        w_pred = learned_system.w_pred
+        w_comp = learned_system.w_comp
+        w_diss = learned_system.w_diss
+        w_pen = learned_system.w_pen
+        w_bsdf = learned_system.w_bsdf
+
+        losses_pred = torch.cat(losses_pred)
+        losses_comp = torch.cat(losses_comp)
+        losses_pen = torch.cat(losses_pen)
+        losses_diss = torch.cat(losses_diss)
+        losses_bsdf = torch.cat(losses_bsdf)
+
+        # Calculate the average loss over the trajectory.
+        loss_pred_avg = losses_pred.mean()
+        loss_comp_avg = losses_comp.mean()
+        loss_pen_avg = losses_pen.mean()
+        loss_diss_avg = losses_diss.mean()
+        loss_bsdf_avg = losses_bsdf.mean()
+
+        losses_pred_w = losses_pred * w_pred
+        losses_comp_w = losses_comp * w_comp
+        losses_pen_w = losses_pen * w_pen
+        losses_diss_w = losses_diss * w_diss
+        losses_bsdf_w = losses_bsdf * w_bsdf
+        losses_total = losses_pred_w + losses_comp_w + losses_pen_w + losses_diss_w + losses_bsdf_w
+
+        loss_total_avg = losses_total.mean()
+
+        loss_breakdown = {'loss_total': loss_total_avg,
+                          'loss_pred': loss_pred_avg,
+                          'loss_comp': loss_comp_avg,
+                          'loss_pen': loss_pen_avg,
+                          'loss_diss': loss_diss_avg,
+                          'loss_bsdf': loss_bsdf_avg,
+                          'loss_pred_w': losses_pred_w.mean(),
+                          'loss_comp_w': losses_comp_w.mean(),
+                          'loss_pen_w': losses_pen_w.mean(),
+                          'loss_diss_w': losses_diss_w.mean(),
+                          'loss_bsdf_w': losses_bsdf_w.mean(),}
+        
+        if not generate_loss_video:
+            return loss_breakdown
+        
+        phis = torch.cat(phis)
+        normal_forces = torch.cat(normal_forces)
+        dvs = torch.cat(dvs)
+        v_pluses = torch.cat(v_pluses)
+        
+        dvs_r = dvs[:, :3]
+        dvs_t = dvs[:, 3:]
+        v_pluses_r = v_pluses[:, :3]
+        v_pluses_t = v_pluses[:, 3:]
+
+        dvs_r = torch.linalg.norm(dvs_r, dim=1)
+        dvs_t = torch.linalg.norm(dvs_t, dim=1)
+        v_pluses_r = torch.linalg.norm(v_pluses_r, dim=1)
+        v_pluses_t = torch.linalg.norm(v_pluses_t, dim=1)
+
+        # avg_loss_pred = w_pred*cast(Tensor, sum(losses_pred) \
+        #                     / len(losses_pred)).mean()
+        # avg_loss_comp = w_comp*cast(Tensor, sum(losses_comp) \
+        #                     / len(losses_comp)).mean()
+        # avg_loss_pen = w_pen*cast(Tensor, sum(losses_pen) \
+        #                     / len(losses_pen)).mean()
+        # avg_loss_diss = w_diss*cast(Tensor, sum(losses_diss) \
+        #                     / len(losses_diss)).mean()
+        # avg_loss_bsdf = w_bsdf*cast(Tensor, sum(losses_bsdf) \
+        #                     / len(losses_bsdf)).mean()
+
+        # avg_loss_total = torch.sum(avg_loss_pred + avg_loss_comp + \
+        #                            avg_loss_pen + avg_loss_diss + avg_loss_bsdf)
+
+        def get_ids_from_config(config):
+            # Check the asset subdirectories match expectations, e.g.
+            # vision_cube/cube_2.
+            dirs = config.asset_subdirectories.split('/')
+            config.asset_subdirectories = f'{dirs[0]}/{dirs[1]}'
+            assert len(dirs) == 2, f'Expected system/dataset, got ' \
+                f'{config.asset_subdirectories}'
+            # assert dirs[0] in VISION_SYSTEMS or 'robot' in dirs[0], f'Invalid system {dirs[0]}'
+            assert check_valid_system(dirs[0]), f'Invalid system {dirs[0]}'
+            assert '_'.join(dirs[0].split('_')[1:]) == '_'.join(dirs[1].split('_')[:-1]), \
+                f'Invalid/inconsistent system {dirs[0]} or dataset {dirs[1]}.'
+
+            # Set the dataset size based on the number of tosses.
+            tosses = dirs[1].split('_')[-1]
+            if bool(re.match(r'^\d+$', tosses)):
+                first_toss, last_toss = int(tosses), int(tosses)
+            elif bool(re.match(r'^\d+-\d+$', tosses)):
+                first_toss = int(tosses.split('-')[0])
+                last_toss = int(tosses.split('-')[1])
+            else:
+                raise ValueError(f'Invalid dataset {dirs[1]}')
+            dataset_size = last_toss - first_toss + 1
+            
+            object_name = '_'.join(dirs[0].split('_')[1:])
+            return first_toss, last_toss, object_name
+
+        def load_field_from_yaml(object: str, toss_number: int, key: str):
+            DATA_GEN_DIR = '/mnt/data0/minghz/repos/bundlenets/cnets-data-generation'
+            PROCESSING_YAML_FILE = op.join(DATA_GEN_DIR, 'assets', 'config.yaml')
+
+            # Get the exact value reported in the configuration file.
+            with open(PROCESSING_YAML_FILE, 'r') as f:
+                data = yaml.safe_load(f)
+
+            # Handle some special cases for robot experiments.  These do not have
+            # associated frames listed since the entire trajectory is eligible for PLL.
+            # Thus, return 1 for start_frame queries, -1 for end_frame, and 0 for
+            # start_adjust.
+            if (object not in data['tosses'] or key not in data['tosses'][object]) and \
+                object.startswith('robot'):
+                if key == 'start_frame':
+                    return 1
+                if key == 'end_frame':
+                    return -1
+                if key == 'start_adjust':
+                    return 0
+
+            all_tosses = data['tosses'][object]
+            # find the item with specific toss number
+            toss_data = None
+            for toss in all_tosses:
+                if toss['toss'] == toss_number:
+                    toss_data = toss
+                    break
+            return toss_data[key]
+
+        # Align with the bundlesdf frames 
+        first_toss, last_toss, object_name = get_ids_from_config(self.config.data_config)
+        
+        if first_toss == last_toss:
+            relative_start_frame = load_field_from_yaml(
+                object_name, first_toss, 'start_frame')
+            
+        x_in_video = relative_start_frame + \
+            torch.arange(len(losses_pred))
+        
+        x_in_video = x_in_video.cpu().numpy()
+        phis = phis.cpu().numpy()
+        normal_forces = normal_forces.cpu().numpy()
+        dvs_r = dvs_r.cpu().numpy()
+        dvs_t = dvs_t.cpu().numpy()
+        v_pluses_r = v_pluses_r.cpu().numpy()
+        v_pluses_t = v_pluses_t.cpu().numpy()
+        losses_pred_w = losses_pred_w.cpu().numpy()
+        losses_comp_w = losses_comp_w.cpu().numpy()
+        losses_pen_w = losses_pen_w.cpu().numpy()
+        losses_diss_w = losses_diss_w.cpu().numpy()
+        losses_bsdf_w = losses_bsdf_w.cpu().numpy()
+
+        losses_pred = losses_pred.cpu().numpy()
+        losses_comp = losses_comp.cpu().numpy()
+        losses_pen = losses_pen.cpu().numpy()
+        losses_diss = losses_diss.cpu().numpy()
+        losses_bsdf = losses_bsdf.cpu().numpy()
+        losses_total = losses_total.cpu().numpy()
+
+        data_phis_ee = dict(x=x_in_video, phis_ee=phis)
+        data_normal_forces_ee = dict(x=x_in_video, normal_forces_ee=normal_forces)
+        data_vs = dict(x=x_in_video, \
+                        v_plus_r=v_pluses_r, v_plus_t=v_pluses_t) #, dv_r=dvs_r, dv_t=dvs_t
+        data_losses = dict(x=x_in_video, losses_pred=losses_pred, \
+                           losses_comp=losses_comp, losses_pen=losses_pen, \
+                            losses_diss=losses_diss, losses_bsdf=losses_bsdf)
+        data_losses_w = dict(x=x_in_video, loss_pred_w=losses_pred_w, \
+                             loss_comp_w=losses_comp_w, loss_pen_w=losses_pen_w, \
+                                loss_diss_w=losses_diss_w, loss_bsdf_w=losses_bsdf_w, \
+                                    loss_total=losses_total)
+
+        storage_name = file_utils.get_loss_traj_dir(self.config.storage, self.config.run_name)
+        # # Save the losses to npz file.
+        # print(f'Saving losses to {storage_name}')
+        # np.savez(
+        #     op.join(storage_name, f'phis_curve_{epoch:03d}.npz'),
+        #     **data_phis
+        # )
+        # np.savez(
+        #     op.join(storage_name, f'normalfs_curve_{epoch:03d}.npz'),
+        #     **data_normal_forces
+        # )
+        # np.savez(
+        #     op.join(storage_name, f'vs_curve_{epoch:03d}.npz'),
+        #     **data_dvs
+        # )
+        # np.savez(
+        #     op.join(storage_name, f'losses_w_curve_{epoch:03d}.npz'),
+        #     **data_losses_w
+        # )
+        # np.savez(
+        #     op.join(storage_name, f'losses_curve_{epoch:03d}.npz'),
+        #     **data_losses
+        # )
+        
+        # video_drake = learned_system_summary.videos['train_input_trajectory_0'][0] # 0 is video, 1 is framerate
+        video_drake = file_utils.get_trajectory_video_filename(self.config.storage, self.config.run_name)
+        video_drake = video_drake.replace('.gif', '_0.gif')
+        video_drake = video_drake
+
+        video_rgb_folder = file_utils.bsdf_track_overlay_video_path(
+                                                self.config.data_config.asset_subdirectories,
+                                                self.config.data_config.bundlesdf_id.lstrip('bundlesdf_id_'),
+                                                self.config.data_config.nerf_bundlesdf_id.lstrip('bundlesdf_id_'),
+                                                iteration = int(self.config.data_config.tracker.split('_')[-1])
+                                                )
+        if not op.exists(video_rgb_folder):
+            print(f'No bsdf overlay video folder found at {video_rgb_folder}.')
+            print('Use the raw input images instead. ')
+            video_rgb_folder = f'/mnt/data0/minghz/repos/bundlenets/data/{object_name}_{first_toss}/rgb'
+
+        data_list = [data_losses_w, data_phis_ee, data_normal_forces_ee, data_vs]
+        title_list = ['losses_w', 'phis_ee', 'normal_forces_ee', 'vs']
+        output_path = op.join(storage_name, f'synced_losses_{epoch:03d}.mp4')
+        vis_utils.sync_video_and_plots(video_rgb_folder, video_drake, 
+                                       data_list, title_list, output_path, learned_system)
+
+        return loss_breakdown
+
     def write_to_wandb(self, epoch: int,
                        learned_system: MultibodyLearnableSystem,
                        statistics: Dict) -> None:
@@ -619,88 +1046,26 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         # and best epoch, the last of which is implemented in
         # :meth:`_evaluation`.
         force_generate_videos = True if \
-            epoch % self.config.force_video_epoch_interval == 0 else False
+            epoch == 0 or epoch == 20 or epoch == 120 or epoch == 200 else False
+            # epoch == 0 or (self.config.force_video_epoch_interval > 0 and \
+            #     epoch % self.config.force_video_epoch_interval == 0) else False
 
         epoch_vars, learned_system_summary = \
             self.build_epoch_vars_and_system_summary(
                 statistics, learned_system,
-                force_generate_videos=force_generate_videos
+                force_generate_videos=force_generate_videos,
+                epoch=epoch
             )
-
-        # Start computing individual loss components.
-        # First get a batch sized portion of the shuffled training set.
-        train_traj_set, _, _ = \
-            self.learning_data_manager.get_updated_trajectory_sets()
-        train_dataloader = DataLoader(
-            train_traj_set.slices,
-            batch_size=self.config.optimizer_config.batch_size.value,
-            shuffle=True)
-
-        # Calculate the average loss components.
-        losses_pred, losses_comp, losses_pen, losses_diss = [], [], [], []
-        losses_bsdf = []
-        for xy_i in train_dataloader:
-            x_i: Tensor = xy_i[0]
-            y_i: Tensor = xy_i[1]
-
-            loss_pred, loss_comp, loss_pen, loss_diss = \
-                learned_system.calculate_contactnets_loss_terms(
-                    **self.get_loss_args(x_i, y_i, learned_system))
-            loss_bsdf = self.bundlesdf_geometry_loss(learned_system)
-
-            losses_pred.append(loss_pred.clone().detach())
-            losses_comp.append(loss_comp.clone().detach())
-            losses_pen.append(loss_pen.clone().detach())
-            losses_diss.append(loss_diss.clone().detach())
-            losses_bsdf.append(loss_bsdf.clone().detach())
-
-        def really_weird_fix_for_cluster_only(list_of_tensors):
-            """For some reason, on the cluster only, the last item in the loss
-            lists can be a different shape than the rest of the items, and this
-            results in an error with the ``sum(losses_pred)`` below.  For now,
-            the fix (hack) is to just drop that last term.
-
-            TODO:  Figure out what is going on.
-            """
-            if (len(list_of_tensors) > 1) and \
-               (list_of_tensors[-1].shape != list_of_tensors[0].shape):
-                    return list_of_tensors[:-1]
-            return list_of_tensors
-
-        losses_pred = really_weird_fix_for_cluster_only(losses_pred)
-        losses_comp = really_weird_fix_for_cluster_only(losses_comp)
-        losses_pen = really_weird_fix_for_cluster_only(losses_pen)
-        losses_diss = really_weird_fix_for_cluster_only(losses_diss)
-        losses_bsdf = really_weird_fix_for_cluster_only(losses_bsdf)
-
-        # Calculate average and scale by hyperparameter weights.
-        w_pred = learned_system.w_pred
-        w_comp = learned_system.w_comp
-        w_diss = learned_system.w_diss
-        w_pen = learned_system.w_pen
-        w_bsdf = learned_system.w_bsdf
-
-        avg_loss_pred = w_pred*cast(Tensor, sum(losses_pred) \
-                            / len(losses_pred)).mean()
-        avg_loss_comp = w_comp*cast(Tensor, sum(losses_comp) \
-                            / len(losses_comp)).mean()
-        avg_loss_pen = w_pen*cast(Tensor, sum(losses_pen) \
-                            / len(losses_pen)).mean()
-        avg_loss_diss = w_diss*cast(Tensor, sum(losses_diss) \
-                            / len(losses_diss)).mean()
-        avg_loss_bsdf = w_bsdf*cast(Tensor, sum(losses_bsdf) \
-                            / len(losses_bsdf)).mean()
-
-        avg_loss_total = torch.sum(avg_loss_pred + avg_loss_comp + \
-                                   avg_loss_pen + avg_loss_diss + avg_loss_bsdf)
-
-        loss_breakdown = {'loss_total': avg_loss_total,
-                          'loss_pred': avg_loss_pred,
-                          'loss_comp': avg_loss_comp,
-                          'loss_pen': avg_loss_pen,
-                          'loss_diss': avg_loss_diss,
-                          'loss_bsdf': avg_loss_bsdf}
-
+        
+        generate_loss_video = force_generate_videos or \
+            self.config.generate_video_losses_throughout
+        # generate_loss_video = False
+            
+        loss_breakdown = self.loss_over_trajectory_for_wandb(epoch,
+                                   learned_system,
+                                   learned_system_summary,
+                                   generate_loss_video)
+        
         # Include the loss components into system summary.
         epoch_vars.update(loss_breakdown)
 
@@ -712,6 +1077,50 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
                                   learned_system_summary.videos,
                                   learned_system_summary.meshes)
 
+    def _evaluation(self, learned_system: System, training_state: TrainingState) -> StatisticsDict:
+        r"""Evaluate both oracle and learned system on training, validation,
+        and testing data, and saves results to disk.
+
+        Implemented as a wrapper for :meth:`evaluate_systems_on_sets`.
+
+        Args:
+            learned_system: Trained system.
+
+        Returns:
+            Statistics dictionary.
+
+        Warnings:
+            Currently assumes prediction horizon of 1.
+        """
+        assert self.learning_data_manager is not None
+        sets = dict(
+            zip(ALL_SETS,
+                self.learning_data_manager.get_updated_trajectory_sets()))
+        systems = {
+            ORACLE_SYSTEM_NAME: self.get_oracle_system(),
+            LEARNED_SYSTEM_NAME: learned_system
+        }
+
+        evaluation = self.evaluate_systems_on_sets(systems, sets)
+        file_utils.save_evaluation(self.config.storage, self.config.run_name,
+                                   evaluation)
+
+        # Generate final toss/geometry inspection videos with best parameters.
+        comparison_summary = self.base_and_learned_comparison_summary(
+            evaluation, learned_system, force_generate_videos=True, 
+            epoch=training_state.epoch_best)
+            
+        ### This is the part to generate the loss curve over the trajectory, which
+        ### is not in SupervisedLearningExperiment._evaluation() in experiment.py
+        loss_breakdown = self.loss_over_trajectory_for_wandb(training_state.epoch_best,
+                                   learned_system,
+                                   comparison_summary,
+                                   True)
+        
+        self.wandb_manager.update(int(training_state.epoch), {}, comparison_summary.videos, {})
+
+        return evaluation
+    
     def get_true_geometry_multibody_learnable_system(
             self) -> MultibodyLearnableSystem:
         """Overwritten for vision experiments to use any specified pre-computed
@@ -769,7 +1178,10 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
                     self.config.learnable_config.learnable_body_dict,
                 represent_geometry_as = represent_geometry_as,
                 precomputed_functions=self.precomputed_functions,
-                export_drake_pytorch_dir=self.export_drake_pytorch_dir)
+                export_drake_pytorch_dir=self.export_drake_pytorch_dir,
+                n_query=self.config.learnable_config.n_query,
+                detach_grad_pred_ee=self.config.learnable_config.detach_grad_pred_ee,
+                sampling_method=self.config.learnable_config.sampling_method,)
 
         return self.true_geom_multibody_system
 
@@ -796,7 +1208,10 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
                 learnable_config.pretrained_icnn_weights_filepath,
             precomputed_functions=self.precomputed_functions,
             export_drake_pytorch_dir = self.export_drake_pytorch_dir, 
-            vis_gradient=learnable_config.vis_gradient)
+            vis_gradient=learnable_config.vis_gradient,
+            n_query=learnable_config.n_query,
+            detach_grad_pred_ee=learnable_config.detach_grad_pred_ee,
+            sampling_method=learnable_config.sampling_method,)
 
 
 class VisionRobotExperiment(VisionExperiment):
@@ -862,7 +1277,7 @@ class VisionRobotExperiment(VisionExperiment):
                 # the same loss metric but for the other sets (val/test).
                 if set_name != TRAIN_SET:
                     model_loss_list = []
-                    for batch_x, batch_y in slices_loader:
+                    for batch_x, batch_y, batch_i in slices_loader:
                         model_loss_list.append(
                             self.loss_callback(batch_x, batch_y, system, True))
                     model_loss = torch.cat(model_loss_list)
@@ -923,7 +1338,8 @@ class VisionRobotExperiment(VisionExperiment):
 
     def base_and_learned_comparison_summary(
             self, statistics: Dict, learned_system: System,
-            force_generate_videos: bool = False) -> SystemSummary:
+            force_generate_videos: bool = False,
+            epoch: Optional[int] = None) -> SystemSummary:
         r"""Extracts a :py:class:`~dair_pll.system.SystemSummary` that compares
         the base system to the learned system.
 
@@ -956,7 +1372,7 @@ class VisionRobotExperiment(VisionExperiment):
         # Include all of the base and learned comparison videos from the parent
         # class.
         summary = super().base_and_learned_comparison_summary(
-            statistics, learned_system, force_generate_videos)
+            statistics, learned_system, force_generate_videos, epoch)
 
         # Add an input visualization to see the trajectory with the robot.
         visualization_system = self.get_visualization_system(learned_system)
@@ -977,6 +1393,12 @@ class VisionRobotExperiment(VisionExperiment):
 
                 video, framerate = vis_utils.visualize_trajectory(
                     visualization_system, visualization_trajectory)
+                # Concatenate trajectory visualization with RGB video.
+                video = np.concatenate((self.frames_rgb[None], video ), axis=-1) # (1, T, C, H, W)
+                # reduce the size of the video to half resolution and timestep
+                video = video[:, ::2, :, ::2, ::2]  # Reduce resolution by half
+                # attach the epoch text to the top-left corner of the video
+                video = vis_utils.add_text_to_video(video, f'Epoch {epoch}', position=(10, 10))
                 videos[f'{set_name}_input_trajectory_{traj_num}'] = \
                     (video, framerate)
 
@@ -986,7 +1408,8 @@ class VisionRobotExperiment(VisionExperiment):
         return summary
 
     def build_epoch_vars_and_system_summary(self, statistics: Dict,
-            learned_system: System, force_generate_videos: bool = False
+            learned_system: System, force_generate_videos: bool = False,
+            epoch: Optional[int] = None
         ) -> Tuple[Dict, SystemSummary]:
         """Build epoch variables and system summary for learning process.
 
@@ -1012,13 +1435,17 @@ class VisionRobotExperiment(VisionExperiment):
                 if var_key in statistics:
                     epoch_vars[f'{stats_set}_{variable}'] = statistics[var_key]
 
-        learned_system_summary = learned_system.summary(statistics)
+        # MultiBodyLearnableSystem has a summary method that calls
+        # MultiBodyTerms.scalars_and_meshes(), which records the learned
+        # diameter, center, and inertial properties.
+        learned_system_summary = learned_system.summary(statistics) 
 
         # Include comparison summary, which should only create the geometry
         # inspection video since no predictions to visualize.
         comparison_summary = self.base_and_learned_comparison_summary(
             statistics, learned_system,
-            force_generate_videos=force_generate_videos)
+            force_generate_videos=force_generate_videos, 
+            epoch=epoch)
 
         epoch_vars.update(learned_system_summary.scalars)
         logging_duration = time.time() - start_log_time

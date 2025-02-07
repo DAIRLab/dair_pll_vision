@@ -28,9 +28,9 @@ from dair_pll.file_utils import EXPORT_POINTS_DEFAULT_NAME, \
 from dair_pll.multibody_learnable_system import MultibodyLearnableSystem
 
 
-TEST_RUN_NAME = 'pll_id_00-cvwo-occleft' #'pll_id_00-cvwo'#'pll_id_00' #'pll_id_p15'  #'test_004'
-SYSTEM_NAME = 'vision_bakingbox' #'vision_gallon' #'vision_bakingbox'#'vision_gallon'#'vision_bakingbox' #'vision_cube'  #'bundlesdf_cube'
-ASSET_NAME = 'bakingbox_2' #'gallon_5'#'bakingbox_1'#'gallon_5'#'bakingbox_1-2' #'cube_1'  #'cube_2'
+TEST_RUN_NAME = 'pll_id_t01_mu-19_milk_1' #'pll_id_00-cvwo-occleft' #'pll_id_00-cvwo'#'pll_id_00' #'pll_id_p15'  #'test_004'
+SYSTEM_NAME = 'vision_robot_milk' #'vision_bakingbox' #'vision_gallon' #'vision_bakingbox'#'vision_gallon'#'vision_bakingbox' #'vision_cube'  #'bundlesdf_cube'
+ASSET_NAME = 'robot_milk_1' #'bakingbox_2' #'gallon_5'#'bakingbox_1'#'gallon_5'#'bakingbox_1-2' #'cube_1'  #'cube_2'
 STORAGE_NAME = op.join(file_utils.RESULTS_DIR, SYSTEM_NAME, ASSET_NAME,
                        'bundlesdf_iteration_1')
     # file_utils.assure_created(op.join(file_utils.RESULTS_DIR, SYSTEM_NAME))
@@ -39,9 +39,9 @@ STORAGE_NAME = op.join(file_utils.RESULTS_DIR, SYSTEM_NAME, ASSET_NAME,
 N_QUERY_INSIDE = 100
 N_QUERY_OUTSIDE = 50
 N_QUERY_OUTSIDE_FAR = 50
-DEPTH_INSIDE = 0.005
-DEPTH_OUTSIDE = 0.005
-DEPTH_FAR_OUTSIDE = 0.1
+DEPTH_INSIDE = 0.02 #0.005
+DEPTH_OUTSIDE = 0.02 #0.005
+DEPTH_FAR_OUTSIDE = 0.04 #0.1
 
 # Amended values for the above hyperparameters for when sampling from mesh.  The
 # total number of queries per point is lower since more points are expected to
@@ -51,7 +51,7 @@ MESH_N_QUERY_OUTSIDE = 10
 MESH_N_QUERY_OUTSIDE_FAR = 0
 MESH_DEPTH_INSIDE = 0.02
 MESH_DEPTH_OUTSIDE = 0.02
-MESH_DEPTH_FAR_OUTSIDE = 0.1
+MESH_DEPTH_FAR_OUTSIDE = 0.04 #0.1
 N_MESH_SAMPLE = 25000
 
 # Amended values for the above hyperparameters for when sampling from mesh to
@@ -61,13 +61,13 @@ GRADIENT_N_QUERY_OUTSIDE = 10
 GRADIENT_N_QUERY_OUTSIDE_FAR = 10
 GRADIENT_DEPTH_INSIDE = 0.005
 GRADIENT_DEPTH_OUTSIDE = 0.02
-GRADIENT_DEPTH_FAR_OUTSIDE = 0.1
+GRADIENT_DEPTH_FAR_OUTSIDE = 0.04 #0.1
 
 # Hyperparameters for querying around an object with SDF minimum bounds.
 BOUNDED_NEARBY_DEPTH = 0.005
-BOUNDED_NEARBY_RADIUS = 0.05 #0.02
-BOUNDED_FAR_DEPTH = 0.1
-BOUNDED_FAR_RADIUS = 0.1 #0.04
+BOUNDED_NEARBY_RADIUS = 0.02 #0.05 #0.02
+BOUNDED_FAR_DEPTH = 0.04 #0.1
+BOUNDED_FAR_RADIUS = 0.04 #0.1 #0.04
 BOUNDED_FAR_N_QUERY = 100 #40
 BOUNDED_NEARBY_OUTSIDE_N_QUERY = 100 #40
 # Make the inside queried points equal to all queried outside.
@@ -919,19 +919,40 @@ def visualize_sdfs(points: Tensor, directions: Tensor, ps: Tensor = None,
     ax = fig.add_subplot(111, projection='3d')
 
     # Plot the original support point and direction.
+    points_min = points.amin(dim=0)
+    points_max = points.amax(dim=0)
+    y_normalized = (points[:, 1] - points_min[1]) / \
+        (points_max[1] - points_min[1])
+    y_normalized = (y_normalized + 1) / 3 # [0, 1] -> [1/3, 2/3]
+    color = plt.cm.Reds(y_normalized)
     ax.scatter(points[:, 0], points[:, 1], points[:, 2], marker='*', s=20,
-               color='r', label='Support points')
+               color=color, label='Support points')
     prefix = [''] + ['_']*(len(directions)-1)
     for i in range(len(directions)):
-        ax.quiver(*points[i], *directions[i]/12, color='r',
+        ax.quiver(*points[i], *directions[i]/12, color=color[i],
                   label=prefix[i]+'Support directions')
 
     # Plot the generated data and their associated SDFs.
-    colored_sdfs = ax.scatter(ps[:, 0], ps[:, 1], ps[:, 2], c=sdfs,
+    ps_ = ps
+    sdfs_ = sdfs
+    if ps.shape[0] > 10000:
+        # If there are too many points, only plot a subset.
+        print(f'ps.shape={ps.shape}.  Plotting a subset of 10000 points.')
+        idxs = np.random.choice(ps.shape[0], 10000, replace=False)
+        ps_ = ps[idxs]
+        sdfs_ = sdfs[idxs]
+    colored_sdfs = ax.scatter(ps_[:, 0], ps_[:, 1], ps_[:, 2], c=sdfs_,
                               cmap='viridis', marker='o',
                               label='Points with assigned SDF')
     if show_vs:
-        ax.scatter(vs[:, 0], vs[:, 1], vs[:, 2], c=sdf_bounds, cmap='viridis',
+        vs_ = vs
+        sdf_bounds_ = sdf_bounds
+        if vs.shape[0] > 10000:
+            print(f'vs.shape={vs.shape}.  Plotting a subset of 10000 points.')
+            idxs = np.random.choice(vs.shape[0], 10000, replace=False)
+            vs_ = vs[idxs]
+            sdf_bounds_ = sdf_bounds[idxs]
+        ax.scatter(vs_[:, 0], vs_[:, 1], vs_[:, 2], c=sdf_bounds_, cmap='viridis',
                 marker='.', alpha=0.3, label='Points with SDF bound')
 
     # Because both scatter series are using the 'viridis' color map, the
@@ -976,6 +997,8 @@ def visualize_sampled_points(
     # Plot the mesh wireframe.
     if mesh is not None:
         prefix = [''] + ['_']*(len(mesh.faces)-1)
+        mesh_xyz_min = mesh.vertices.min(axis=0)
+        mesh_xyz_max = mesh.vertices.max(axis=0)
         for i in range(len(mesh.faces)):
             face = mesh.faces[i]
             vertices = mesh.vertices[face]
@@ -983,35 +1006,53 @@ def visualize_sampled_points(
                 vertices = torch.from_numpy(vertices)
             vertices = torch.cat((vertices, vertices[0].unsqueeze(0)), dim=0)
             vertices = vertices.numpy()
-            ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2], color='b',
+            y_normalized = (vertices[:, 1].mean() - mesh_xyz_min[1]) / \
+                (mesh_xyz_max[1] - mesh_xyz_min[1])
+            y_normalized = (y_normalized + 1) / 3 # [0, 1] -> [1/3, 2/3]
+            color = plt.cm.Blues(y_normalized)
+            ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2], color=color,
                     label=prefix[i]+'Mesh edges')
 
     # Plot the sampled points and outward normals.
     color = '#00000044' if filtered_points is not None else 'r'
+    if filtered_points is None:
+        y_normalized = (sampled_points[:, 1] - mesh_xyz_min[1]) / \
+            (mesh_xyz_max[1] - mesh_xyz_min[1])
+        y_normalized = (y_normalized + 1) / 3 # [0, 1] -> [1/3, 2/3]
+        color = plt.cm.Reds(y_normalized)
     ax.scatter(sampled_points[:, 0], sampled_points[:, 1], sampled_points[:, 2],
                marker='*', s=20, color=color, label='Sample points')
     prefix = [''] + ['_']*(len(sampled_normals)-1)
     for i in range(len(sampled_normals)):
-        ax.quiver(*sampled_points[i], *sampled_normals[i]/25, color=color,
+        color_i = color if filtered_points is not None else color[i]
+        ax.quiver(*sampled_points[i], *sampled_normals[i]/25, color=color_i,
                   label=prefix[i]+'Outward normals', zorder=1.5)
         
     if filtered_points is not None:
+        y_normalized = (filtered_points[:, 1] - mesh_xyz_min[1]) / \
+            (mesh_xyz_max[1] - mesh_xyz_min[1])
+        y_normalized = (y_normalized + 1) / 3 # [0, 1] -> [1/3, 2/3]
+        color = plt.cm.Reds(y_normalized)
         ax.scatter(filtered_points[:, 0], filtered_points[:, 1],
-                   filtered_points[:, 2], marker='*', s=30, color='r',
+                   filtered_points[:, 2], marker='*', s=30, color=color,
                    label='Filtered samples')
         prefix = [''] + ['_']*(len(filtered_normals)-1)
         for i in range(len(filtered_normals)):
-            ax.quiver(*filtered_points[i], *filtered_normals[i]/20, color='r',
+            ax.quiver(*filtered_points[i], *filtered_normals[i]/20, color=color[i],
                     label=prefix[i]+'Outward filter normals', zorder=1.5)
             
     if support_points is not None:
+        y_normalized = (support_points[:, 1] - mesh_xyz_min[1]) / \
+            (mesh_xyz_max[1] - mesh_xyz_min[1])
+        y_normalized = (y_normalized + 1) / 3 # [0, 1] -> [1/3, 2/3]
+        color = plt.cm.Greens(y_normalized)
         ax.scatter(support_points[:, 0], support_points[:, 1],
-                   support_points[:, 2], marker='*', s=40, color='g',
+                   support_points[:, 2], marker='*', s=40, color=color,
                    label='Support points')
         prefix = [''] + ['_']*(len(support_directions)-1)
         for i in range(len(support_directions)):
             ax.quiver(*support_points[i], *support_directions[i]/10,
-                      color='g', label=prefix[i]+'Support directions',
+                      color=color[i], label=prefix[i]+'Support directions',
                       zorder=1.5)
 
     ax.set_xlabel('X-axis')
@@ -1046,6 +1087,8 @@ def visualize_gradients(mesh: MeshSummary, sample_points: Tensor,
     # Plot the mesh wireframe.
     if mesh is not None:
         prefix = [''] + ['_']*(len(mesh.faces)-1)
+        mesh_xyz_min = mesh.vertices.min(axis=0)
+        mesh_xyz_max = mesh.vertices.max(axis=0)
         for i in range(len(mesh.faces)):
             face = mesh.faces[i]
             vertices = mesh.vertices[face]
@@ -1053,15 +1096,28 @@ def visualize_gradients(mesh: MeshSummary, sample_points: Tensor,
                 vertices = torch.from_numpy(vertices)
             vertices = torch.cat((vertices, vertices[0].unsqueeze(0)), dim=0)
             vertices = vertices.numpy()
-            ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2], color='b',
+            y_normalized = (vertices[:, 1].mean() - mesh_xyz_min[1]) / \
+                (mesh_xyz_max[1] - mesh_xyz_min[1])
+            y_normalized = (y_normalized + 1) / 3   # [0, 1] -> [1/3, 2/3]
+            color = plt.cm.Blues(y_normalized)
+            ax.plot(vertices[:, 0], vertices[:, 1], vertices[:, 2], color=color,
                     label=prefix[i]+'Mesh edges')
 
     # Plot the sampled points and outward normals.
+    y_normalized = (sample_points[:, 1] - mesh_xyz_min[1]) / \
+        (mesh_xyz_max[1] - mesh_xyz_min[1])
+    y_normalized = (y_normalized + 1) / 3 # [0, 1] -> [1/3, 2/3]
+    color = plt.cm.Reds(y_normalized)
     ax.scatter(sample_points[:, 0], sample_points[:, 1], sample_points[:, 2],
-               marker='*', s=20, color='r', label='Mesh sample points')
+               marker='*', s=20, color=color, label='Mesh sample points')
+    
     prefix = [''] + ['_']*(len(points_with_grad)-1)
+    y_normalized = (points_with_grad[:, 1] - mesh_xyz_min[1]) / \
+        (mesh_xyz_max[1] - mesh_xyz_min[1])
+    y_normalized = (y_normalized + 1) / 3 # [0, 1] -> [1/3, 2/3]
+    color = plt.cm.Greens(y_normalized)
     for i in range(len(point_grads)):
-        ax.quiver(*points_with_grad[i], *point_grads[i]/25, color='g',
+        ax.quiver(*points_with_grad[i], *point_grads[i]/25, color=color[i],
                   label=prefix[i]+'SDF gradient', zorder=1.5)
 
     ax.set_xlabel('X-axis')
@@ -1814,8 +1870,8 @@ if __name__ == '__main__':
         visualize_sampled_points(
             mesh, sample_points, sample_normals,
             filtered_points=sample_points_cf,
-            filtered_normals=sample_normals_cf, support_points=support_points,
-            support_directions=support_directions)
+            filtered_normals=sample_normals_cf, support_points=contact_points,
+            support_directions=contact_directions)
 
         # Generate SDF gradient training data from the mesh sample points.
         mesh_ws, mesh_w_normals, mesh_toss_frames = generate_point_sdf_gradient_pairs(
