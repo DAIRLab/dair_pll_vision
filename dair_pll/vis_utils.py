@@ -495,13 +495,6 @@ def sync_video_and_plots(video_rgb, video_drake, data_list, title_list,
             if not rgb_available:
                 frame_rgb = frames_rgb[i]
             else:
-                # if isinstance(frames_rgb[i], str):
-                #     frame_rgb_file = frames_rgb[i]
-                #     frame_rgb = cv2.imread(op.join(video_rgb, frame_rgb_file))
-                #     frame_rgb = cv2.resize(frame_rgb, (width // 2, height // 2))
-                #     # bgr to rgb
-                #     frame_rgb = frame_rgb[:, :, ::-1]
-                # else:
                 frame_rgb = frames_rgb[i]
                 frame_rgb = cv2.resize(frame_rgb, (width // 2, height // 2))
                 

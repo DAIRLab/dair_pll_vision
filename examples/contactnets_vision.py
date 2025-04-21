@@ -55,10 +55,10 @@ DT = 0.0333 #0.0068 # 1/frame rate of the camera
 T_PREDICTION = 1
 
 # Optimization configuration.
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 2e-3
 WEIGHT_DECAY = 0.0
-EPOCHS = 200 #500
-PATIENCE = 100 #EPOCHS
+EPOCHS = 300 #500
+PATIENCE = -1 #100
 
 WANDB_PROJECT = 'dair_pll-vision'
 
@@ -69,11 +69,11 @@ LEARN_INERTIA_OPTIONS = ['none', 'all']     # May want to add more cases, e.g.
 DRAKE_PYTORCH_FUNCTION_EXPORT_DIR = '/home/minghz/Desktop/symbolic_pytorch_v2'
 
 # Loss term weights.
-DEFAULT_W_PRED = 1.0
+DEFAULT_W_PRED = 4.0
 DEFAULT_W_COMP = 1.0
-DEFAULT_W_DISS = 1.0
-DEFAULT_W_PEN = 20.0
-DEFAULT_W_BSDF = 0.02
+DEFAULT_W_DISS = 5000.0
+DEFAULT_W_PEN = 0.5
+DEFAULT_W_BSDF = 0.04
 
 import torch
 import numpy as np
@@ -178,7 +178,7 @@ def main(pll_run_id: str = "",
          regenerate: bool = False,
          pretrained_icnn_weights_filepath: str = None,
          learn_inertia: str = 'all',
-         skip_videos: str = 'rollout',
+         skip_videos: str = 'all',
          clear_data: bool = False,
          w_pred: float = DEFAULT_W_PRED,
          w_comp: float = DEFAULT_W_COMP,
@@ -200,7 +200,7 @@ def main(pll_run_id: str = "",
          patience: int = PATIENCE,
          n_query: int = _DEEP_SUPPORT_DEFAULT_N_QUERY,
          detach_grad_pred_ee: bool = False,
-         sampling_method: str = 'perturb'):
+         sampling_method: str = 'deterministic',):
     """Execute ContactNets basic example on a system.
 
     Args:
@@ -474,9 +474,9 @@ def main(pll_run_id: str = "",
                 "then force terminate the code.")
 @click.option('--skip-videos',
               type=click.Choice(SKIP_VIDEO_OPTIONS),
-              default='rollout',
+              default='all',
               help="what videos to skip generating every epoch (saves time)" + \
-                " can be 'none', 'all', 'rollout' (default), or 'geometry'." + \
+                " can be 'none', 'all' (default), 'rollout', or 'geometry'." + \
                 "The generated videos are logged in wandb.")
 @click.option('--clear-data/--keep-data',
               default=False,
@@ -503,15 +503,17 @@ def main(pll_run_id: str = "",
               help="weight of BundleSDF loss term.")
 @click.option('--shuffle/--no-shuffle',
               default=True,
-              help="whether to shuffle the temporal order of data. " + \
-                 "(set to False when visualizing gradients)")
+              help="whether to shuffle the temporal order of data.")
 @click.option('--deterministic', is_flag=True,
               help="whether to fix the random seeds. ")
-@click.option('--vis-gradient', type=str, default=None, help="visualize gradients")
+@click.option('--vis-gradient', type=str, default='vis_grad', 
+              help="video name used by HookGradientVisualizer._visualize_all_frames()" + \
+                "Though it is currently not called, set it to a not-None value " + \
+                    "to activate the visualizer.")
 @click.option('--force-video-epoch-interval',
               type=int,
               default=0,
-              help="force video generation every n epochs.")
+              help="force video generation every n epochs. 0 means never generate.")
 @click.option('--gt-shape',
               is_flag=True,
               help="use gt aligned mesh as bsdf shape prior.")
@@ -528,7 +530,7 @@ def main(pll_run_id: str = "",
 @click.option('--epochs', '-e',
                 type=int,
                 default=EPOCHS,
-                help="number of epochs for training.")
+                help="number of epochs for training. 200 or 300 is a good number.")
 @click.option('--overfit-bsdf-init', '-bsdfinit', is_flag=True,
                 help="overfit bsdf init.")
 @click.option('--patience', '-p',
@@ -544,8 +546,9 @@ def main(pll_run_id: str = "",
                 help="detach gradient of prediction loss wrt end effector.")
 @click.option('--sampling-method', '-sm',
                 type=click.Choice(['perturb', 'uniform', 'deterministic']),
-                default='perturb',
-                help="sampling method for ground contact points.")
+                default='deterministic',
+                help="sampling method for ground contact points. (deterministic " + \
+                    "works best for robot interaction experiments)")  
 @click.option('--remote', is_flag=True,
                 help="whether to run on a remote server, which matters for visualization.")
 

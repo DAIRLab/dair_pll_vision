@@ -57,23 +57,7 @@ VISION_CUBE_SYSTEM = 'vision_cube'
 VISION_PRISM_SYSTEM = 'vision_prism'
 VISION_TOBLERONE_SYSTEM = 'vision_toblerone'
 VISION_MILK_SYSTEM = 'vision_milk'
-# VISION_SYSTEMS = ['vision_bottle', VISION_CUBE_SYSTEM, 'vision_egg',
-#                   'vision_half', VISION_MILK_SYSTEM, 'vision_napkin',
-#                   VISION_PRISM_SYSTEM, VISION_TOBLERONE_SYSTEM,
-#                   'vision_bakingbox', 'vision_burger', 'vision_cardboard',
-#                   'vision_chocolate', 'vision_cream', 'vision_croc',
-#                   'vision_crushedcan', 'vision_duck', 'vision_gallon',
-#                   'vision_greencan', 'vision_hotdog', 'vision_icetray',
-#                   'vision_mug', 'vision_oatly', 'vision_pinkcan',
-#                   'vision_stapler', 'vision_styrofoam', 'vision_toothpaste',
-#                   'vision_robot_bakingbox_sticky_A', 'vision_robot_bakingbox',
-#                   'vision_robot_greencan', 'vision_robot_oatly',
-#                   'vision_robot_stapler', 'vision_robot_milk', 
-#                   'vision_robotocc_oatly', 'vision_robotocc_milk',
-#                   'vision_robotocc_cardboard', 'vision_robotocc_bakingbox',
-#                   'vision_robotocc_styrofoam', 'vision_robotocc_toblerone',
-#                   'vision_robotocc_eggs'
-#                   ]
+
 VISION_SYSTEMS = ['bottle', 'cube', 'egg', 'half', 'milk', 'napkin', 'prism', 'toblerone',
                   'bakingbox', 'burger', 'cardboard', 'chocolate', 'cream',
                   'croc', 'crushedcan', 'duck', 'gallon', 'greencan',
@@ -1045,10 +1029,11 @@ class VisionExperiment(DrakeMultibodyLearnableExperiment):
         # and every some epochs, as specified by the force_video_epoch_interval,
         # and best epoch, the last of which is implemented in
         # :meth:`_evaluation`.
+        # force_generate_videos = True if \
+        #     epoch == 0 or epoch == 20 or epoch == 120 or epoch == 200 else False
         force_generate_videos = True if \
-            epoch == 0 or epoch == 20 or epoch == 120 or epoch == 200 else False
-            # epoch == 0 or (self.config.force_video_epoch_interval > 0 and \
-            #     epoch % self.config.force_video_epoch_interval == 0) else False
+            self.config.force_video_epoch_interval > 0 and \
+                epoch % self.config.force_video_epoch_interval == 0 else False
 
         epoch_vars, learned_system_summary = \
             self.build_epoch_vars_and_system_summary(
