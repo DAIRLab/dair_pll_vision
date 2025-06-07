@@ -42,6 +42,15 @@ install_reqs = [
     "trimesh==4.4.0",
     "rtree==1.3.0",
     "pyglet==1.5.29",
+    # for the conversions
+    "opencv-python",
+    "rospkg",
+    "pycryptodomex",
+    "gnupg",
+    "selenium",
+    "open3d",
+    "paramiko",
+    "meshcat",
 ]
 
 try:

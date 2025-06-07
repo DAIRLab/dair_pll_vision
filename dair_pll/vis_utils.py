@@ -360,6 +360,8 @@ def visualize_trajectory(drake_system: DrakeSystem,
 ### For visualizing loss trajectories
 import cv2
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for saving plots
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 import os

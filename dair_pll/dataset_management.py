@@ -127,6 +127,7 @@ class TrajectorySet:
 
         # Move to default device
         trajectory_list = [
+            # traj.to(torch.device("cpu")) for traj in trajectory_list] # if torch < 2.3.0
             traj.to(torch.get_default_device()) for traj in trajectory_list]
         for trajectory in trajectory_list:
             # TODO: HACK add time manually
